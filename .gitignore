@@ -1,0 +1,72 @@
+# Environnement
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Données sensibles / uploads
+uploads/
+Portefeuille/
+
+# Sorties générées
+outputs/
+notebooks_generated/
+logs/
+*.log
+*.csv
+table_mortalite_*.csv
+stats_descriptives.csv
+
+# Rapports Word/PDF générés
+*.docx
+*.pdf
+conversation_history.*
+
+# Graphiques générés
+graph*.png
+graph*.jpg
+
+# Notebooks Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# VS Code
+.vscode/
+
+# Conda / venv
+*.env/
+venv/
+env/
+
+# Docs générées
+docs/_build/
+
+# Workflows sauvegardés (contiennent des chemins absolus locaux)
+workflows/
+
+# Snapshots inspector (données locales)
+inspector/snapshots/
+
+# Fichiers binaires lourds
+*.pkl
+*.pickle
+*.db
+
+# LaTeX auxiliaires
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz

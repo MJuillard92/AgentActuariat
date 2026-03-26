@@ -1,0 +1,333 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{gray!10},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Actuarial Notebook Agent}
+\lhead{Documentation Technique}
+\rfoot{Page \thepage}
+
+\title{%
+  \textbf{Actuarial Notebook Agent}\\[0.5em]
+  \large Documentation Technique et Informatique\\[0.3em]
+  \normalsize Version 2.0 — Mars 2026
+}
+\author{Direction Technique}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Architecture générale}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Vue d'ensemble}
+
+\begin{center}
+\begin{tikzpicture}[
+  box/.style={rectangle, draw, rounded corners=4pt, minimum width=3.2cm, minimum height=0.9cm,
+              fill=blue!10, font=\small},
+  arrow/.style={-Stealth, thick},
+  node distance=1.4cm
+]
+  \node[box] (app) {app.py\\(Streamlit UI)};
+  \node[box, right=2cm of app] (agent) {agent.py\\(Boucle ReAct)};
+  \node[box, right=2cm of agent] (runner) {notebook\_runner.py\\(Exécution)};
+  \node[box, below=1.4cm of agent] (fmt) {report\_formatter.py\\(Formatage LLM)};
+  \node[box, below=1.4cm of runner] (nbs) {notebooks/\\(7 notebooks)};
+  \node[box, above=1.4cm of agent] (api) {OpenAI API\\(gpt-4o-mini)};
+
+  \draw[arrow] (app) -- (agent) node[midway,above,font=\small]{run\_agent\_loop};
+  \draw[arrow] (agent) -- (runner) node[midway,above,font=\small]{execute\_fn};
+  \draw[arrow] (runner) -- (nbs) node[midway,right,font=\small]{load/exec};
+  \draw[arrow] (agent.north) -- (api.south) node[midway,right,font=\small]{tool calls};
+  \draw[arrow] (api.south) -- (agent.north);
+  \draw[arrow] (app) -- (fmt) node[midway,left,font=\small]{format\_step};
+  \draw[arrow] (fmt.east) -- (api.west|-fmt.east) node[midway,above,font=\small]{gpt-4o-mini};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Dépendances externes}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Bibliothèque} & \textbf{Version min.} & \textbf{Usage} \\
+\midrule
+streamlit & 1.32.0 & Interface web \\
+openai & 1.0.0 & Client API OpenAI \\
+pandas & 2.0.0 & Manipulation de données \\
+numpy & 1.24.0 & Calcul numérique \\
+matplotlib & 3.7.0 & Graphiques \\
+scipy & 1.10.0 & Algèbre linéaire (solve\_banded) \\
+nbformat & 5.9.0 & Lecture des notebooks Jupyter \\
+python-dotenv & 1.0.0 & Gestion des variables d'environnement \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Modules Python}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{\texttt{app.py} — Interface Streamlit}
+
+Point d'entrée de l'application. Structure en 3 onglets.
+
+\subsubsection{Fonctions principales}
+
+\begin{description}
+  \item[\texttt{scan\_notebooks() -> list[dict]}]
+    Parcourt \texttt{config.NOTEBOOKS\_DIR}, retourne la liste triée des fichiers
+    \texttt{.ipynb} avec leur nom et premier titre Markdown.
+
+  \item[\texttt{\_make\_kernel() -> dict}]
+    Initialise un espace de noms Python partagé (kernel) avec les imports standards
+    (pandas, numpy, matplotlib, scipy). Retourne le dict namespace.
+
+  \item[\texttt{\_capture\_figures(kernel) -> list[bytes]}]
+    Capture toutes les figures matplotlib ouvertes dans le kernel, les sérialise
+    en PNG (bytes) et ferme les figures.
+
+  \item[\texttt{\_get\_selected\_ordered\_paths() -> list[str]}]
+    Retourne les chemins des notebooks cochés dans l'ordre défini par l'onglet 2.
+
+  \item[\texttt{\_handle\_agent\_response(user\_message)}]
+    Lance la boucle ReAct, consomme les événements yielded, appelle
+    \texttt{format\_step\_output} pour chaque étape, et stocke les résultats
+    dans \texttt{st.session\_state.outputs\_app}.
+
+  \item[\texttt{\_display\_report(outputs)}]
+    Affiche le rapport formaté (titres, texte Markdown, figures) sans code Python.
+
+  \item[\texttt{\_run\_blueprint\_test(paths)}]
+    Exécute les notebooks en mode test (données synthétiques) et stocke les résultats
+    dans \texttt{st.session\_state.outputs\_test}.
+\end{description}
+
+\subsubsection{Session state}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Clé} & \textbf{Type} & \textbf{Usage} \\
+\midrule
+\texttt{kernel\_test} & dict & Namespace du kernel de test \\
+\texttt{outputs\_test} & dict[int,dict] & Résultats du test blueprint \\
+\texttt{kernel\_app} & dict & Namespace du kernel applicatif \\
+\texttt{outputs\_app} & dict[int,dict] & Résultats de l'analyse réelle \\
+\texttt{conversation\_history} & list & Historique LLM (sans system prompt) \\
+\texttt{uploaded\_file\_path} & str & Chemin du CSV uploadé \\
+\texttt{awaiting\_response} & bool & Flag de déclenchement agent \\
+\texttt{agent\_summary} & str & Synthèse finale de l'agent \\
+\texttt{selected\_notebooks} & list[str] & Notebooks cochés (onglet 1) \\
+\texttt{notebooks\_order} & list[str] & Ordre d'exécution (onglet 2) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{\texttt{agent.py} — Boucle ReAct}
+
+Implémente le pattern ReAct (Reason + Act) via l'API OpenAI avec tool use.
+
+\textbf{Constantes :}
+\begin{itemize}
+  \item \texttt{MAX\_ITERATIONS = 25} — limite d'itérations de la boucle.
+  \item \texttt{MAX\_OUTPUT\_LENGTH = 3000} — troncature des outputs avant envoi à l'API.
+\end{itemize}
+
+\textbf{Outil exposé :} \texttt{execute\_python(code, description)} — exécute une cellule
+Python dans le kernel partagé.
+
+\textbf{Générateur \texttt{run\_agent\_loop}} — yield des événements :
+\begin{lstlisting}
+{"type": "step",    "description": str, "output": str, "figures": list[bytes]}
+{"type": "summary", "content": str}
+{"type": "history", "messages": list}
+{"type": "error",   "content": str}
+\end{lstlisting}
+
+\subsection{\texttt{notebook\_runner.py} — Moteur d'exécution}
+
+\begin{description}
+  \item[\texttt{load\_notebook(path) -> list[dict]}]
+    Lit un fichier \texttt{.ipynb} via \texttt{nbformat} et retourne la liste
+    des cellules \texttt{\{id, type, source, output\}}.
+
+  \item[\texttt{execute\_cell(cell\_source, kernel\_state) -> str}]
+    Exécute du code Python dans le namespace partagé via \texttt{exec()}.
+    Capture stdout avec \texttt{redirect\_stdout}. Retourne le traceback
+    complet en cas d'erreur (préfixé par \texttt{❌ Erreur}).
+
+  \item[\texttt{get\_notebook\_as\_context(path) -> str}]
+    Sérialise un notebook en texte brut pour injection dans le system prompt LLM.
+
+  \item[\texttt{get\_notebooks\_as\_context(paths) -> str}]
+    Concatène plusieurs notebooks en un contexte LLM unique.
+\end{description}
+
+\subsection{\texttt{report\_formatter.py} — Formatage LLM}
+
+\begin{description}
+  \item[\texttt{format\_step\_output(step\_number, description, raw\_output, ...) -> str}]
+    Appelle gpt-4o-mini pour convertir la sortie Python brute en Markdown lisible.
+    Troncature de l'input à 2000 caractères. Fallback sur la sortie brute en cas
+    d'erreur API.
+
+  \item[\texttt{format\_final\_summary(steps, smr) -> str}]
+    Génère un résumé exécutif de l'analyse complète via gpt-4o-mini.
+\end{description}
+
+\subsection{\texttt{th0002.py} — Table de référence}
+
+Fournit les $q_x$ TH 00-02 (hommes) et TF 00-02 (femmes) par interpolation
+log-linéaire entre 17 valeurs de référence (âges 20 à 100).
+
+\begin{description}
+  \item[\texttt{qx\_th0002(age, sexe) -> float}] $q_x$ pour un âge scalaire.
+  \item[\texttt{qx\_th0002\_array(ages, sexe) -> np.ndarray}] Version vectorisée.
+  \item[\texttt{get\_reference\_table(sexe) -> dict}] Dict \{age: qx\} pour les âges 20–99.
+\end{description}
+
+\subsection{\texttt{config.py} — Configuration}
+
+\begin{lstlisting}[language=Python]
+MODEL = "gpt-4o-mini"          # modele agent ReAct
+FORMATTER_MODEL = "gpt-4o-mini"# modele formatage rapport
+MAX_TOKENS = 8192               # limite tokens reponse agent
+TEMPERATURE = 0.2               # temperature generation
+NOTEBOOKS_DIR = "./notebooks"   # repertoire notebooks
+UPLOADS_DIR = "./uploads"       # repertoire CSV uploader
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Structure des notebooks}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Chaque notebook dans \texttt{notebooks/} contient :
+\begin{enumerate}
+  \item Une cellule Markdown décrivant l'étape (titre, objectif, formules).
+  \item Une cellule code exécutable dans le kernel partagé.
+\end{enumerate}
+
+Les variables clés sont partagées via le kernel : \texttt{data} (DataFrame),
+\texttt{table} (résultats par âge), \texttt{FILE\_PATH}, \texttt{SEXE},
+\texttt{DATE\_FIN\_OBSERVATION}, \texttt{LAMBDA\_WH}, \texttt{SMR}.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Notebook} & \textbf{Variables produites} & \textbf{Variables consommées} \\
+\midrule
+01 & \texttt{data, FILE\_PATH, SEXE, qx\_ref} & — \\
+02 & \texttt{data} (nettoyée) & \texttt{data, SEXE} \\
+03 & \texttt{table} & \texttt{data} \\
+04 & \texttt{table[q\_x\_lisse]} & \texttt{table, LAMBDA\_WH} \\
+05 & figures PNG & \texttt{table, qx\_ref, SEXE} \\
+06 & \texttt{table[SMR\_local], SMR} & \texttt{table, qx\_ref} \\
+07 & fichier CSV & \texttt{table, SMR, FILE\_PATH, SEXE} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Flux d'exécution détaillé}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Mode test (onglet 1)}
+
+\begin{enumerate}
+  \item L'utilisateur clique sur \og Exécuter le blueprint \fg{}.
+  \item \texttt{\_run\_blueprint\_test(paths)} est appelé avec les notebooks sélectionnés.
+  \item Pour chaque cellule code : \texttt{execute\_cell} + \texttt{\_capture\_figures}
+        + \texttt{format\_step\_output} (LLM).
+  \item Les résultats sont stockés dans \texttt{outputs\_test}.
+  \item \texttt{st.rerun()} déclenche l'affichage via \texttt{\_display\_report}.
+\end{enumerate}
+
+\subsection{Mode analyse réelle (onglet 3)}
+
+\begin{enumerate}
+  \item Upload CSV → sauvegarde dans \texttt{uploads/}.
+  \item Construction du message utilisateur avec \texttt{FILE\_PATH}, \texttt{SEXE},
+        \texttt{DATE\_FIN\_OBSERVATION}, \texttt{LAMBDA\_WH}.
+  \item \texttt{awaiting\_response = True} → \texttt{st.rerun()}.
+  \item \texttt{\_handle\_agent\_response} :
+    \begin{enumerate}[label=\alph*.]
+      \item \texttt{get\_notebooks\_as\_context} concatène les notebooks sélectionnés.
+      \item \texttt{run\_agent\_loop} est appelé (générateur).
+      \item Pour chaque événement \texttt{step} : formatage LLM + stockage.
+      \item Événement \texttt{summary} → \texttt{agent\_summary}.
+      \item Événement \texttt{history} → sauvegarde de la conversation.
+    \end{enumerate}
+  \item \texttt{st.rerun()} → affichage du rapport.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Sécurité et limitations}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{itemize}
+  \item \textbf{\texttt{exec()} non sandboxé} : l'exécution du code Python des notebooks
+        se fait dans l'espace de noms du processus Streamlit. Ne jamais déployer
+        en accès public sans contrôle strict des notebooks.
+  \item \textbf{Clé API} : stockée dans le fichier \texttt{.env} (jamais versionnée).
+  \item \textbf{Uploads} : les fichiers CSV sont sauvegardés localement dans \texttt{uploads/}.
+        Prévoir une politique de rétention.
+  \item \textbf{Pas de multi-utilisateur} : un seul kernel partagé par session Streamlit.
+        Chaque rafraîchissement crée un nouveau kernel.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Installation et démarrage}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Prérequis}
+Python 3.9+ recommandé (testé sur 3.8+).
+
+\subsection{Installation}
+\begin{lstlisting}[language=bash]
+cd "Agent actuariat"
+python -m venv venv
+source venv/bin/activate      # Linux/macOS
+pip install -r requirements.txt
+cp .env.example .env          # Ajouter OPENAI_API_KEY
+\end{lstlisting}
+
+\subsection{Démarrage}
+\begin{lstlisting}[language=bash]
+streamlit run app.py
+\end{lstlisting}
+
+\subsection{Génération des notebooks}
+En cas de modification ou d'ajout de notebooks :
+\begin{lstlisting}[language=bash]
+python create_notebooks.py
+\end{lstlisting}
+
+\end{document}

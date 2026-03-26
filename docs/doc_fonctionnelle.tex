@@ -1,0 +1,210 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Actuarial Notebook Agent}
+\lhead{Documentation Fonctionnelle}
+\rfoot{Page \thepage}
+
+\title{%
+  \textbf{Actuarial Notebook Agent}\\[0.5em]
+  \large Documentation Fonctionnelle\\[0.3em]
+  \normalsize Version 2.0 — Mars 2026
+}
+\author{Direction Actuarielle}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Présentation générale}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Objet}
+L'\textbf{Actuarial Notebook Agent} est une application web permettant de construire
+des \textbf{tables de mortalité d'expérience} à partir de données de portefeuille assuré.
+Elle s'appuie sur une interface Streamlit à trois onglets et sur un agent LLM (modèle GPT)
+qui exécute une méthodologie actuarielle validée, observe les résultats intermédiaires et
+produit un rapport professionnel.
+
+\subsection{Cas d'usage principaux}
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Exploration méthodologique} : exécuter le pipeline de référence sur des
+        données synthétiques pour valider la méthode avant toute analyse réelle.
+  \item \textbf{Analyse d'un portefeuille réel} : charger un fichier CSV et obtenir
+        automatiquement la table d'expérience avec rapport.
+  \item \textbf{Personnalisation du pipeline} : sélectionner et réordonner les notebooks
+        pour adapter la méthodologie (e.g.\,ajouter une étape de correction d'expositions).
+\end{enumerate}
+
+\subsection{Périmètre fonctionnel}
+\begin{itemize}
+  \item Chargement de données portefeuille (CSV) ou génération synthétique (50 000 contrats).
+  \item Contrôle qualité automatisé des données.
+  \item Calcul des expositions et taux bruts de mortalité par âge entier.
+  \item Lissage Whittaker-Henderson (paramètre $\lambda$ configurable).
+  \item Visualisation graphique (taux bruts vs lissés, comparaison TH/TF 00-02).
+  \item Calcul du SMR global et par tranche d'âge avec intervalle de confiance.
+  \item Export CSV de la table d'expérience finale.
+  \item Rapport narratif généré automatiquement par LLM.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Données en entrée}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Format du fichier portefeuille}
+Le fichier CSV doit contenir une ligne par contrat avec les colonnes suivantes :
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Colonne} & \textbf{Type} & \textbf{Obligatoire} & \textbf{Description} \\
+\midrule
+\texttt{id} & chaîne & Oui & Identifiant unique du contrat \\
+\texttt{date\_naissance} & date & Oui & Date de naissance de l'assuré \\
+\texttt{date\_entree} & date & Oui & Date d'entrée en observation \\
+\texttt{date\_sortie} & date & Oui & Date de sortie (fin d'étude, décès, résiliation) \\
+\texttt{cause\_sortie} & \texttt{'deces'|\!'autre'} & Oui & Cause de sortie \\
+\texttt{sexe} & \texttt{'H'|\!'F'} & Oui & Sexe de l'assuré \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Paramètres d'analyse}
+Les paramètres suivants sont définis dans le notebook 01 et peuvent être modifiés
+par l'agent lors de l'analyse d'un fichier réel :
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Paramètre} & \textbf{Valeur par défaut} & \textbf{Description} \\
+\midrule
+\texttt{SEXE} & \texttt{'H'} & Sexe analysé (H=hommes, F=femmes) \\
+\texttt{DATE\_FIN\_OBSERVATION} & 2023-12-31 & Fin de la période d'observation \\
+\texttt{LAMBDA\_WH} & 100 & Paramètre de lissage Whittaker-Henderson \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Données en sortie}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Table de mortalité exportée}
+Un fichier CSV est exporté sous la forme \texttt{table\_mortalite\_<portefeuille>\_<sexe>.csv}
+avec les colonnes :
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Colonne} & \textbf{Description} \\
+\midrule
+\texttt{age} & Âge entier (20 à 90) \\
+\texttt{E\_x} & Exposition centrale (années-personnes) \\
+\texttt{D\_x} & Décès observés \\
+\texttt{q\_x\_brut} & Taux brut annuel ($1-e^{-D_x/E_x}$) \\
+\texttt{q\_x\_lisse} & Taux lissé Whittaker-Henderson \\
+\texttt{q\_x\_ref} & Taux de référence TH/TF 00-02 \\
+\texttt{SMR\_local} & Ratio observé/attendu par âge \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Rapport d'analyse}
+L'interface affiche, pour chaque étape, un rapport narratif en Markdown formaté
+par le LLM (sans affichage du code Python). Un résumé exécutif clôture l'analyse.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Méthodologie actuarielle}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Calcul des expositions}
+La méthode des \textbf{années-personnes} (Poisson) est utilisée. Pour chaque assuré $i$
+et chaque âge entier $x$, l'exposition est :
+
+\[
+  e_{i,x} = \min(\text{date\_sortie}_i,\, x+1) - \max(\text{date\_entree}_i,\, x) \quad \text{(en années)}
+\]
+
+L'exposition centrale agrégée est $E_x = \sum_i e_{i,x}$.
+
+\subsection{Taux bruts}
+Le taux central brut est $\hat{\mu}_x = D_x / E_x$, et le taux annuel approché est :
+\[
+  \hat{q}_x^{\text{brut}} = 1 - e^{-\hat{\mu}_x}
+\]
+
+\subsection{Lissage Whittaker-Henderson}
+Le lisseur minimise (sur l'échelle log) :
+\[
+  Q = \sum_x E_x (\log \hat{q}_x - y_x)^2 + \lambda \sum_x (\Delta^2 y_x)^2
+\]
+Solution matricielle : $\hat{y} = (W + \lambda D^\top D)^{-1} W y$ où $D$ est la matrice
+de différences secondes et $W = \text{diag}(E_x)$.
+
+\subsection{SMR}
+Le SMR (Standardised Mortality Ratio) mesure la surmortalité relative :
+\[
+  \text{SMR} = \frac{\sum_x D_x}{\sum_x E_x \cdot q_x^{\text{réf}}}
+\]
+L'intervalle de confiance à 95\,\% (approche Poisson) est :
+$\text{SMR} \pm 1{,}96\sqrt{D_{\text{obs}}} / D_{\text{att}}$.
+
+\subsection{Table de référence}
+La table TH 00-02 (hommes) / TF 00-02 (femmes) est approximée par interpolation
+log-linéaire entre les valeurs de référence publiées par l'Institut des Actuaires.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Flux de traitement}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Pipeline complet}
+\begin{enumerate}
+  \item \textbf{NB01} — Chargement des données (CSV réel ou synthétique).
+  \item \textbf{NB02} — Contrôle qualité : suppression des lignes incohérentes.
+  \item \textbf{NB03} — Calcul des expositions $E_x$ et décès $D_x$ par âge entier.
+  \item \textbf{NB04} — Lissage Whittaker-Henderson des taux bruts.
+  \item \textbf{NB05} — Visualisation graphique (taux bruts, lissés, référence).
+  \item \textbf{NB06} — Calcul du SMR global et par décennie.
+  \item \textbf{NB07} — Export CSV de la table finale.
+\end{enumerate}
+
+\subsection{Comportement de l'agent}
+L'agent suit une architecture \textbf{ReAct} (Reason + Act) :
+après chaque appel à l'outil \texttt{execute\_python}, il analyse la sortie,
+détecte les erreurs, adapte le code si nécessaire, puis passe à l'étape suivante.
+Un LLM séparé (gpt-4o-mini) formate chaque sortie brute en texte lisible.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Limitations et hypothèses}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{itemize}
+  \item Le sexe est uniforme sur l'analyse (pas de table mixte en une passe).
+  \item Les âges hors plage [20, 90] sont exclus de la table de lissage.
+  \item La table de référence TH/TF 00-02 est une approximation paramétrique ;
+        remplacer par la table officielle pour les calculs réglementaires.
+  \item Le lissage WH est appliqué sur l'échelle log — les âges avec exposition
+        nulle ou taux brut nul sont exclus et interpolés implicitement.
+\end{itemize}
+
+\end{document}

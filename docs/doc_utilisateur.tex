@@ -1,0 +1,373 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usepackage{tcolorbox}
+\usepackage{fontawesome5}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,decorations.pathreplacing}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{infobox}[1][]{
+  colback=blue!5, colframe=blue!40, title=#1, fonttitle=\bfseries\small,
+  breakable, left=4pt, right=4pt}
+\newtcolorbox{warnbox}[1][]{
+  colback=orange!5, colframe=orange!60, title=#1, fonttitle=\bfseries\small,
+  breakable, left=4pt, right=4pt}
+\newtcolorbox{tipbox}[1][]{
+  colback=green!5, colframe=green!50!black, title=#1, fonttitle=\bfseries\small,
+  breakable, left=4pt, right=4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Actuarial Notebook Agent}
+\lhead{Guide Utilisateur}
+\rfoot{Page \thepage}
+
+\title{%
+  \textbf{Actuarial Notebook Agent}\\[0.5em]
+  \large Guide Utilisateur\\[0.3em]
+  \normalsize Version 2.0 — Mars 2026
+}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+% ─────────────────────────────────────────────────────────────────────────────
+
+L'\textbf{Actuarial Notebook Agent} vous permet de construire une table de mortalité
+d'expérience à partir d'un fichier CSV de portefeuille assuré, sans écrire une seule
+ligne de code. L'application se compose de \textbf{3 onglets} :
+
+\medskip
+\begin{center}
+\begin{tikzpicture}[
+  tab/.style={rectangle, draw, rounded corners=4pt, minimum width=3.8cm,
+              minimum height=1.2cm, fill=blue!12, font=\small\bfseries},
+  arrow/.style={-Stealth, thick, blue!60}
+]
+  \node[tab] (t1) {📚 Bibliothèque\\{\normalfont\scriptsize Sélectionner les notebooks}};
+  \node[tab, right=1.5cm of t1] (t2) {📋 Ordre d'exécution\\{\normalfont\scriptsize Réordonner les étapes}};
+  \node[tab, right=1.5cm of t2] (t3) {🔬 Analyse et rapport\\{\normalfont\scriptsize Charger CSV + résultats}};
+  \draw[arrow] (t1) -- (t2);
+  \draw[arrow] (t2) -- (t3);
+\end{tikzpicture}
+\end{center}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Démarrage rapide}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{enumerate}[leftmargin=1.5cm, label=\textbf{Étape \arabic*.}]
+  \item \textbf{Lancer l'application} depuis un terminal :
+\begin{verbatim}
+streamlit run app.py
+\end{verbatim}
+        L'interface s'ouvre dans votre navigateur à l'adresse
+        \texttt{http://localhost:8501}.
+
+  \item \textbf{Onglet 3 — Analyse} : glissez votre fichier CSV dans la zone de dépôt.
+
+  \item L'agent lance automatiquement l'analyse. Chaque étape s'affiche progressivement
+        avec son rapport.
+
+  \item À la fin, un \textbf{résumé exécutif} s'affiche et le fichier CSV de la table
+        d'expérience est exporté dans le répertoire de travail.
+\end{enumerate}
+
+\begin{infobox}[Pré-requis : fichier CSV]
+Le fichier doit contenir les colonnes :
+\texttt{id}, \texttt{date\_naissance}, \texttt{date\_entree}, \texttt{date\_sortie},
+\texttt{cause\_sortie} (\texttt{'deces'} ou \texttt{'autre'}), \texttt{sexe} (\texttt{'H'} ou \texttt{'F'}).
+\end{infobox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Onglet 1 — Bibliothèque de notebooks}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Vue de l'écran}
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+  % Fenêtre application
+  \draw[rounded corners=6pt, fill=gray!8, draw=gray!50] (0,0) rectangle (14,10);
+  \node[anchor=north west, font=\bfseries\normalsize] at (0.3,9.8) {Actuarial Notebook Agent};
+
+  % Tabs
+  \foreach \x/\lbl in {1/📚 Bibliothèque, 5/📋 Ordre, 9/🔬 Analyse} {
+    \draw[fill=blue!15, draw=blue!40, rounded corners=3pt] (\x,8.8) rectangle (\x+3.5,9.5);
+    \node[font=\scriptsize] at (\x+1.75,9.15) {\lbl};
+  }
+  % Tab active
+  \draw[fill=white, draw=blue!60, rounded corners=3pt, line width=1pt] (0.8,8.8) rectangle (4.5,9.5);
+  \node[font=\scriptsize\bfseries] at (2.65,9.15) {📚 Bibliothèque};
+
+  % Left panel — checkboxes
+  \draw[fill=white, draw=gray!40, rounded corners=3pt] (0.5,0.5) rectangle (5.5,8.5);
+  \node[anchor=north west, font=\bfseries\scriptsize] at (0.7,8.4) {Sélectionner les notebooks :};
+  \foreach \y/\nb in {7.5/01\_chargement\_donnees.ipynb, 6.5/02\_controle\_qualite.ipynb,
+                       5.5/03\_expositions\_taux\_bruts.ipynb, 4.5/04\_lissage\_whittaker\_henderson.ipynb,
+                       3.5/05\_visualisation.ipynb, 2.5/06\_smr.ipynb, 1.5/07\_export.ipynb} {
+    \draw[fill=blue!20, draw=blue!50] (0.7,\y-0.15) rectangle (1.0,\y+0.15);
+    \node[anchor=west, font=\tiny] at (1.1,\y) {\nb};
+  }
+  \draw[fill=green!20, draw=green!50, rounded corners=2pt] (0.7,0.7) rectangle (2.8,1.2);
+  \node[font=\tiny] at (1.75,0.95) {✅ Tout sélectionner};
+  \draw[fill=red!10, draw=red!30, rounded corners=2pt] (3.0,0.7) rectangle (5.3,1.2);
+  \node[font=\tiny] at (4.15,0.95) {☐ Tout déselectionner};
+
+  % Right panel — preview
+  \draw[fill=white, draw=gray!40, rounded corners=3pt] (5.7,0.5) rectangle (13.5,8.5);
+  \node[anchor=north west, font=\bfseries\scriptsize] at (5.9,8.4) {Aperçu du contenu :};
+  \foreach \y/\lbl in {7.6/📓 01\_chargement\_donnees.ipynb ▶, 6.8/📓 02\_controle\_qualite.ipynb ▶,
+                        6.0/📓 03\_expositions\_taux\_bruts.ipynb ▶} {
+    \draw[fill=blue!8, draw=blue!30, rounded corners=2pt] (5.9,\y-0.25) rectangle (13.3,\y+0.25);
+    \node[anchor=west, font=\tiny] at (6.0,\y) {\lbl};
+  }
+
+  % Test button
+  \draw[fill=orange!20, draw=orange!60, rounded corners=3pt] (0.7,1.3) rectangle (13.3,1.8);
+  \node[font=\scriptsize\bfseries] at (7,1.55) {▶ Exécuter les notebooks sélectionnés (données synthétiques)};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Actions disponibles}
+
+\begin{description}
+  \item[Cocher/décocher un notebook] Inclure ou exclure ce notebook de l'analyse.
+        Par défaut, tous les 7 notebooks sont cochés.
+  \item[Aperçu] Cliquer sur \og \texttt{📓 nom.ipynb ▶} \fg{} pour voir le contenu
+        (code et documentation) du notebook.
+  \item[Exécuter le blueprint] Lance l'analyse sur 50 000 contrats synthétiques
+        (données calibrées sur la table TH 00-02) pour valider la méthodologie.
+\end{description}
+
+\begin{tipbox}[Conseil]
+Utilisez le bouton \og Exécuter le blueprint \fg{} pour vérifier que la chaîne fonctionne
+avant de charger vos vraies données. Le SMR devrait être proche de 1,0 sur les données synthétiques.
+\end{tipbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Onglet 2 — Ordre d'exécution}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Vue de l'écran}
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+  \draw[rounded corners=6pt, fill=gray!8, draw=gray!50] (0,0) rectangle (14,8);
+
+  % Tabs
+  \draw[fill=white, draw=blue!60, rounded corners=3pt, line width=1pt] (4.8,7.3) rectangle (8.5,8.0);
+  \node[font=\scriptsize\bfseries] at (6.65,7.65) {📋 Ordre d'exécution};
+  \foreach \x/\lbl in {0.5/📚 Bibliothèque, 9/🔬 Analyse} {
+    \draw[fill=blue!15, draw=blue!40, rounded corners=3pt] (\x,7.3) rectangle (\x+3.5,8.0);
+    \node[font=\scriptsize] at (\x+1.75,7.65) {\lbl};
+  }
+
+  % Content
+  \node[anchor=north west, font=\bfseries\small] at (0.5,7.0) {Ordre d'exécution des notebooks};
+
+  \foreach \y/\nb/\desc in {
+    6.0/01\_chargement\_donnees.ipynb/Étape 1 — Imports et chargement des données,
+    5.0/02\_controle\_qualite.ipynb/Étape 2 — Contrôle qualité des données,
+    4.0/03\_expositions\_taux\_bruts.ipynb/Étape 3 — Calcul des expositions,
+    3.0/04\_lissage\_whittaker\_henderson.ipynb/Étape 4 — Lissage WH,
+    2.0/05\_visualisation.ipynb/Étape 5 — Visualisation} {
+    % Up button
+    \draw[fill=gray!20, draw=gray!50, rounded corners=2pt] (0.5,\y-0.3) rectangle (1.1,\y+0.3);
+    \node[font=\scriptsize] at (0.8,\y) {↑};
+    % Down button
+    \draw[fill=gray!20, draw=gray!50, rounded corners=2pt] (1.2,\y-0.3) rectangle (1.8,\y+0.3);
+    \node[font=\scriptsize] at (1.5,\y) {↓};
+    % Info
+    \node[anchor=west, font=\tiny\bfseries] at (2.0,\y+0.1) {\nb};
+    \node[anchor=west, font=\tiny, text=gray] at (2.0,\y-0.15) {\desc};
+  }
+
+  % Reset button
+  \draw[fill=yellow!20, draw=yellow!60, rounded corners=3pt] (0.5,0.3) rectangle (3.5,0.9);
+  \node[font=\scriptsize] at (2.0,0.6) {↺ Réinitialiser l'ordre};
+
+  % Summary
+  \draw[fill=blue!10, draw=blue!30, rounded corners=3pt] (0.5,1.1) rectangle (13.5,1.7);
+  \node[font=\tiny] at (7.0,1.4) {7 notebooks actifs : 01 → 02 → 03 → 04 → 05 → 06 → 07};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Comment réordonner}
+
+\begin{itemize}
+  \item \textbf{Bouton ↑} : remonte le notebook d'une position.
+  \item \textbf{Bouton ↓} : descend le notebook d'une position.
+  \item \textbf{↺ Réinitialiser} : remet l'ordre alphabétique d'origine.
+\end{itemize}
+
+\begin{warnbox}[Attention à l'ordre]
+Les notebooks partagent des variables (ex.\,\texttt{data}, \texttt{table}).
+L'ordre par défaut (01 → 07) doit être conservé pour une analyse standard.
+Ne réordonner que si vous savez ce que vous faites (ex.\,insérer une étape de correction).
+\end{warnbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Onglet 3 — Analyse et rapport}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Vue de l'écran — chargement}
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+  \draw[rounded corners=6pt, fill=gray!8, draw=gray!50] (0,0) rectangle (14,6);
+
+  \draw[fill=white, draw=blue!60, rounded corners=3pt, line width=1pt] (9.2,5.3) rectangle (13.0,6.0);
+  \node[font=\scriptsize\bfseries] at (11.1,5.65) {🔬 Analyse et rapport};
+  \foreach \x/\lbl in {0.5/📚 Bibliothèque, 4.8/📋 Ordre} {
+    \draw[fill=blue!15, draw=blue!40, rounded corners=3pt] (\x,5.3) rectangle (\x+3.5,6.0);
+    \node[font=\scriptsize] at (\x+1.75,5.65) {\lbl};
+  }
+
+  \node[anchor=north west, font=\bfseries\small] at (0.5,5.0) {Analyse sur données réelles};
+
+  % Upload zone
+  \draw[dashed, draw=blue!50, rounded corners=4pt, fill=blue!5] (0.5,2.5) rectangle (13.5,4.5);
+  \node[font=\large] at (7,3.8) {📁};
+  \node[font=\small\bfseries] at (7,3.3) {Charger un fichier de portefeuille (CSV)};
+  \node[font=\scriptsize, text=gray] at (7,2.9) {Glissez-déposez votre fichier ici ou cliquez pour parcourir};
+  \node[font=\scriptsize, text=gray] at (7,2.65) {Formats acceptés : .csv};
+
+  % Info message
+  \draw[fill=blue!10, draw=blue!30, rounded corners=3pt] (0.5,0.3) rectangle (13.5,2.2);
+  \node[font=\small\bfseries] at (7,1.6) {7 notebooks sélectionnés.};
+  \node[font=\small] at (7,1.2) {Chargez un fichier CSV pour démarrer l'analyse automatique.};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Vue de l'écran — analyse en cours}
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+  \draw[rounded corners=6pt, fill=gray!8, draw=gray!50] (0,0) rectangle (14,9);
+
+  % Spinner
+  \draw[fill=blue!10, draw=blue!40, rounded corners=3pt] (0.5,8.0) rectangle (13.5,8.7);
+  \node[font=\small] at (7,8.35) {⏳ Étape 3 : Calcul des expositions et taux bruts de mortalité};
+
+  % Step 1 results
+  \node[anchor=north west, font=\bfseries\small, color=blue!80] at (0.5,7.7) {Étape 1 — Imports et chargement des données};
+  \draw[fill=white, draw=gray!30, rounded corners=3pt] (0.5,5.5) rectangle (13.5,7.4);
+  \node[anchor=north west, font=\small] at (0.7,7.3) {Les données ont été chargées avec succès :};
+  \node[anchor=west, font=\small] at (1.0,6.9) {• \textbf{50 000} contrats analysés};
+  \node[anchor=west, font=\small] at (1.0,6.5) {• \textbf{2 200} décès observés (4,4 \%)};
+  \node[anchor=west, font=\small] at (1.0,6.1) {• Période 2010–2023, sexe \textbf{H}, paramètres par défaut.};
+  \draw[gray!40] (0.5,5.5) -- (13.5,5.5);
+
+  % Step 2 results
+  \node[anchor=north west, font=\bfseries\small, color=blue!80] at (0.5,5.3) {Étape 2 — Contrôle qualité};
+  \draw[fill=white, draw=gray!30, rounded corners=3pt] (0.5,3.5) rectangle (13.5,5.0);
+  \node[anchor=north west, font=\small] at (0.7,4.9) {Aucune anomalie détectée. \textbf{50 000} lignes conservées.};
+  \node[anchor=west, font=\small] at (1.0,4.4) {Âge moyen à l'entrée : \textbf{52,3} ans — Durée moy. observation : \textbf{6,1} ans.};
+  \draw[gray!40] (0.5,3.5) -- (13.5,3.5);
+
+  % Figure placeholder
+  \draw[dashed, fill=gray!5, draw=gray!40, rounded corners=3pt] (0.5,0.3) rectangle (13.5,3.3);
+  \node[font=\small\itshape, text=gray] at (7,1.8) {[graphique taux bruts vs lissés s'affichera ici]};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Vue de l'écran — rapport final}
+
+À la fin de l'analyse, un résumé exécutif s'affiche :
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+  \draw[rounded corners=6pt, fill=gray!8, draw=gray!50] (0,0) rectangle (14,5);
+
+  \node[anchor=north west, font=\bfseries\large] at (0.5,4.8) {Synthèse de l'analyse};
+  \draw[fill=white, draw=blue!20, rounded corners=3pt] (0.5,0.3) rectangle (13.5,4.5);
+  \node[anchor=north west, font=\small] at (0.7,4.3) {\textbf{Portefeuille :} 50 000 contrats hommes, période 2010–2023.};
+  \node[anchor=north west, font=\small] at (0.7,3.8) {\textbf{Plage d'âges :} 20–90 ans (53 âges avec données suffisantes).};
+  \node[anchor=north west, font=\small] at (0.7,3.3) {\textbf{SMR global :} 0,9987 — mortalité conforme à la table TH 00-02.};
+  \node[anchor=north west, font=\small] at (0.7,2.8) {\textbf{Lissage :} Whittaker-Henderson λ=100, courbe monotone.};
+  \node[anchor=north west, font=\small] at (0.7,2.3) {\textbf{Fichier exporté :} \texttt{table\_mortalite\_synthetique\_H.csv}};
+\end{tikzpicture}
+\end{center}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Questions fréquentes}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{L'analyse démarre-t-elle automatiquement ?}
+Oui. Dès qu'un fichier CSV est chargé, l'agent lance automatiquement les 7 étapes
+avec les paramètres par défaut (sexe=H, date\_fin=2023-12-31, λ=100).
+
+\subsection{Puis-je changer le sexe ou la date de fin d'observation ?}
+Dans la version actuelle, les paramètres sont définis dans le notebook 01.
+L'agent les adapte automatiquement si vous l'indiquez dans le nom du fichier
+ou si vous modifiez le notebook 01 avant l'analyse.
+
+\subsection{Le rapport montre-t-il du code Python ?}
+Non. Seuls les résultats formatés (texte, tableaux, graphiques) sont affichés.
+Le code Python reste dans les notebooks et n'est jamais visible dans le rapport.
+
+\subsection{Que faire si l'agent détecte une erreur ?}
+L'agent diagnostique l'erreur, corrige le code et relance l'étape automatiquement.
+Si l'erreur persiste après plusieurs tentatives, un message d'erreur rouge s'affiche
+avec le traceback.
+
+\subsection{Le fichier CSV de résultats est-il exporté automatiquement ?}
+Oui, dans le répertoire de travail, sous le nom
+\texttt{table\_mortalite\_<nom\_fichier>\_<sexe>.csv}.
+
+\subsection{Puis-je ajouter mes propres notebooks ?}
+Oui. Déposez votre fichier \texttt{.ipynb} dans le dossier \texttt{notebooks/},
+rechargez l'application : il apparaît automatiquement dans l'onglet 1.
+
+\begin{infobox}[Rappel sur les variables partagées]
+Votre notebook peut utiliser toutes les variables créées par les notebooks précédents
+(\texttt{data}, \texttt{table}, \texttt{SEXE}, \texttt{SMR}, etc.).
+\end{infobox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Interprétation des résultats}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Le SMR}
+
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+\textbf{Valeur SMR} & \textbf{Interprétation} & \textbf{Action recommandée} \\
+\midrule
+$< 0{,}80$ & Très forte sous-mortalité & Vérifier la qualité des données \\
+$0{,}80$–$0{,}90$ & Sélection favorable marquée & Normal pour portefeuille épargne \\
+$0{,}90$–$1{,}10$ & Conforme à la référence & Table directement utilisable \\
+$1{,}10$–$1{,}25$ & Sur-mortalité modérée & Analyser par tranche d'âge \\
+$> 1{,}25$ & Sur-mortalité forte & Vérifier composition du portefeuille \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Qualité du lissage}
+
+\begin{itemize}
+  \item \textbf{Âges non-monotones $= 0$} : courbe correcte, utilisable directement.
+  \item \textbf{Âges non-monotones $> 0$} : augmentez λ (ex.\,λ=200 ou λ=500).
+  \item \textbf{Nombreux âges avec $E_x < 10$} : diminuez λ pour moins lisser
+        (les données ont peu de crédibilité sur ces âges).
+\end{itemize}
+
+\end{document}
