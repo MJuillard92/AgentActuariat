@@ -66,6 +66,12 @@ PARAMS: dict = {
                                          # (avant 40 ans, non-monotonicité acceptable : bosse accidentelle)
     },
 
+    # ── Agent ─────────────────────────────────────────────────────────────
+    "agent": {
+        "max_iterations": 40,   # Nombre maximum d'appels d'outils par analyse
+                                 # (garde-fou anti-boucle infinie ; 25–50 typique)
+    },
+
     # ── Sélection automatique du modèle de lissage ────────────────────────
     "model_selection": {
         # Écart d'AIC Poisson en dessous duquel deux modèles sont considérés «proches»

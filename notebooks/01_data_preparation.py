@@ -117,22 +117,94 @@ def normalize_column_names(df: pd.DataFrame) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# _load_flat_file — détection automatique du séparateur CSV/TXT
+# ---------------------------------------------------------------------------
+
+def _load_flat_file(path: str, encoding: str = 'utf-8'):
+    """Charge un fichier plat (CSV ou TXT) en détectant automatiquement le séparateur.
+
+    Stratégie :
+      1. csv.Sniffer sur les 4 premiers Ko pour détecter le séparateur.
+      2. Essai forcé avec ';', ',', tabulation, '|'.
+      3. Réessaie avec latin-1 / cp1252 si utf-8 échoue.
+      4. Fallback ultime : pandas par défaut (latin-1).
+
+    Retourne (DataFrame, fmt_str).
+    """
+    import csv as _csv
+
+    SEP_CANDIDATES = [';', ',', '\t', '|']
+    ENCODINGS = [encoding] if encoding not in ('utf-8', '') else ['utf-8', 'latin-1', 'cp1252']
+
+    def _try(enc, sep):
+        return pd.read_csv(path, sep=sep, encoding=enc, engine='python')
+
+    def _sniff(enc):
+        try:
+            with open(path, encoding=enc, errors='replace') as fh:
+                sample = fh.read(4096)
+            return _csv.Sniffer().sniff(sample, delimiters=';,\t|').delimiter
+        except Exception:
+            return None
+
+    for enc in ENCODINGS:
+        sniffed = _sniff(enc)
+        if sniffed:
+            try:
+                df = _try(enc, sniffed)
+                if len(df.columns) > 1:
+                    print(f"[load_data] sep={sniffed!r} enc={enc} détectés automatiquement")
+                    return df, f"CSV(sep={sniffed!r})"
+            except Exception:
+                pass
+        for sep in SEP_CANDIDATES:
+            try:
+                df = _try(enc, sep)
+                if len(df.columns) > 1:
+                    print(f"[load_data] sep={sep!r} enc={enc}")
+                    return df, f"CSV(sep={sep!r})"
+            except Exception:
+                pass
+
+    # Fallback ultime
+    try:
+        df = pd.read_csv(path, encoding='latin-1')
+        print("[load_data] Chargement fallback (latin-1, sep=',')")
+        return df, "CSV(fallback)"
+    except Exception as exc:
+        raise ValueError(
+            f"Impossible de lire '{path}'. "
+            f"Formats supportés : CSV/TXT (sep ',' ';' ou tabulation), Excel. "
+            f"Erreur : {exc}"
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # load_data
 # ---------------------------------------------------------------------------
 
 def load_data(path: str,
               date_cols: list = None,
-              encoding: str = 'utf-8') -> tuple:
+              encoding: str = 'utf-8',
+              column_mapping: dict = None,
+              value_mapping: dict = None) -> tuple:
     """
     WHEN TO USE:
         First step of any pipeline. Loads a portfolio file (CSV or Excel) into a
         standardised DataFrame and returns a quick quality summary.
 
     INPUTS:
-        path        : str  — Absolute or relative path to a CSV or Excel file.
-        date_cols   : list — Column names to parse as dates. Default:
-                             ['date_naissance', 'date_entree', 'date_sortie']
-        encoding    : str  — File encoding for CSV (default 'utf-8').
+        path           : str  — Absolute or relative path to a CSV or Excel file.
+        date_cols      : list — Column names to parse as dates. Default:
+                                ['date_naissance', 'date_entree', 'date_sortie']
+        encoding       : str  — File encoding for CSV (default 'utf-8').
+        column_mapping : dict — {raw_col_name: canonical_name} for non-standard
+                                column names not covered by the auto-normalisation.
+                                Example: {"Gender": "sexe", "DateNaiss": "date_naissance"}
+        value_mapping  : dict — {canonical_col: {raw_value: canonical_value}} to
+                                remap categorical values after column renaming.
+                                Example: {"sexe": {"M": "H", "F": "F"},
+                                          "cause_sortie": {"death": "deces", "alive": "autre"}}
 
     OUTPUTS:
         (DataFrame, dict) where dict keys are:
@@ -149,11 +221,25 @@ def load_data(path: str,
         df = pd.read_excel(path)
         fmt = 'Excel'
     else:
-        df = pd.read_csv(path, encoding=encoding)
-        fmt = 'CSV'
+        # Détection automatique du séparateur et de l'encodage pour CSV/TXT
+        df, fmt = _load_flat_file(path, encoding)
 
-    # Normalise column names (uppercase → lowercase, synonyms → canonical names)
+    # Apply user-provided column mapping FIRST (raw names still intact before normalization)
+    if column_mapping:
+        extra_renames = {k: v for k, v in column_mapping.items() if k in df.columns}
+        if extra_renames:
+            df = df.rename(columns=extra_renames)
+            print(f"[load_data] Mapping colonnes utilisateur : {extra_renames}")
+
+    # Then normalise column names (uppercase → lowercase, synonyms → canonical names)
     df, _col_renames = normalize_column_names(df)
+
+    # Apply user-provided value mapping (e.g. M→H, death→deces)
+    if value_mapping:
+        for col, val_map in value_mapping.items():
+            if col in df.columns:
+                df[col] = df[col].map(lambda x, vm=val_map: vm.get(str(x), x))
+                print(f"[load_data] Remappage valeurs '{col}' : {val_map}")
 
     # Parse date columns that exist in the file (after normalisation)
     existing_date_cols = [c for c in date_cols if c in df.columns]
@@ -283,7 +369,8 @@ def clean_data(df: pd.DataFrame,
                sexe_col: str = 'sexe',
                sexe_filter: str = None,
                age_min: int = 20,
-               age_max: int = 100) -> tuple:
+               age_max: int = 100,
+               date_fin_observation: str = '2023-12-31') -> tuple:
     """
     WHEN TO USE:
         Always run after load_data or generate_synthetic_data, before any
@@ -327,6 +414,15 @@ def clean_data(df: pd.DataFrame,
     # 2. Parse dates
     for col in [dob_col, entry_col, exit_col]:
         df[col] = pd.to_datetime(df[col], errors='coerce')
+
+    # 2b. Fill NaT exit dates : la valeur sentinelle 31/12/2999 ne peut pas être
+    #     parsée par pandas (max ~2262) → NaT signifie "encore actif" → on remplace
+    #     par date_fin_observation pour conserver ces individus dans l'analyse.
+    t_fin = pd.to_datetime(date_fin_observation)
+    mask_no_exit = df[exit_col].isna()
+    if mask_no_exit.any():
+        df.loc[mask_no_exit, exit_col] = t_fin
+        print(f"[clean_data] {mask_no_exit.sum():,} date_sortie NaT (sentinelle) → {date_fin_observation}")
 
     # 3. Drop rows with null values in required columns
     mask_null = df[required].isna().any(axis=1)

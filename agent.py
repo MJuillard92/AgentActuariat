@@ -18,14 +18,157 @@ contient tous les modules actuariels + les paramètres PARAMS. L'agent n'a pas
 besoin de réimporter quoi que ce soit entre ses appels.
 """
 
+from __future__ import annotations
+
 import json
 import os
+from pathlib import Path
 from typing import Callable, Generator
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 import config
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Base de connaissances actuarielle (Knowledge Base)
+# ─────────────────────────────────────────────────────────────────────────────
+_KB_DIR = Path(__file__).parent / "Knowledge Base"
+
+
+def load_knowledge_base_context(
+    modules: list[str] | None = None,
+    kb_dir: Path | None = None,
+) -> str:
+    """Charge la base de connaissances et retourne un bloc de doctrine formaté.
+
+    Les fichiers JSON dans ``Knowledge Base/`` portent le même nom que les modules
+    actuariels (p. ex. ``04_smoothing.json`` ↔ ``notebooks/04_smoothing.py``).
+    Chaque fichier est un tableau de chunks : {id, source, section, type, tags, titre, contenu}.
+
+    Args:
+        modules: liste des noms de modules (sans extension) à charger.
+                 ``None`` → charge tous les fichiers JSON disponibles.
+        kb_dir:  Répertoire de la base de connaissances. ``None`` → utilise ``_KB_DIR``.
+
+    Returns:
+        Chaîne prête à être injectée dans ``{notebook_context}`` du system prompt.
+        Chaîne vide si le répertoire n'existe pas ou si aucun fichier n'est trouvé.
+    """
+    effective_dir = kb_dir if kb_dir is not None else _KB_DIR
+    if not effective_dir.exists():
+        return ""
+
+    if modules:
+        json_files = [effective_dir / f"{m}.json" for m in modules
+                      if (effective_dir / f"{m}.json").exists()]
+    else:
+        json_files = sorted(effective_dir.glob("*.json"))
+
+    if not json_files:
+        return ""
+
+    sections: list[str] = []
+    for jf in json_files:
+        try:
+            with open(jf, encoding="utf-8") as fh:
+                chunks = json.load(fh)
+        except Exception:
+            continue
+        if not chunks:
+            continue
+
+        module_name = jf.stem
+        lines = [f"\n[{module_name}]"]
+        for chunk in chunks:
+            titre = chunk.get("titre", "")
+            contenu = chunk.get("contenu", "")
+            if titre:
+                lines.append(f"\n## {titre}")
+            if contenu:
+                lines.append(contenu)
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return ""
+
+    header = (
+        "DOCTRINE ACTUARIELLE — BASE DE CONNAISSANCES\n"
+        "─────────────────────────────────────────────\n"
+        "Les extraits suivants proviennent des notes méthodologiques de référence.\n"
+        "Utilise-les pour guider tes choix méthodologiques et rédiger les justifications.\n"
+    )
+    return header + "".join(sections)
+
+
+def search_knowledge_base(
+    query: str,
+    top_k: int = 5,
+    kb_dir: Path | None = None,
+) -> str:
+    """Recherche par mots-clés dans la base de connaissances.
+
+    Stratégie : score TF simplifié — pour chaque chunk, compte le nombre de termes
+    de la requête présents dans (titre + contenu + tags + section).
+    Retourne les ``top_k`` chunks les plus pertinents, formatés pour le LLM.
+
+    Args:
+        query:  Question ou thème à rechercher.
+        top_k:  Nombre maximum de chunks à retourner.
+        kb_dir: Répertoire de la base de connaissances. ``None`` → utilise ``_KB_DIR``.
+
+    Returns:
+        Chaîne formatée avec les chunks pertinents, ou message d'absence.
+    """
+    effective_dir = kb_dir if kb_dir is not None else _KB_DIR
+    if not effective_dir.exists():
+        return "[search_documentation] Base de connaissances introuvable."
+
+    json_files = sorted(effective_dir.glob("*.json"))
+    if not json_files:
+        return "[search_documentation] Aucun fichier de doctrine disponible."
+
+    # Normalisation de la requête : minuscules, mots de longueur ≥ 3
+    terms = [t.lower() for t in query.replace("_", " ").split() if len(t) >= 3]
+
+    scored: list[tuple[int, str, dict]] = []  # (score, module_name, chunk)
+    for jf in json_files:
+        try:
+            with open(jf, encoding="utf-8") as fh:
+                chunks = json.load(fh)
+        except Exception:
+            continue
+        module_name = jf.stem
+        for chunk in chunks:
+            searchable = " ".join([
+                chunk.get("titre", ""),
+                chunk.get("contenu", ""),
+                chunk.get("section", ""),
+                " ".join(chunk.get("tags", [])),
+            ]).lower()
+            score = sum(1 for t in terms if t in searchable)
+            if score > 0:
+                scored.append((score, module_name, chunk))
+
+    if not scored:
+        return (
+            f"[search_documentation] Aucun résultat pour « {query} ».\n"
+            "Procède avec ton jugement d'expert actuariel."
+        )
+
+    # Tri décroissant par score, puis top_k
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:top_k]
+
+    lines = [f"[search_documentation] Résultats pour « {query} » ({len(top)}/{len(scored)} chunks) :"]
+    for score, module, chunk in top:
+        titre = chunk.get("titre", "(sans titre)")
+        contenu = chunk.get("contenu", "")
+        lines.append(f"\n--- [{module}] {titre} (pertinence : {score}) ---")
+        lines.append(contenu)
+
+    return "\n".join(lines)
+
 
 try:
     from actuary_logger import LOGGER as _TOOL_LOGGER
@@ -36,8 +179,11 @@ except ImportError:
 
 load_dotenv()
 
-MAX_ITERATIONS = 25    # Limite de sécurité : évite une boucle infinie si le LLM
-                       # ne converge pas (p. ex. erreur répétée non récupérable).
+try:
+    from actuarial_params import PARAMS as _PARAMS
+    MAX_ITERATIONS = _PARAMS["agent"]["max_iterations"]
+except Exception:
+    MAX_ITERATIONS = 40  # fallback si actuarial_params non disponible
 MAX_OUTPUT_LENGTH = 3000  # Troncature des sorties pour ne pas saturer la fenêtre
                            # contextuelle du LLM avec des logs trop volumineux.
 
@@ -98,6 +244,34 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": (
+                "Pose une question à l'utilisateur humain et attend sa réponse avant de continuer. "
+                "À utiliser UNIQUEMENT quand une décision méthodologique nécessite une validation humaine : "
+                "lisseur proche (auto_select_smoother status='close'), SMR hors [0.3, 3.0], "
+                "choix entre méthodes statistiquement équivalentes. "
+                "NE PAS appeler pour des informations, des calculs ou des questions rhétoriques."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Question claire et concise à poser à l'utilisateur.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Réponses suggérées (ex: ['Whittaker', 'Gompertz']). Optionnel.",
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -118,16 +292,21 @@ Toutes ces fonctions sont disponibles dans le kernel sous forme de modules.
 Appelle-les directement — tu n'as pas besoin de les réécrire.
 
 MODULE data_prep  (01_data_preparation.py)
-  data_prep.load_data(path, encoding='utf-8')
+  data_prep.load_data(path, encoding='utf-8', column_mapping=COLUMN_MAPPING, value_mapping=VALUE_MAPPING)
     QUAND : toujours en premier. Charge CSV ou Excel.
+    Si COLUMN_MAPPING ou VALUE_MAPPING sont non-vides dans le kernel, les passer OBLIGATOIREMENT
+    pour normaliser les noms de colonnes et les valeurs catégorielles non-standard.
     RETOURNE : (DataFrame, summary_dict)
 
   data_prep.generate_synthetic_data(n=50000, sexe='H', seed=42)
     QUAND : aucun fichier fourni — génère des données de test.
     RETOURNE : DataFrame
 
-  data_prep.clean_data(df)
+  data_prep.clean_data(df, date_fin_observation=DATE_FIN_OBSERVATION)
     QUAND : après chargement. Valide cohérence des dates, âges, cause_sortie.
+    IMPORTANT : passer TOUJOURS date_fin_observation=DATE_FIN_OBSERVATION pour que
+    les individus encore actifs (date_sortie sentinelle 31/12/2999 → NaT) soient
+    conservés et traités comme censurés à la fin d'observation.
     RETOURNE : (df_clean, rapport_dict)
 
   data_prep.compute_ages(df)
@@ -278,6 +457,62 @@ peux pas conclure sans avoir couvert chacun de ces points :
   • compute_exposure_by_year()— si une dérive temporelle est suspectée
   • Graphiques supplémentaires— selon les anomalies observées
 
+TABLEAUX ET VISUELS OBLIGATOIRES
+─────────────────────────────────
+À 8 moments clés, tu DOIS produire un tableau de synthèse ET (si pertinent) un graphique.
+Tu choisis librement la mise en forme, mais ces 8 rendus ne sont pas optionnels.
+Utilise ces patterns de code :
+
+  Règle d'affichage CRITIQUE : utilise TOUJOURS display(df) ou laisse le DataFrame
+  en dernière expression de la cellule — JAMAIS print() ni .to_string() qui produisent
+  du texte brut sans rendu tableau dans Jupyter.
+
+  1. APRÈS load_data — aperçu du fichier chargé :
+     display(pd.DataFrame({
+         'Indicateur': ['Lignes', 'Colonnes disponibles', 'Première date entrée', 'Dernière date entrée'],
+         'Valeur': [len(df), len(df.columns),
+                    str(df['date_entree'].min().date()), str(df['date_entree'].max().date())]
+     }))
+
+  2. APRÈS clean_data — tableau des suppressions :
+     display(pd.DataFrame(rapport['removal_reasons'].items(),
+                          columns=['Raison', 'N supprimés']).set_index('Raison'))
+
+  3. APRÈS compute_ages — distribution des âges (pyramide synthétique) :
+     display(df.groupby(pd.cut(df['age'], bins=range(20,96,5)))
+               .agg(N=('age','count'), pct=('age', lambda x: 100*len(x)/len(df)))
+               .round(1).rename_axis('Tranche d\'âge'))
+
+  4. APRÈS compute_exposure_by_age — top âges + graphique d'exposition :
+     display(exposure_table.sort_values('E_x', ascending=False)
+             .head(20)[['age','E_x','D_x','q_x_brut']].round(4).reset_index(drop=True))
+     visualization.plot_exposure_by_age(exposure_table)  ← OBLIGATOIRE (style page 6 du rapport)
+
+  5. APRÈS lissage — comparatif méthodes (construis ce dict au fil des tests) :
+     display(pd.DataFrame(results_list,   # [{'méthode':'Whittaker','lambda':100,'AIC':…,'violations':4},…]
+                          columns=['méthode','paramètre','AIC','violations_mono','RMSE']).round(3))
+     visualization.plot_crude_vs_smoothed(exposure_table, smoothed_dict)  ← OBLIGATOIRE
+
+  6. APRÈS compute_smr — SMR décennal :
+     display(pd.DataFrame(smr_result.get('by_decade', {}))
+             [['decade','D_obs','D_exp','SMR','IC_inf','IC_sup']].round(3))
+
+  7. TABLE DE SYNTHÈSE FINALE (Tableau 7 — format rapport professionnel) :
+     # Construire AVANT export_table — colonnes exactes du standard professionnel TD :
+     expo_tot = exposure_table['E_x'].sum()
+     t7 = exposure_table[['age','E_x','D_x','D_exp','qx_lisse','IC_inf','IC_sup']].copy()
+     t7['proportion'] = (t7['E_x'] / expo_tot * 100).round(2)
+     t7['ecart'] = t7['D_x'] - t7['D_exp']
+     t7['rapport_OA'] = (t7['D_x'] / t7['D_exp'].replace(0, float('nan'))).round(3)
+     display(t7[['age','E_x','proportion','D_x','D_exp','ecart','rapport_OA','IC_inf','IC_sup']]
+               .rename(columns={'E_x':'Exposition','proportion':'Proportion (%)','D_x':'D_obs',
+                                 'D_exp':'D_exp','ecart':'Écart','rapport_OA':'Rapport O/A',
+                                 'IC_inf':'IC Min 95%','IC_sup':'IC Max 95%'})
+               .round(3).reset_index(drop=True))
+
+  8. FIGURE DÉCÈS OBSERVÉS VS MODÉLISÉS (Figure 8 — format rapport professionnel) :
+     visualization.plot_observed_vs_expected(exposure_table)  ← OBLIGATOIRE en fin d'analyse
+
 AUTO-VÉRIFICATION AVANT CONCLUSION
 ────────────────────────────────────
 Avant de rédiger ta synthèse finale, parcours mentalement la checklist ci-dessus.
@@ -316,6 +551,16 @@ RÈGLES MÉTIER
 - PARAMÈTRES MÉTIER : tous les seuils sont dans PARAMS (variable disponible dans le kernel).
     Exemples : PARAMS["smr"]["lower"], PARAMS["credibility"]["threshold_low"]
     Ne hardcode jamais un seuil numérique — lis-le toujours depuis PARAMS.
+
+INTERACTIONS UTILISATEUR
+────────────────────────
+ask_user(question, options=[])
+  QUAND utiliser : décision méthodologique qui nécessite une validation humaine.
+    • auto_select_smoother retourne status='close' → demande lequel préférer
+    • SMR hors [0.3, 3.0] → demande si l'utilisateur veut continuer malgré l'anomalie
+    • Choix entre méthodes statistiquement équivalentes → demande la préférence
+  NE PAS utiliser pour : informations factuelles, calculs, questions rhétoriques.
+  L'agent est mis en pause jusqu'à réception de la réponse dans le chat RAG.
 
 {notebook_context}
 """
@@ -437,6 +682,8 @@ def run_agent_loop(
     execute_fn: Callable[[str], tuple],
     system_prompt_template: str = None,
     max_steps: int = None,
+    wait_for_user_fn: Callable[[str, list], str] | None = None,
+    kb_dir: Path | None = None,
 ) -> Generator[dict, None, None]:
     """Boucle ReAct : appelle OpenAI, exécute les outils, renvoie les résultats.
 
@@ -448,12 +695,16 @@ def run_agent_loop(
         max_steps:             Nombre maximum d'appels d'outils avant de s'arrêter.
                                None = utilise MAX_ITERATIONS (mode normal).
                                1 = mode pas-à-pas : s'arrête après chaque étape.
+        wait_for_user_fn:      Callable(question: str, options: list) -> str  bloquant.
+                               Si fourni, le tool ask_user appelle cette fonction et attend la
+                               réponse avant de reprendre. Si None, retourne "continuer" immédiatement.
 
     Yields:
-        {"type": "step",    "description": str, "code": str, "output": str, "figures": list[bytes]}
-        {"type": "summary", "content": str}
-        {"type": "history", "messages": list}
-        {"type": "error",   "content": str}
+        {"type": "step",     "description": str, "code": str, "output": str, "figures": list[bytes]}
+        {"type": "question", "content": str, "options": list}
+        {"type": "summary",  "content": str}
+        {"type": "history",  "messages": list}
+        {"type": "error",    "content": str}
     """
     client = _get_client()
     template = system_prompt_template if system_prompt_template is not None else SYSTEM_PROMPT_TEMPLATE
@@ -538,21 +789,13 @@ def run_agent_loop(
                         return
 
                 elif tool_name == "search_documentation":
-                    # Connecteur RAG documentaire non encore activé.
-                    # On retourne un message de substitution pour que le LLM puisse
-                    # continuer avec son jugement d'expert plutôt que de bloquer.
                     query = args.get("query", "")
                     _TOOL_LOGGER.log(
                         "agent:search_documentation",
                         f"Recherche documentaire : {query}",
                         {"query": query},
                     )
-                    output_text = (
-                        f"[search_documentation] Requête : « {query} »\n"
-                        "Base documentaire non disponible — ce connecteur sera activé ultérieurement.\n"
-                        "Procède avec ton jugement d'expert actuariel et documente "
-                        "ton raisonnement dans le champ description de la prochaine étape."
-                    )
+                    output_text = search_knowledge_base(query, kb_dir=kb_dir)
                     figures = []
 
                     yield {
@@ -563,6 +806,34 @@ def run_agent_loop(
                     }
 
                     tool_content = output_text
+
+                elif tool_name == "ask_user":
+                    question_text = args.get("question", "")
+                    options = args.get("options", [])
+
+                    # Signal pour l'UI (le polling injectera la question dans le RAG chat)
+                    yield {
+                        "type": "question",
+                        "content": question_text,
+                        "options": options,
+                    }
+
+                    # Bloquer le thread jusqu'à réception de la réponse utilisateur
+                    # (wait_for_user_fn est fourni par canvas_app via _make_wait_for_user_fn)
+                    if wait_for_user_fn is not None:
+                        user_reply = wait_for_user_fn(question_text, options)
+                    else:
+                        user_reply = "continuer"
+
+                    _TOOL_LOGGER.log(
+                        "agent:ask_user",
+                        f"Question posée : {question_text[:80]}",
+                        {"question": question_text, "reply": user_reply},
+                    )
+
+                    output_text = f"[Réponse utilisateur] {user_reply}"
+                    tool_content = output_text
+                    figures = []
 
                 else:
                     output_text = f"Outil inconnu : {tool_name}"
