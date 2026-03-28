@@ -1780,12 +1780,14 @@ def _run_agent_in_thread(csv_path: str, sexe: str, user_message: str,
         _tpl = _ACTUARY_STATE.get_template()
         _writer_prompt = (_tpl.get("agent_system_prompt") or None) if _tpl else None
 
+        _pdf_ref = _tpl.get("source_pdf") if _tpl else None
         generate_narrative_report(
             _steps, _summary, full_message, domain_id, _pdf_path,
             study_ref=f"Analyse {_ts}",
             writer_prompt=_writer_prompt,
             template_sections=_tpl.get("sections", []) if _tpl else None,
             methodology=_tpl.get("methodology") if _tpl else None,
+            pdf_reference_path=_pdf_ref,
         )
         generate_reasoning_trace(_steps, _summary, full_message, _approved_plan, _trace_path)
         generate_final_notebook(_steps, full_message, _nb_path)

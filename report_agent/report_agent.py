@@ -900,6 +900,7 @@ def generate_narrative_report(
     template_sections: list[dict] | None = None,
     prebuilt_figures: dict[str, bytes] | None = None,
     methodology: dict | None = None,
+    pdf_reference_path: str | None = None,
 ) -> str:
     """Génère un rapport PDF narratif via LLM + reportlab.
 
@@ -938,10 +939,31 @@ def generate_narrative_report(
 
     # Générer les graphiques professionnels du rédacteur
     if prebuilt_figures:
+        # Figures fournies explicitement — utilisation directe
         report_figures = prebuilt_figures
+
+    elif pdf_reference_path and Path(pdf_reference_path).exists():
+        # PDF de référence fourni — génération via Vision API + templates matplotlib
+        try:
+            from report_agent.graph_template_builder import build_figures_from_reference
+            exposure_df = _find_exposure_table(meaningful_steps)
+            report_figures = build_figures_from_reference(
+                pdf_reference_path=pdf_reference_path,
+                exposure_df=exposure_df,
+            )
+            if not report_figures:
+                report_figures = _generate_report_figures(meaningful_steps)
+            if not report_figures:
+                report_figures = _generate_demo_charts(methodology)
+        except Exception as _gtp_err:
+            print(f"[graph_template_builder] Erreur : {_gtp_err} — fallback interne")
+            report_figures = _generate_report_figures(meaningful_steps)
+            if not report_figures:
+                report_figures = _generate_demo_charts(methodology)
+
     else:
+        # Pas de référence — génération interne standard
         report_figures = _generate_report_figures(meaningful_steps)
-        # Si aucun graphique extrait des steps, générer des charts de démo
         if not report_figures:
             report_figures = _generate_demo_charts(methodology)
 
