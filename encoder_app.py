@@ -387,6 +387,7 @@ def _run_simulation_thread() -> None:
             template_sections=template.get("sections", []),
             prebuilt_figures=prebuilt_figures,
             methodology=methodology,
+            pdf_reference_path=template.get("source_pdf"),
         )
 
         pdf_bytes = _Path(tmp_path).read_bytes()
