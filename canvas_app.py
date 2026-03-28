@@ -22,7 +22,6 @@ from pathlib import Path
 
 import dash
 import dash_bootstrap_components as dbc
-import dash_cytoscape as cyto
 import nbformat
 from dash import Input, Output, State, callback_context, dcc, html
 from dash import dash_table
@@ -30,11 +29,11 @@ from dotenv import load_dotenv
 
 import config
 from notebook_runner import load_notebook, execute_cell
-from word_generator import generate_word_report
-from workflow import Workflow, WorkflowNode, WorkflowEdge, default_workflow
-from workflow_executor import execute_workflow, make_kernel, evaluate_condition
-from agent import run_agent_loop, SYSTEM_PROMPT_TEMPLATE
-from workflow_executor import capture_figures
+from workflow_executor import make_kernel, capture_figures
+from agent import run_agent_loop, SYSTEM_PROMPT_TEMPLATE, load_knowledge_base_context, plan_agent
+from report_generator import generate_pdf_report, generate_reasoning_trace, generate_final_notebook
+from report_agent import generate_narrative_report
+from domain_config import list_domains, load_system_prompt as _load_domain_prompt, load_kb_context as _load_domain_kb, get_default_message as _get_domain_default_msg
 from rag import answer_with_rag, answer_with_tools, precompute_index, build_source_chunks, RAG_SYSTEM_PROMPT, RAG_TOOLS_SYSTEM_PROMPT
 from actuary_logger import LOGGER as _ACTUARY_LOGGER
 from actuary_state import STATE as _ACTUARY_STATE
@@ -55,7 +54,6 @@ def _get_validator():
     return _validator_module
 
 load_dotenv()
-cyto.load_extra_layouts()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Rendu HTML des notebooks via nbconvert (pas de serveur Jupyter externe)
@@ -163,10 +161,40 @@ def _patch_notebook_setup_cell(nb_path: Path, csv_path: str = "", sexe: str = "H
         pass  # ne pas bloquer si le patch échoue
 
 
-def _notebook_to_html(nb_path: Path) -> str:
-    """Convertit un .ipynb en HTML via nbconvert (Python Anaconda).
+_NOTEBOOK_TOGGLE_CSS_JS = """
+<style>
+  .input { display: none; }
+  .toggle-code-btn {
+    font-size: 11px; cursor: pointer; color: #888; background: none;
+    border: 1px solid #ddd; border-radius: 3px; padding: 1px 7px;
+    margin-bottom: 3px; float: right;
+  }
+  .toggle-code-btn:hover { color: #333; border-color: #999; }
+  .cell { position: relative; }
+</style>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  document.querySelectorAll(".code_cell").forEach(function(cell) {
+    var inp = cell.querySelector(".input");
+    if (!inp) return;
+    var btn = document.createElement("button");
+    btn.className = "toggle-code-btn";
+    btn.textContent = "{ } afficher le code";
+    btn.onclick = function() {
+      var hidden = inp.style.display === "none" || inp.style.display === "";
+      inp.style.display = hidden ? "block" : "none";
+      btn.textContent = hidden ? "{ } masquer le code" : "{ } afficher le code";
+    };
+    cell.insertBefore(btn, cell.firstChild);
+  });
+});
+</script>
+"""
 
-    Retourne le HTML complet à injecter dans un iframe srcDoc.
+def _notebook_to_html(nb_path: Path) -> str:
+    """Convertit un .ipynb en HTML via nbconvert.
+
+    Post-processing : injecte un toggle JS/CSS pour masquer/afficher le code.
     """
     script = (
         "import nbformat, sys;"
@@ -182,7 +210,9 @@ def _notebook_to_html(nb_path: Path) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.decode(errors="replace")[:300])
-    return result.stdout.decode("utf-8")
+    html = result.stdout.decode("utf-8")
+    # Injecter le toggle juste avant </head>
+    return html.replace("</head>", _NOTEBOOK_TOGGLE_CSS_JS + "</head>", 1)
 
 
 def _list_notebooks() -> list[dict]:
@@ -211,6 +241,150 @@ def _list_notebooks() -> list[dict]:
 
 
 atexit.register(lambda: _jupyter_proc.terminate() if _jupyter_proc else None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cellules de méthodologie injectées avant les étapes clés du notebook
+# Clé = sous-chaîne cherchée dans le code de l'étape ; valeur = texte Markdown
+# ─────────────────────────────────────────────────────────────────────────────
+_NOTEBOOK_METHODOLOGY: list[tuple[str, str]] = [
+    ("data_prep.load_data", """\
+### Méthodologie — Chargement des données
+
+Le fichier de données brutes (CSV / TXT / Excel) est importé et normalisé.
+Les noms de colonnes sont standardisés vers les noms canoniques du pipeline :
+`date_naissance`, `date_entree`, `date_sortie`, `sexe`, `cause_sortie`.
+Un mapping utilisateur permet de gérer les colonnes et valeurs non-standards."""),
+
+    ("data_prep.clean_data", """\
+### Méthodologie — Nettoyage et validation des données
+
+**Critères d'inclusion :**
+- Cohérence temporelle : $t_{naissance} < t_{entrée} < t_{sortie}$
+- Âge d'entrée dans l'intervalle admissible $[x_{min},\\ x_{max}]$
+- `cause_sortie` ∈ {`deces`, `autre`}
+- `sexe` ∈ {`H`, `F`}
+
+Les individus ne satisfaisant pas ces critères sont exclus et tracés dans le rapport de nettoyage."""),
+
+    ("data_prep.compute_ages", """\
+### Méthodologie — Calcul des âges et durées d'observation
+
+Âge en **années révolues** (anniversaire exact) :
+
+$$x_i = \\lfloor t_{obs} - t_{naissance,i} \\rfloor$$
+
+Durée d'exposition individuelle :
+
+$$\\delta_i = \\min(t_{sortie,i},\\ \\tau) - t_{entrée,i}$$
+
+où $\\tau$ est la date de fin d'observation."""),
+
+    ("data_prep.detect_anomalies", """\
+### Méthodologie — Détection d'anomalies structurelles
+
+Contrôles effectués :
+- **Doublons** : individus avec le même identifiant ou le même triplet (date naissance, date entrée, sexe)
+- **Valeurs manquantes** sur les colonnes clés
+- **Incohérences temporelles** : $t_{entrée} > t_{sortie}$, âge négatif
+- **Outliers** : taux brut par âge hors de $[\\mu_x^{ref}/10;\\ 10 \\cdot \\mu_x^{ref}]$"""),
+
+    ("exposure.compute_exposure_by_age", """\
+### Méthodologie — Calcul de l'exposition en années-personnes
+
+**Exposition centrale** à l'âge entier $x$ :
+
+$$E_x^c = \\sum_{i} \\bigl[\\min(t_{sortie,i},\\ x+1) - \\max(t_{entrée,i},\\ x)\\bigr]^+$$
+
+**Exposition initiale** (base du taux $q_x$) :
+
+$$E_x = E_x^c + \\tfrac{1}{2}\\, d_x$$
+
+où $d_x$ est le nombre de décès observés à l'âge $x$."""),
+
+    ("crude_rates.crude_ra", """\
+### Méthodologie — Taux bruts de mortalité
+
+**Estimateur de Kaplan-Meier** (adapté aux petits effectifs) :
+
+$$\\hat{S}(t) = \\prod_{t_i \\leq t} \\Bigl(1 - \\frac{d_i}{n_i}\\Bigr)$$
+
+**Taux central brut** et passage au taux initial :
+
+$$\\hat{\\mu}_x = \\frac{d_x}{E_x^c} \\qquad \\hat{q}_x = 1 - e^{-\\hat{\\mu}_x} \\approx \\frac{d_x}{E_x}$$
+
+Les âges avec $E_x^c < E_{min}$ sont signalés comme peu crédibles."""),
+
+    ("diagnostics.diagnose_credibility", """\
+### Méthodologie — Diagnostic de crédibilité
+
+Seuil de Bühlmann : $E_x^c \\geq E_{min}$ (typiquement 5–10 années-personnes).
+
+Le coefficient de variation des taux bruts détecte l'instabilité locale.
+Les âges sous-représentés reçoivent un traitement différencié lors du lissage."""),
+
+    ("smoothing_selector.auto_select", """\
+### Méthodologie — Sélection automatique du lisseur
+
+| Méthode | Paramètres | Critère |
+|---------|-----------|---------|
+| **Whittaker-Henderson** | $\\lambda$, ordre $n$ | AIC, monotonie |
+| **Gompertz** | $a$, $b$ | Log-vraisemblance |
+| **Makeham** | $a$, $b$, $c$ | Log-vraisemblance |
+
+Critère de sélection :
+$$AIC = -2\\,\\ell(\\hat{\\theta}) + 2k$$
+Le lisseur retenu minimise l'AIC tout en présentant le minimum de violations de monotonie."""),
+
+    ("smoothing.smooth_whittaker", """\
+### Méthodologie — Lissage de Whittaker-Henderson
+
+Minimisation de la fonction pénalisée :
+
+$$S(\\mathbf{z}) = \\sum_x w_x (z_x - y_x)^2 + \\lambda \\sum_x (\\Delta^n z_x)^2$$
+
+où $y_x = \\hat{q}_x^{brut}$, $w_x = E_x^c$, $\\Delta^n$ = différence finie d'ordre $n$.
+
+Solution analytique :
+
+$$\\mathbf{z}^* = (W + \\lambda D^T D)^{-1} W\\, \\mathbf{y}$$
+
+$\\lambda$ faible → fidélité aux données ; $\\lambda$ élevé → lissé mais risque d'effacer les tendances réelles."""),
+
+    ("validation.confiden", """\
+### Méthodologie — Intervalles de confiance à 95 %
+
+Variance asymptotique (approximation binomiale) :
+
+$$\\widehat{\\mathrm{Var}}(\\hat{q}_x) = \\frac{\\hat{q}_x\\,(1-\\hat{q}_x)}{E_x}$$
+
+Intervalle de confiance normal :
+
+$$IC_{95\\%}(q_x) = \\hat{q}_x \\pm 1{,}96\\,\\sqrt{\\widehat{\\mathrm{Var}}(\\hat{q}_x)}$$"""),
+
+    ("validation.chi_square_tes", """\
+### Méthodologie — Test du $\\chi^2$ d'adéquation
+
+Décès attendus sous la table de référence : $A_x = E_x^c \\cdot \\mu_x^{ref}$
+
+Statistique de test :
+
+$$\\chi^2 = \\sum_x \\frac{(O_x - A_x)^2}{A_x} \\sim \\chi^2(k)$$
+
+$k$ = nombre de classes d'âge avec $A_x \\geq 5$.
+La p-value teste $H_0 : q_x = q_x^{ref}$."""),
+
+    ("diagnostics.compute_smr", """\
+### Méthodologie — Ratio Standardisé de Mortalité (SMR)
+
+$$SMR = \\frac{\\displaystyle\\sum_x d_x}{\\displaystyle\\sum_x E_x^c \\cdot \\mu_x^{ref}}$$
+
+**Interprétation :** $SMR < 1$ → sélection favorable ; $SMR > 1$ → surmortalité relative.
+
+Intervalle de confiance à 95 % (approximation de Poisson) :
+
+$$IC_{95\\%}(SMR) = SMR \\pm 1{,}96 \\cdot \\frac{SMR}{\\sqrt{\\sum_x d_x}}$$"""),
+]
 
 
 def _generate_agent_notebook(steps: list, summary: str = "",
@@ -309,16 +483,48 @@ def _generate_agent_notebook(steps: list, summary: str = "",
 
         cells.append(nbformat.v4.new_markdown_cell(md))
 
-        # ── Cellule code ───────────────────────────────────────────────────────
+        # ── Cellule méthodologie (injectée avant le code pour les étapes clés) ─
+        if code and success:
+            for snippet, meth_text in _NOTEBOOK_METHODOLOGY:
+                if snippet in code:
+                    cells.append(nbformat.v4.new_markdown_cell(meth_text))
+                    break
+
+        # ── Cellule code avec outputs embarqués ────────────────────────────────
         if code:
             if not success:
                 prefix = (
                     f"# ❌ Tentative échouée — non rejouable\n"
                     f"# Erreur : {output[:120].splitlines()[0] if output else '?'}\n\n"
                 )
-                cells.append(nbformat.v4.new_code_cell(prefix + code))
+                code_cell = nbformat.v4.new_code_cell(prefix + code)
+                if output:
+                    code_cell.outputs = [nbformat.v4.new_output(
+                        output_type="stream", name="stderr", text=output)]
             else:
-                cells.append(nbformat.v4.new_code_cell(code))
+                code_cell = nbformat.v4.new_code_cell(code)
+                nb_outputs = []
+                # Outputs stream (stdout)
+                stream_text = output
+                display_outputs = step.get("display_outputs", [])
+                # Retirer du stream_text la partie déjà dans display_outputs
+                if stream_text:
+                    nb_outputs.append(nbformat.v4.new_output(
+                        output_type="stream", name="stdout", text=stream_text))
+                # Outputs display_data (DataFrames HTML)
+                for d in display_outputs:
+                    if d.get("html"):
+                        nb_outputs.append(nbformat.v4.new_output(
+                            output_type="display_data",
+                            data={"text/html": d["html"],
+                                  "text/plain": d["text"]},
+                            metadata={}))
+                    elif d.get("text"):
+                        nb_outputs.append(nbformat.v4.new_output(
+                            output_type="stream", name="stdout",
+                            text=d["text"] + "\n"))
+                code_cell.outputs = nb_outputs
+            cells.append(code_cell)
 
     # ── Synthèse finale ───────────────────────────────────────────────────────
     if summary:
@@ -339,9 +545,6 @@ def _generate_agent_notebook(steps: list, summary: str = "",
 # ─────────────────────────────────────────────────────────────────────────────
 _ROOT = Path(__file__).parent.resolve()
 
-WORKFLOWS_DIR = (_ROOT / "workflows")
-WORKFLOWS_DIR.mkdir(exist_ok=True)
-
 UPLOADS_DIR = (_ROOT / Path(config.UPLOADS_DIR).name)
 UPLOADS_DIR.mkdir(exist_ok=True)
 
@@ -351,253 +554,14 @@ PALETTE = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cytoscape stylesheet
-# ─────────────────────────────────────────────────────────────────────────────
-CYTO_STYLESHEET = [
-    {
-        "selector": "node",
-        "style": {
-            "content": "data(label)",
-            "background-color": "data(color)",
-            "color": "#fff",
-            "text-valign": "center",
-            "text-halign": "center",
-            "font-size": "12px",
-            "font-weight": "bold",
-            "width": "160px",
-            "height": "60px",
-            "shape": "round-rectangle",
-            "border-width": 2,
-            "border-color": "#fff",
-            "text-wrap": "wrap",
-            "text-max-width": "140px",
-        },
-    },
-    {
-        "selector": "node:selected",
-        "style": {"border-width": 3, "border-color": "#FFD600"},
-    },
-    {"selector": ".running", "style": {"border-color": "#FFD600", "border-width": 4}},
-    {"selector": ".done",    "style": {"border-color": "#4CAF50", "border-width": 3}},
-    {"selector": ".error",   "style": {"border-color": "#F44336", "border-width": 4}},
-    {"selector": ".skipped", "style": {"opacity": 0.4}},
-    {
-        "selector": "edge",
-        "style": {
-            "curve-style": "bezier",
-            "target-arrow-shape": "triangle",
-            "target-arrow-color": "#90A4AE",
-            "line-color": "#90A4AE",
-            "width": 2,
-            "label": "data(label)",
-            "font-size": "10px",
-            "color": "#455A64",
-            "text-background-color": "#fff",
-            "text-background-opacity": 0.8,
-            "text-background-padding": "3px",
-        },
-    },
-    {
-        "selector": ".conditional-edge",
-        "style": {
-            "line-style": "dashed",
-            "line-color": "#FF9800",
-            "target-arrow-color": "#FF9800",
-        },
-    },
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
 # App Dash
 # ─────────────────────────────────────────────────────────────────────────────
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
-    title="Actuarial Canvas",
+    title="Agent Actuariel",
     suppress_callback_exceptions=True,
 )
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers — onglet Canvas
-# ─────────────────────────────────────────────────────────────────────────────
-def _palette_card(nb_name: str, nb_path: str, color: str) -> html.Div:
-    label = nb_name.replace(".ipynb", "").replace("_", " ")
-    return html.Div(
-        label,
-        id={"type": "palette-item", "index": nb_name},
-        className="palette-item",
-        style={
-            "background": color, "color": "#fff",
-            "padding": "8px 12px", "borderRadius": "6px",
-            "marginBottom": "8px", "cursor": "grab",
-            "fontSize": "12px", "fontWeight": "bold",
-            "border": "2px solid rgba(255,255,255,0.2)",
-            "userSelect": "none",
-        },
-        **{"data-notebook": nb_path, "data-label": label, "data-color": color},
-    )
-
-
-def _build_palette() -> list:
-    nb_dir = Path(config.NOTEBOOKS_DIR)
-    items = []
-    for i, p in enumerate(sorted(nb_dir.glob("*.ipynb"))):
-        color = PALETTE[i % len(PALETTE)]
-        items.append(_palette_card(p.name, str(p), color))
-    if not items:
-        items.append(html.P("Aucun notebook trouvé", style={"color": "#aaa", "fontSize": "12px"}))
-    return items
-
-
-def _sidebar() -> dbc.Col:
-    return dbc.Col(
-        [
-            html.H5("Notebooks", className="text-dark mb-3",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            html.P("Cliquez pour ajouter au canvas",
-                   style={"color": "#777", "fontSize": "11px", "marginBottom": "12px"}),
-            html.Div(_build_palette(), id="palette-container"),
-            html.Hr(style={"borderColor": "#C5BDB0"}),
-            html.H5("Workflow", className="text-dark mb-2",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            dbc.Button("💾 Sauvegarder", id="btn-save", color="secondary", size="sm",
-                       className="w-100 mb-2"),
-            dbc.Button("📂 Charger", id="btn-load-open", color="secondary", size="sm",
-                       className="w-100 mb-2"),
-            dbc.Button("🔄 Réinitialiser", id="btn-reset", color="warning", size="sm",
-                       className="w-100 mb-2", outline=True),
-            html.Hr(style={"borderColor": "#444"}),
-            html.H5("Exécution", className="text-light mb-2",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            dcc.Upload(
-                id="upload-csv",
-                children=html.Div(["📁 Charger CSV", html.Br(),
-                                   html.Small("(glisser-déposer)", style={"color": "#777"})]),
-                style={
-                    "border": "2px dashed #A09890", "borderRadius": "8px",
-                    "padding": "12px", "textAlign": "center",
-                    "color": "#555", "fontSize": "12px",
-                    "cursor": "pointer", "marginBottom": "8px",
-                },
-                multiple=False,
-            ),
-            html.Div(id="csv-filename",
-                     style={"color": "#777", "fontSize": "11px", "marginBottom": "8px"}),
-            dbc.Button("▶ Lancer l'analyse", id="btn-run", color="success", size="sm",
-                       className="w-100 mb-2", disabled=True),
-            html.Div(id="run-status", style={"fontSize": "11px", "color": "#777"}),
-            html.Hr(style={"borderColor": "#C5BDB0"}),
-            html.H5("Rapport Word", className="text-dark mb-2",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            dcc.Upload(
-                id="upload-template",
-                children=html.Div(["📄 Template .docx", html.Br(),
-                                   html.Small("(optionnel)", style={"color": "#777"})]),
-                style={
-                    "border": "2px dashed #A09890", "borderRadius": "8px",
-                    "padding": "10px", "textAlign": "center",
-                    "color": "#555", "fontSize": "12px",
-                    "cursor": "pointer", "marginBottom": "6px",
-                },
-                accept=".docx",
-                multiple=False,
-            ),
-            html.Div(id="template-filename",
-                     style={"color": "#777", "fontSize": "11px", "marginBottom": "6px"}),
-            dbc.Button("📄 Générer rapport Word", id="btn-word", color="info", size="sm",
-                       className="w-100", disabled=True),
-            html.Hr(style={"borderColor": "#C5BDB0"}),
-            html.H5("Qualité", className="text-dark mb-2",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            dbc.Button("🔍 Valider le pipeline", id="btn-validate", color="secondary",
-                       size="sm", className="w-100 mb-1", outline=True),
-            html.Div(id="validate-status",
-                     style={"fontSize": "10px", "color": "#777", "marginTop": "4px"}),
-        ],
-        width=2,
-        style={
-            "background": "#F0EDE3", "padding": "16px",
-            "height": "100%", "overflowY": "auto",
-            "borderRight": "1px solid #C5BDB0",
-        },
-    )
-
-
-def _canvas_panel() -> dbc.Col:
-    wf = default_workflow(config.NOTEBOOKS_DIR)
-    return dbc.Col(
-        [
-            dbc.Row(
-                [
-                    dbc.Col(
-                        html.Div([
-                            dbc.Button("✖ Supprimer nœud", id="btn-delete-node",
-                                       color="danger", size="sm", className="me-2", outline=True),
-                            dbc.Button("🔗 Connecter", id="btn-connect-hint",
-                                       color="info", size="sm", className="me-2", outline=True),
-                            dbc.Badge("Layout:", color="secondary", className="me-1"),
-                            dcc.Dropdown(
-                                id="layout-dropdown",
-                                options=[
-                                    {"label": "Libre", "value": "preset"},
-                                    {"label": "Horizontal (dagre)", "value": "dagre"},
-                                    {"label": "Grille", "value": "grid"},
-                                    {"label": "Cercle", "value": "circle"},
-                                ],
-                                value="preset",
-                                clearable=False,
-                                style={"width": "140px", "display": "inline-block",
-                                       "fontSize": "12px"},
-                            ),
-                        ], style={"display": "flex", "alignItems": "center", "gap": "8px"}),
-                        width=12,
-                    ),
-                ],
-                className="mb-2",
-                style={"padding": "8px 16px", "background": "#E6E2D6", "borderRadius": "6px"},
-            ),
-            cyto.Cytoscape(
-                id="canvas",
-                layout={"name": "preset"},
-                style={"width": "100%", "height": "calc(100vh - 160px)",
-                       "background": "#F5F2E7"},
-                elements=wf.to_cytoscape_elements(),
-                stylesheet=CYTO_STYLESHEET,
-                boxSelectionEnabled=True,
-                autoungrabify=False,
-                userZoomingEnabled=True,
-                userPanningEnabled=True,
-                minZoom=0.3,
-                maxZoom=2.5,
-            ),
-        ],
-        width=7,
-        style={"padding": "12px", "background": "#FBF8F1"},
-    )
-
-
-def _properties_panel() -> dbc.Col:
-    return dbc.Col(
-        [
-            html.H5("Propriétés", className="text-dark mb-3",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            html.Div(id="properties-panel", children=[
-                html.P("Sélectionnez un nœud ou une arête.",
-                       style={"color": "#777", "fontSize": "12px"}),
-            ]),
-            html.Hr(style={"borderColor": "#C5BDB0"}),
-            html.H5("Résultats", className="text-dark mb-2",
-                    style={"fontSize": "14px", "fontWeight": "bold"}),
-            html.Div(id="results-panel", style={"overflowY": "auto", "maxHeight": "60vh"}),
-        ],
-        width=3,
-        style={
-            "background": "#F0EDE3", "padding": "16px",
-            "height": "100%", "overflowY": "auto",
-            "borderLeft": "1px solid #C5BDB0",
-        },
-    )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — onglet Notebooks
@@ -951,145 +915,6 @@ def _rag_tab(h_offset: int = 0) -> html.Div:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers — onglet Analyse Rapport
-# ─────────────────────────────────────────────────────────────────────────────
-def _report_template_tab() -> dbc.Row:
-    """Onglet d'analyse offline d'un rapport de référence."""
-    _card_style = {
-        "background": "#FBF8F1", "border": "1px solid #D8D0C4",
-        "borderRadius": "8px", "padding": "14px", "marginBottom": "10px",
-    }
-    _label_style = {"fontSize": "11px", "color": "#777", "marginBottom": "4px"}
-
-    left_col = dbc.Col(
-        [
-            html.H5("📋 Analyse de rapport",
-                    style={"fontSize": "14px", "fontWeight": "bold",
-                           "color": "#2D2D2D", "marginBottom": "12px"}),
-            # Upload PDF
-            html.Div([
-                html.P("Rapport PDF de référence", style=_label_style),
-                dcc.Upload(
-                    id="upload-report-pdf",
-                    children=html.Div([
-                        "📄 Charger un PDF",
-                        html.Br(),
-                        html.Small("(glisser-déposer)", style={"color": "#888"}),
-                    ]),
-                    multiple=False,
-                    accept=".pdf",
-                    style={
-                        "border": "2px dashed #A09890", "borderRadius": "8px",
-                        "padding": "12px", "textAlign": "center",
-                        "color": "#555", "fontSize": "12px",
-                        "cursor": "pointer", "marginBottom": "6px",
-                    },
-                ),
-                html.Div(id="report-pdf-filename",
-                         style={"color": "#4CAF50", "fontSize": "11px",
-                                "marginBottom": "8px"}),
-            ], style=_card_style),
-            # Bouton analyser
-            dbc.Button(
-                "🔍 Analyser le rapport",
-                id="btn-analyze-report",
-                color="primary", size="sm",
-                className="w-100 mb-2",
-                disabled=True,
-            ),
-            # Statut / progression
-            html.Div(
-                id="template-analysis-status",
-                style={"fontSize": "11px", "color": "#777",
-                       "marginTop": "6px", "minHeight": "40px"},
-            ),
-            html.Hr(style={"borderColor": "#C5BDB0", "marginTop": "16px"}),
-            # Charger un JSON existant
-            html.Div([
-                html.P("Ou charger un template existant (.json)", style=_label_style),
-                dcc.Upload(
-                    id="upload-report-template-json",
-                    children=html.Div([
-                        "📂 Charger JSON",
-                        html.Br(),
-                        html.Small("(template déjà analysé)", style={"color": "#888"}),
-                    ]),
-                    multiple=False,
-                    accept=".json",
-                    style={
-                        "border": "1px dashed #A09890", "borderRadius": "6px",
-                        "padding": "8px", "textAlign": "center",
-                        "color": "#555", "fontSize": "12px",
-                        "cursor": "pointer",
-                    },
-                ),
-            ], style=_card_style),
-        ],
-        width=3,
-        style={
-            "background": "#F0EDE3", "padding": "16px",
-            "height": "calc(100vh - 88px)", "overflowY": "auto",
-            "borderRight": "1px solid #C5BDB0",
-        },
-    )
-
-    right_col = dbc.Col(
-        [
-            dbc.Row([
-                dbc.Col(
-                    html.H5("Structure extraite",
-                            style={"fontSize": "14px", "fontWeight": "bold",
-                                   "color": "#2D2D2D", "marginBottom": "0"}),
-                    width=True, className="align-self-center",
-                ),
-                dbc.Col(
-                    dbc.ButtonGroup([
-                        dbc.Button("💾 Sauvegarder JSON",
-                                   id="btn-download-template",
-                                   color="success", size="sm", outline=True,
-                                   disabled=True),
-                        dbc.Button("📤 Envoyer à l'Agent",
-                                   id="btn-send-template-to-agent",
-                                   color="primary", size="sm",
-                                   disabled=True,
-                                   title="Pré-remplit le system prompt de l'Agent"),
-                    ]),
-                    width="auto",
-                ),
-            ], className="mb-3", align="center"),
-            html.Div(
-                id="template-analysis-result",
-                children=[
-                    html.P(
-                        "Chargez un rapport PDF et cliquez sur 'Analyser' "
-                        "pour extraire la structure du rapport.",
-                        style={"color": "#999", "fontSize": "13px",
-                               "textAlign": "center", "marginTop": "60px"},
-                    )
-                ],
-                style={
-                    "overflowY": "auto",
-                    "height": "calc(100vh - 165px)",
-                    "padding": "4px 8px",
-                },
-            ),
-        ],
-        width=9,
-        style={
-            "background": "#FBF8F1", "padding": "16px",
-            "height": "calc(100vh - 88px)", "overflowY": "hidden",
-        },
-    )
-
-    return dbc.Row(
-        [left_col, right_col],
-        className="g-0",
-        style={"height": "calc(100vh - 88px)"},
-    )
-
-
-
 
 def _notebook_tab(h_offset: int = 0) -> html.Div:
     """Onglet Notebook — Jupyter Notebook intégré dans l'app."""
@@ -1165,273 +990,252 @@ def _notebook_tab(h_offset: int = 0) -> html.Div:
 
 
 def _agent_tab() -> html.Div:
-    """Onglet Agent — layout chat-centric 3 colonnes."""
-    _card_style = {
-        "background": "#FBF8F1", "border": "1px solid #D8D0C4",
-        "borderRadius": "8px", "padding": "10px", "marginBottom": "8px",
-    }
+    """Onglet Agent — interface conversationnelle générique 2 colonnes."""
     _label_style = {"fontSize": "11px", "color": "#777", "marginBottom": "3px"}
 
-    # ── Colonne gauche : Config ───────────────────────────────────────────────
-    left_col = html.Div(
+    # ── Barre supérieure (topbar) ──────────────────────────────────────────
+    topbar = html.Div(
         [
-            html.H5("Agent", style={"fontSize": "13px", "fontWeight": "bold",
-                                    "color": "#2D2D2D", "marginBottom": "8px"}),
-            # Upload CSV
-            html.P("Fichier CSV", style=_label_style),
-            dcc.Upload(
-                id="upload-csv-agent",
-                children=html.Div(["📁 CSV", html.Br(),
-                                   html.Small("(glisser)", style={"color": "#888"})]),
-                style={
-                    "border": "2px dashed #A09890", "borderRadius": "8px",
-                    "padding": "8px", "textAlign": "center",
-                    "color": "#555", "fontSize": "11px",
-                    "cursor": "pointer", "marginBottom": "4px",
-                },
-                multiple=False,
-            ),
-            html.Div(id="csv-filename-agent",
-                     style={"color": "#4CAF50", "fontSize": "10px",
-                            "marginBottom": "6px"}),
-            # Sexe
-            html.P("Sexe", style=_label_style),
-            dcc.Dropdown(
-                id="agent-sexe-select",
-                options=[{"label": "Hommes (H)", "value": "H"},
-                         {"label": "Femmes (F)", "value": "F"}],
-                value="H", clearable=False,
-                style={"fontSize": "11px", "marginBottom": "8px"},
-            ),
-            # Instruction
-            html.P("Instruction", style=_label_style),
-            dcc.Textarea(
-                id="agent-user-message",
-                value="Construis la table de mortalité d'expérience pour le fichier fourni.",
-                style={
-                    "width": "100%", "height": "80px",
-                    "fontSize": "11px", "fontFamily": "inherit",
-                    "background": "#F5F2E7", "color": "#2D2D2D",
-                    "border": "1px solid #C5BDB0", "borderRadius": "4px",
-                    "padding": "6px", "resize": "vertical",
-                    "marginBottom": "8px",
-                },
-            ),
+            # Sélecteur de domaine
+            html.Div([
+                html.Span("Domaine :", style={"fontSize": "11px", "color": "#777",
+                                              "marginRight": "6px", "whiteSpace": "nowrap"}),
+                dcc.Dropdown(
+                    id="agent-domain-select",
+                    options=list_domains(),
+                    value="mortality",
+                    clearable=False,
+                    style={"fontSize": "11px", "minWidth": "200px", "maxWidth": "280px"},
+                ),
+            ], style={"display": "flex", "alignItems": "center", "marginRight": "12px"}),
+            # Sexe (domaine mortalité)
+            html.Div([
+                html.Span("Sexe :", style={"fontSize": "11px", "color": "#777",
+                                           "marginRight": "6px", "whiteSpace": "nowrap"}),
+                dcc.Dropdown(
+                    id="agent-sexe-select",
+                    options=[{"label": "H", "value": "H"}, {"label": "F", "value": "F"}],
+                    value="H", clearable=False,
+                    style={"fontSize": "11px", "width": "70px"},
+                ),
+            ], style={"display": "flex", "alignItems": "center", "marginRight": "12px"}),
+            # Séparateur
+            html.Div(style={"flex": "1"}),
             # Pas-à-pas
-            dbc.Switch(
-                id="toggle-stepbystep",
-                label="Pas-à-pas",
-                value=False,
-                style={"fontSize": "11px", "marginBottom": "6px"},
-            ),
-            # Boutons exécution
-            dbc.Button("🤖 Lancer", id="btn-run-agent",
-                       color="primary", size="sm", className="w-100 mb-1",
-                       disabled=True),
-            dbc.Button("⏹ Arrêter", id="btn-stop-agent",
-                       color="danger", size="sm", className="w-100 mb-1",
-                       outline=True, disabled=True),
-            dbc.Button("🗓 Plan + Agent", id="btn-plan-execute",
-                       color="info", size="sm", className="w-100 mb-1",
-                       outline=True, disabled=True,
+            dbc.Switch(id="toggle-stepbystep", label="Pas-à-pas", value=False,
+                       style={"fontSize": "11px"}, className="me-2"),
+            # Bouton Plan+Agent
+            dbc.Button("🗓 Plan+Agent", id="btn-plan-execute", color="info", size="sm",
+                       outline=True, disabled=True, className="me-1",
                        title="Exécute l'agent en suivant le plan du Canvas"),
-            dbc.Button("⚙ System Prompt", id="btn-show-prompt",
-                       color="secondary", size="sm", className="w-100 mb-1",
-                       outline=True),
+            # System Prompt
+            dbc.Button("⚙ Prompt", id="btn-show-prompt", color="secondary", size="sm",
+                       outline=True, className="me-1"),
+            # Config (template rapport, etc.)
+            dbc.Button("📋 Config", id="btn-toggle-agent-config", color="secondary",
+                       size="sm", outline=True, className="me-1"),
+            # Stop
+            dbc.Button("⏹ Stop", id="btn-stop-agent", color="danger", size="sm",
+                       outline=True, disabled=True, className="me-1"),
+            # Status
             html.Div(id="agent-run-status",
-                     style={"fontSize": "10px", "color": "#777",
-                            "marginTop": "4px", "marginBottom": "6px"}),
-            html.Hr(style={"borderColor": "#C5BDB0", "margin": "6px 0"}),
-            # Template rapport (upload .json)
-            html.P("Template rapport (.json)", style=_label_style),
-            dcc.Upload(
-                id="upload-agent-template",
-                children=html.Div([
-                    "📋 Charger .json",
-                    html.Br(),
-                    html.Small("(pré-remplit le prompt)", style={"color": "#888"}),
-                ]),
-                multiple=False,
-                accept=".json",
-                style={
-                    "border": "1px dashed #A09890", "borderRadius": "6px",
-                    "padding": "6px", "textAlign": "center",
-                    "color": "#555", "fontSize": "10px",
-                    "cursor": "pointer", "marginBottom": "3px",
-                },
-            ),
-            html.Div(id="agent-template-status",
-                     style={"color": "#4CAF50", "fontSize": "10px",
-                            "marginBottom": "3px", "minHeight": "14px"}),
-            dbc.Button("✕ Effacer template", id="btn-clear-agent-template",
-                       color="secondary", size="sm", outline=True,
-                       className="w-100 mb-1",
-                       style={"fontSize": "10px"}, disabled=True),
-            html.Hr(style={"borderColor": "#C5BDB0", "margin": "6px 0"}),
-            # Section Analyse Rapport dépliable
-            dbc.Button(
-                "📋 Analyse rapport ▾",
-                id="btn-toggle-report-section",
-                color="secondary", size="sm", outline=True,
-                className="w-100 mb-1",
-                style={"fontSize": "10px"},
-            ),
-            dbc.Collapse(
-                html.Div([
-                    html.P("Rapport PDF", style={**_label_style, "marginTop": "6px"}),
-                    dcc.Upload(
-                        id="upload-report-pdf",
-                        children=html.Div([
-                            "📄 Charger PDF",
-                            html.Br(),
-                            html.Small("(glisser)", style={"color": "#888"}),
-                        ]),
-                        multiple=False,
-                        accept=".pdf",
-                        style={
-                            "border": "1px dashed #A09890", "borderRadius": "6px",
-                            "padding": "6px", "textAlign": "center",
-                            "color": "#555", "fontSize": "10px",
-                            "cursor": "pointer", "marginBottom": "3px",
-                        },
-                    ),
-                    html.Div(id="report-pdf-filename",
-                             style={"color": "#4CAF50", "fontSize": "10px",
-                                    "marginBottom": "4px"}),
-                    dbc.Button(
-                        "🔍 Analyser",
-                        id="btn-analyze-report",
-                        color="primary", size="sm",
-                        className="w-100 mb-1",
-                        disabled=True,
-                    ),
-                    html.Div(
-                        id="template-analysis-status",
-                        style={"fontSize": "10px", "color": "#777",
-                               "marginBottom": "4px", "minHeight": "30px"},
-                    ),
-                    html.P("Ou charger JSON existant", style=_label_style),
-                    dcc.Upload(
-                        id="upload-report-template-json",
-                        children=html.Div([
-                            "📂 JSON",
-                            html.Br(),
-                            html.Small("(template analysé)", style={"color": "#888"}),
-                        ]),
-                        multiple=False,
-                        accept=".json",
-                        style={
-                            "border": "1px dashed #A09890", "borderRadius": "6px",
-                            "padding": "6px", "textAlign": "center",
-                            "color": "#555", "fontSize": "10px",
-                            "cursor": "pointer", "marginBottom": "3px",
-                        },
-                    ),
-                    dbc.ButtonGroup([
-                        dbc.Button(
-                            "📤 → Agent",
-                            id="btn-send-template-to-agent",
-                            color="success", size="sm",
-                            disabled=True,
-                        ),
-                        dbc.Button(
-                            "💾 JSON",
-                            id="btn-download-template",
-                            color="secondary", size="sm", outline=True,
-                            disabled=True,
-                        ),
-                    ], className="w-100 mb-1"),
-                    html.Div(
-                        id="template-analysis-result",
-                        style={
-                            "maxHeight": "200px", "overflowY": "auto",
-                            "fontSize": "10px", "background": "#F5F2E7",
-                            "border": "1px solid #D8D0C4", "borderRadius": "4px",
-                            "padding": "6px", "marginTop": "4px",
-                        },
-                    ),
-                ]),
-                id="collapse-report-section",
-                is_open=False,
-            ),
+                     style={"fontSize": "11px", "color": "#777",
+                            "whiteSpace": "nowrap", "marginRight": "8px"}),
+            # Toggle notebook panel
+            dbc.Button("◧ Notebook", id="btn-collapse-notebook", color="secondary",
+                       size="sm", outline=True),
         ],
-        id="agent-config-col",
+        id="chat-topbar",
         style={
-            "background": "#F0EDE3", "padding": "12px",
-            "height": "calc(100vh - 88px)", "overflowY": "auto",
-            "borderRight": "1px solid #C5BDB0",
-            "width": "16.666%",
-            "minWidth": "160px",
+            "display": "flex", "alignItems": "center", "flexWrap": "wrap",
+            "gap": "4px", "padding": "6px 10px",
+            "background": "#F0EDE3", "borderBottom": "1px solid #C5BDB0",
             "flexShrink": "0",
         },
     )
 
-    # ── Colonne centrale : Conversation ─────────────────────────────────────
-    center_col = html.Div(
-        [
-            html.H5("Résultats Agent",
-                    style={"fontSize": "13px", "fontWeight": "bold",
-                           "color": "#2D2D2D", "marginBottom": "6px",
-                           "paddingTop": "6px", "paddingLeft": "8px"}),
-            html.Div(
-                id="agent-results-panel",
-                children=[
-                    html.P(
-                        "Configurez et lancez l'agent.",
-                        style={"color": "#888", "fontSize": "12px",
-                               "textAlign": "center", "marginTop": "60px"},
-                    )
-                ],
-                style={
-                    "overflowY": "auto",
-                    "height": "calc(100vh - 145px)",
-                    "padding": "0 8px 8px 8px",
-                },
-            ),
-        ],
-        id="agent-conv-col",
-        style={
-            "background": "#FBF8F1", "padding": "0",
-            "borderRight": "1px solid #C5BDB0",
-            "flex": "1",
-            "minWidth": "300px",
-            "overflow": "hidden",
-            "height": "calc(100vh - 88px)",
-        },
-    )
-
-    # ── Colonne droite : Outils RAG + Notebook (w=3) ─────────────────────────
-    right_col = html.Div(
-        dbc.Tabs(
+    # ── Panneau config dépliable (template rapport + options avancées) ─────
+    config_panel = dbc.Collapse(
+        html.Div(
             [
-                dbc.Tab(
-                    _rag_tab(h_offset=42),
-                    label="💬 RAG",
-                    tab_id="tools-rag",
-                ),
-                dbc.Tab(
-                    _notebook_tab(h_offset=42),
-                    label="📓 Notebook",
-                    tab_id="tools-notebook",
-                ),
+                html.Hr(style={"borderColor": "#C5BDB0", "margin": "4px 0"}),
+                dbc.Row([
+                    # Template rapport JSON
+                    dbc.Col([
+                        html.P("Template rapport (.json)", style=_label_style),
+                        dcc.Upload(
+                            id="upload-agent-template",
+                            children=html.Div(["📋 Charger .json",
+                                               html.Small(" (pré-remplit le prompt)",
+                                                          style={"color": "#888"})]),
+                            multiple=False, accept=".json",
+                            style={"border": "1px dashed #A09890", "borderRadius": "6px",
+                                   "padding": "5px", "textAlign": "center",
+                                   "color": "#555", "fontSize": "11px",
+                                   "cursor": "pointer"},
+                        ),
+                        html.Div(id="agent-template-status",
+                                 style={"color": "#4CAF50", "fontSize": "10px",
+                                        "minHeight": "14px"}),
+                        dbc.Button("✕ Effacer", id="btn-clear-agent-template",
+                                   color="secondary", size="sm", outline=True,
+                                   style={"fontSize": "10px"}, disabled=True),
+                    ], width=4),
+                    # Analyse rapport PDF
+                    dbc.Col([
+                        html.P("Analyse rapport PDF", style=_label_style),
+                        dcc.Upload(
+                            id="upload-report-pdf",
+                            children=html.Div(["📄 Charger PDF",
+                                               html.Small(" (glisser)", style={"color": "#888"})]),
+                            multiple=False, accept=".pdf",
+                            style={"border": "1px dashed #A09890", "borderRadius": "6px",
+                                   "padding": "5px", "textAlign": "center",
+                                   "color": "#555", "fontSize": "11px",
+                                   "cursor": "pointer"},
+                        ),
+                        html.Div(id="report-pdf-filename",
+                                 style={"color": "#4CAF50", "fontSize": "10px"}),
+                        dbc.Button("🔍 Analyser", id="btn-analyze-report",
+                                   color="primary", size="sm",
+                                   className="me-1", disabled=True),
+                    ], width=4),
+                    # Template JSON / export
+                    dbc.Col([
+                        html.P("Ou JSON analysé", style=_label_style),
+                        dcc.Upload(
+                            id="upload-report-template-json",
+                            children=html.Div(["📂 JSON",
+                                               html.Small(" (template)", style={"color": "#888"})]),
+                            multiple=False, accept=".json",
+                            style={"border": "1px dashed #A09890", "borderRadius": "6px",
+                                   "padding": "5px", "textAlign": "center",
+                                   "color": "#555", "fontSize": "11px",
+                                   "cursor": "pointer"},
+                        ),
+                        dbc.ButtonGroup([
+                            dbc.Button("📤 → Agent", id="btn-send-template-to-agent",
+                                       color="success", size="sm", disabled=True),
+                            dbc.Button("💾 JSON", id="btn-download-template",
+                                       color="secondary", size="sm", outline=True, disabled=True),
+                        ], className="mt-1"),
+                        html.Div(id="template-analysis-status",
+                                 style={"fontSize": "10px", "color": "#777", "minHeight": "20px"}),
+                        html.Div(id="template-analysis-result",
+                                 style={"maxHeight": "100px", "overflowY": "auto",
+                                        "fontSize": "10px", "background": "#F5F2E7",
+                                        "border": "1px solid #D8D0C4", "borderRadius": "4px",
+                                        "padding": "4px"}),
+                    ], width=4),
+                ], className="g-2"),
+                html.Hr(style={"borderColor": "#C5BDB0", "margin": "4px 0"}),
             ],
-            id="tools-sub-tabs",
-            active_tab="tools-rag",
-            style={"background": "#FBF8F1"},
+            style={"padding": "4px 10px", "background": "#F5F2E7"},
         ),
-        id="agent-tools-col",
+        id="collapse-agent-config",
+        is_open=False,
+    )
+
+    # ── Zone de messages unifiée ───────────────────────────────────────────
+    messages_area = html.Div(
+        id="chat-messages-area",
+        children=[
+            html.P(
+                "Joignez un fichier (📎) et décrivez votre analyse, ou posez une question.",
+                style={"color": "#AAA", "fontSize": "13px",
+                       "textAlign": "center", "marginTop": "80px"},
+            )
+        ],
         style={
-            "background": "#FBF8F1",
-            "width": "25%",
-            "minWidth": "200px",
-            "maxWidth": "60%",
-            "flexShrink": "0",
-            "height": "calc(100vh - 88px)",
-            "overflow": "hidden",
+            "flex": "1",
+            "overflowY": "auto",
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": "10px",
+            "padding": "12px 16px",
         },
     )
 
-    # Drag handle entre colonne centre et colonne outils
+    # ── Zone de saisie du chat ─────────────────────────────────────────────
+    input_area = html.Div(
+        [
+            # Chip fichier joint
+            html.Div(id="chat-file-chip",
+                     style={"minHeight": "20px", "marginBottom": "4px"}),
+            # Rangée input
+            dbc.Row(
+                [
+                    # Bouton 📎 intégré dans dcc.Upload pour déclencher le sélecteur de fichier
+                    dbc.Col(
+                        dcc.Upload(
+                            id="upload-chat-file",
+                            children=html.Span(
+                                "📎",
+                                title="Joindre un fichier CSV",
+                                style={"cursor": "pointer", "fontSize": "20px",
+                                       "lineHeight": "56px", "display": "block",
+                                       "padding": "0 4px"},
+                            ),
+                            multiple=False,
+                            style={"display": "inline-block"},
+                        ),
+                        width="auto",
+                    ),
+                    # Textarea
+                    dbc.Col(
+                        dcc.Textarea(
+                            id="chat-text-input",
+                            placeholder="Écrivez votre message… (Entrée pour envoyer, Shift+Entrée pour nouvelle ligne)",
+                            style={
+                                "width": "100%", "height": "56px",
+                                "resize": "none", "borderRadius": "8px",
+                                "border": "1px solid #C5BDB0",
+                                "padding": "8px 12px", "fontSize": "13px",
+                                "fontFamily": "inherit", "background": "#FAFAF5",
+                                "outline": "none",
+                            },
+                        ),
+                        width=True,
+                    ),
+                    # Bouton Envoyer
+                    dbc.Col(
+                        dbc.Button(
+                            "↵",
+                            id="btn-chat-send",
+                            color="primary",
+                            style={"height": "56px", "width": "52px",
+                                   "fontSize": "18px", "borderRadius": "8px"},
+                        ),
+                        width="auto",
+                    ),
+                ],
+                className="g-1 align-items-center",
+            ),
+        ],
+        id="chat-input-area",
+        style={
+            "flexShrink": "0",
+            "padding": "8px 16px 12px 16px",
+            "borderTop": "1px solid #C5BDB0",
+            "background": "#FAFAF5",
+        },
+    )
+
+    # ── Colonne principale chat ────────────────────────────────────────────
+    chat_col = html.Div(
+        [messages_area, input_area],
+        id="agent-chat-col",
+        style={
+            "flex": "1",
+            "display": "flex",
+            "flexDirection": "column",
+            "overflow": "hidden",
+            "minWidth": "300px",
+            "background": "#FBF8F1",
+        },
+    )
+
+    # ── Drag handle ────────────────────────────────────────────────────────
     drag_handle = html.Div(
         id="agent-resize-handle",
         style={
@@ -1439,16 +1243,43 @@ def _agent_tab() -> html.Div:
             "cursor": "col-resize",
             "background": "#C5BDB0",
             "flexShrink": "0",
-            "height": "calc(100vh - 88px)",
+            "height": "100%",
             "transition": "background 0.2s",
         },
     )
 
-    return html.Div(
-        [left_col, center_col, drag_handle, right_col],
+    # ── Panneau Notebook (collapsible) ─────────────────────────────────────
+    notebook_panel = html.Div(
+        _notebook_tab(h_offset=88),
+        id="agent-notebook-panel",
+        style={
+            "width": "30%",
+            "minWidth": "200px",
+            "maxWidth": "55%",
+            "flexShrink": "0",
+            "height": "100%",
+            "overflow": "hidden",
+            "background": "#FBF8F1",
+        },
+    )
+
+    # ── Corps (chat + handle + notebook) ──────────────────────────────────
+    body = html.Div(
+        [chat_col, drag_handle, notebook_panel],
         style={
             "display": "flex",
             "flexDirection": "row",
+            "flex": "1",
+            "overflow": "hidden",
+        },
+    )
+
+    return html.Div(
+        [topbar, config_panel, body],
+        id="agent-tab-root",
+        style={
+            "display": "flex",
+            "flexDirection": "column",
             "height": "calc(100vh - 88px)",
             "background": "#FBF8F1",
             "overflow": "hidden",
@@ -1465,7 +1296,7 @@ app.layout = html.Div(
         dbc.Navbar(
             dbc.Container(
                 [
-                    html.Span("⚙ Actuarial Canvas", className="navbar-brand",
+                    html.Span("Agent Actuariel", className="navbar-brand",
                               style={"fontWeight": "bold", "fontSize": "16px"}),
                     html.Span("Orchestration visuelle de notebooks actuariels",
                               style={"color": "#aaa", "fontSize": "12px"}),
@@ -1479,15 +1310,6 @@ app.layout = html.Div(
         # Corps — onglets
         dbc.Tabs(
             [
-                dbc.Tab(
-                    dbc.Row(
-                        [_sidebar(), _canvas_panel(), _properties_panel()],
-                        className="g-0",
-                        style={"height": "calc(100vh - 88px)"},
-                    ),
-                    label="⚙ Canvas",
-                    tab_id="tab-canvas",
-                ),
                 dbc.Tab(
                     dbc.Row(
                         [_nb_sidebar_col(), _nb_viewer_col()],
@@ -1504,78 +1326,49 @@ app.layout = html.Div(
                 ),
             ],
             id="main-tabs",
-            active_tab="tab-canvas",
+            active_tab="tab-agent",
             style={"background": "#FBF8F1"},
         ),
         # Stores
-        dcc.Store(id="workflow-store", data=default_workflow(config.NOTEBOOKS_DIR).to_dict()),
-        dcc.Store(id="csv-path-store", data=None),
-        dcc.Store(id="execution-results-store", data={}),
-        dcc.Store(id="selected-element-store", data=None),
-        dcc.Store(id="template-path-store", data=None),
         dcc.Store(id="nb-current-path-store", data=None),
         dcc.Store(id="nb-cells-store", data=[]),
         dcc.Store(id="system-prompt-store", data=SYSTEM_PROMPT_TEMPLATE),
         dcc.Store(id="csv-path-agent-store", data=None),
+        dcc.Store(id="column-mapping-store", data=None),
+        dcc.Store(id="mapping-validated-store", data=False),
         dcc.Store(id="rag-history-store", data=[]),
         dcc.Store(id="rag-system-prompt-store", data=RAG_SYSTEM_PROMPT),
         dcc.Store(id="rag-expanded-store", data=False),
+        dcc.Store(id="unified-chat-store", data=[]),
+        dcc.Store(id="domain-store", data="mortality"),
         dcc.Store(id="report-template-store", data=None),
         dcc.Store(id="nb-gen-path-store", data=None),
         dcc.Store(id="resize-init-store", data=0),
-        dcc.Download(id="download-word"),
+        dcc.Store(id="enter-bind-store", data=0),
+        dcc.Store(id="agent-plan-store", data=[]),
+        dcc.Store(id="agent-outputs-store", data={}),
+        dcc.Download(id="download-agent-pdf"),
+        dcc.Download(id="download-agent-trace"),
+        dcc.Download(id="download-agent-notebook"),
         dcc.Download(id="download-template-json"),
         dcc.Interval(id="agent-interval", interval=800, disabled=True, n_intervals=0),
-        # Interval pour rafraîchissement asynchrone
-        dcc.Interval(id="exec-interval", interval=1000, disabled=True, n_intervals=0),
         dcc.Interval(id="template-analysis-interval", interval=1000, disabled=True, n_intervals=0),
-        # Modal connexion
+        # Modal mapping des colonnes (remplace le panneau inline collapse)
         dbc.Modal(
             [
-                dbc.ModalHeader("Ajouter une connexion"),
-                dbc.ModalBody([
-                    dbc.Label("Nœud source"),
-                    dcc.Dropdown(id="edge-source-select", placeholder="Source…"),
-                    html.Br(),
-                    dbc.Label("Nœud cible"),
-                    dcc.Dropdown(id="edge-target-select", placeholder="Cible…"),
-                    html.Br(),
-                    dbc.Label("Condition (optionnelle)", id="condition-help"),
-                    dbc.Input(id="edge-condition-input", placeholder='ex: SMR > 1.2',
-                              style={"fontFamily": "monospace"}),
-                    dbc.FormText("Laissez vide pour une connexion inconditionnelle. "
-                                 "Variables disponibles : SMR, n_vides, non_mono…",
-                                 color="muted"),
-                ]),
+                dbc.ModalHeader(dbc.ModalTitle("⚠ Mapping des colonnes requis")),
+                dbc.ModalBody(html.Div(id="column-mapping-modal-body", children=[])),
                 dbc.ModalFooter([
-                    dbc.Button("Annuler", id="btn-edge-cancel", color="secondary",
-                               className="me-2"),
-                    dbc.Button("Connecter", id="btn-edge-confirm", color="primary"),
+                    dbc.Button("✓ Valider", id="btn-validate-mapping",
+                               color="warning", className="me-2"),
+                    dbc.Button("Ignorer", id="btn-skip-mapping",
+                               color="secondary", outline=True),
                 ]),
             ],
-            id="edge-modal",
+            id="modal-column-mapping",
             is_open=False,
-        ),
-        # Modal propriétés arête
-        dbc.Modal(
-            [
-                dbc.ModalHeader("Modifier la connexion"),
-                dbc.ModalBody([
-                    dbc.Label("Condition"),
-                    dbc.Input(id="edit-condition-input", placeholder="SMR > 1.2",
-                              style={"fontFamily": "monospace"}),
-                    dbc.FormText("Laissez vide pour une arête inconditionnelle."),
-                ]),
-                dbc.ModalFooter([
-                    dbc.Button("Supprimer la connexion", id="btn-delete-edge",
-                               color="danger", className="me-2"),
-                    dbc.Button("Annuler", id="btn-edge-edit-cancel", color="secondary",
-                               className="me-2"),
-                    dbc.Button("Enregistrer", id="btn-edge-edit-save", color="primary"),
-                ]),
-            ],
-            id="edge-edit-modal",
-            is_open=False,
+            size="lg",
+            backdrop="static",
         ),
         # Modal System Prompt
         dbc.Modal(
@@ -1651,240 +1444,6 @@ app.layout = html.Div(
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : ajout de nœud
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("canvas", "elements"),
-    Output("workflow-store", "data"),
-    Output("edge-edit-modal", "is_open", allow_duplicate=True),
-    Input({"type": "palette-item", "index": dash.ALL}, "n_clicks"),
-    Input("btn-delete-node", "n_clicks"),
-    Input("btn-reset", "n_clicks"),
-    Input("btn-edge-confirm", "n_clicks"),
-    Input("btn-delete-edge", "n_clicks"),
-    Input("btn-edge-edit-save", "n_clicks"),
-    Input("layout-dropdown", "value"),
-    State("canvas", "elements"),
-    State("canvas", "selectedNodeData"),
-    State("canvas", "selectedEdgeData"),
-    State("workflow-store", "data"),
-    State({"type": "palette-item", "index": dash.ALL}, "id"),
-    State({"type": "palette-item", "index": dash.ALL}, "children"),
-    State({"type": "palette-item", "index": dash.ALL}, "style"),
-    State("edge-source-select", "value"),
-    State("edge-target-select", "value"),
-    State("edge-condition-input", "value"),
-    State("selected-element-store", "data"),
-    State("edit-condition-input", "value"),
-    prevent_initial_call=True,
-)
-def update_canvas(
-    palette_clicks, del_clicks, reset_clicks, edge_confirm, del_edge, edge_edit_save,
-    layout_val,
-    current_elements, selected_nodes, selected_edges, wf_data,
-    palette_ids, palette_labels, palette_styles,
-    edge_src, edge_tgt, edge_cond,
-    selected_el, edit_cond,
-):
-    ctx = callback_context
-    if not ctx.triggered:
-        return current_elements, wf_data, dash.no_update
-
-    # triggered_id est un dict pour les IDs pattern-matched, une str pour les IDs simples
-    triggered_id = ctx.triggered_id
-
-    if triggered_id == "btn-reset":
-        wf = default_workflow(config.NOTEBOOKS_DIR)
-        return wf.to_cytoscape_elements(), wf.to_dict(), dash.no_update
-
-    if isinstance(triggered_id, dict) and triggered_id.get("type") == "palette-item":
-        triggered_index = triggered_id["index"]
-
-        nb_path_found, label_found, color_found = None, triggered_index, PALETTE[0]
-        for i, pid in enumerate(palette_ids):
-            if pid["index"] == triggered_index:
-                nb_path_found = Path(config.NOTEBOOKS_DIR) / triggered_index
-                label_found = palette_labels[i] if palette_labels[i] else triggered_index
-                color_found = (palette_styles[i].get("background", PALETTE[0])
-                               if palette_styles[i] else PALETTE[0])
-                break
-
-        if not nb_path_found:
-            return current_elements, wf_data, dash.no_update
-
-        n_nodes = sum(1 for el in current_elements if "source" not in el.get("data", {}))
-        x = 100 + (n_nodes % 5) * 200
-        y = 100 + (n_nodes // 5) * 150
-        new_id = f"nb_{uuid.uuid4().hex[:6]}"
-        new_el = {
-            "data": {
-                "id": new_id, "label": label_found, "description": "",
-                "notebook_path": str(nb_path_found), "color": color_found,
-            },
-            "position": {"x": x, "y": y},
-            "classes": "notebook-node",
-        }
-        wf = Workflow.from_cytoscape_elements(current_elements)
-        wf.nodes.append(WorkflowNode(
-            id=new_id, notebook_path=str(nb_path_found),
-            label=label_found, color=color_found, x=x, y=y,
-        ))
-        return current_elements + [new_el], wf.to_dict(), dash.no_update
-
-    if triggered_id == "btn-delete-node" and selected_nodes:
-        ids_to_del = {n["id"] for n in selected_nodes}
-        new_els = [
-            el for el in current_elements
-            if el["data"].get("id") not in ids_to_del
-            and el["data"].get("source") not in ids_to_del
-            and el["data"].get("target") not in ids_to_del
-        ]
-        wf = Workflow.from_cytoscape_elements(new_els)
-        return new_els, wf.to_dict(), dash.no_update
-
-    if triggered_id == "btn-edge-confirm" and edge_src and edge_tgt:
-        edge_id = f"e{edge_src}-{edge_tgt}-{uuid.uuid4().hex[:4]}"
-        cond = edge_cond or ""
-        new_edge = {
-            "data": {
-                "id": edge_id, "source": edge_src, "target": edge_tgt,
-                "condition": cond, "label": cond,
-            },
-            "classes": "conditional-edge" if cond else "default-edge",
-        }
-        wf = Workflow.from_cytoscape_elements(current_elements + [new_edge])
-        return current_elements + [new_edge], wf.to_dict(), dash.no_update
-
-    if triggered_id == "btn-delete-edge" and selected_el and selected_el.get("type") == "edge":
-        edge_id = selected_el["id"]
-        new_els = [el for el in current_elements if el["data"].get("id") != edge_id]
-        wf = Workflow.from_cytoscape_elements(new_els)
-        return new_els, wf.to_dict(), False
-
-    if triggered_id == "btn-edge-edit-save" and selected_el and selected_el.get("type") == "edge":
-        edge_id = selected_el["id"]
-        cond = edit_cond or ""
-        new_els = []
-        for el in current_elements:
-            if el["data"].get("id") == edge_id:
-                el = dict(el)
-                el["data"] = dict(el["data"])
-                el["data"]["condition"] = cond
-                el["data"]["label"] = cond
-                el["classes"] = "conditional-edge" if cond else "default-edge"
-            new_els.append(el)
-        wf = Workflow.from_cytoscape_elements(new_els)
-        return new_els, wf.to_dict(), False
-
-    return current_elements, wf_data, dash.no_update
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : propriétés
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("properties-panel", "children"),
-    Output("selected-element-store", "data"),
-    Output("edge-edit-modal", "is_open"),
-    Output("edit-condition-input", "value"),
-    Input("canvas", "selectedNodeData"),
-    Input("canvas", "selectedEdgeData"),
-    State("edge-edit-modal", "is_open"),
-    prevent_initial_call=True,
-)
-def show_properties(node_data, edge_data, modal_open):
-    if edge_data:
-        e = edge_data[-1]
-        cond = e.get("condition", "")
-        panel = [
-            html.P(f"Arête : {e.get('source','?')} → {e.get('target','?')}",
-                   style={"color": "#aaa", "fontSize": "12px"}),
-            dbc.Badge("Condition" if cond else "Inconditionnelle",
-                      color="warning" if cond else "success"),
-            html.P(cond or "Toujours exécutée", className="mt-2",
-                   style={"fontFamily": "monospace", "fontSize": "12px", "color": "#fff"}),
-            dbc.Button("✏ Modifier la condition", id="btn-open-edge-edit",
-                       color="warning", size="sm", outline=True, className="mt-2"),
-        ]
-        return panel, {"type": "edge", "id": e["id"]}, True, cond
-
-    if node_data:
-        n = node_data[-1]
-        path = n.get("notebook_path", "")
-        panel = [
-            html.H6(n.get("label", "?"), style={"color": "#fff", "fontWeight": "bold"}),
-            html.P(Path(path).name if path else "—",
-                   style={"color": "#aaa", "fontSize": "11px", "fontFamily": "monospace"}),
-            dbc.Badge("Notebook", color="primary"),
-        ]
-        return panel, {"type": "node", "id": n["id"]}, False, ""
-
-    return [html.P("Sélectionnez un élément.",
-                   style={"color": "#aaa", "fontSize": "12px"})], None, False, ""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : modals connexion
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("edge-modal", "is_open"),
-    Output("edge-source-select", "options"),
-    Output("edge-target-select", "options"),
-    Input("btn-connect-hint", "n_clicks"),
-    Input("btn-edge-cancel", "n_clicks"),
-    Input("btn-edge-confirm", "n_clicks"),
-    State("canvas", "elements"),
-    State("edge-modal", "is_open"),
-    prevent_initial_call=True,
-)
-def toggle_edge_modal(open_clicks, cancel, confirm, elements, is_open):
-    trigger = callback_context.triggered[0]["prop_id"].split(".")[0]
-    if trigger == "btn-connect-hint":
-        nodes = [el for el in (elements or []) if "source" not in el.get("data", {})]
-        opts = [{"label": el["data"].get("label", el["data"]["id"]),
-                 "value": el["data"]["id"]} for el in nodes]
-        return True, opts, opts
-    return False, [], []
-
-
-@app.callback(
-    Output("edge-edit-modal", "is_open", allow_duplicate=True),
-    Input("btn-edge-edit-cancel", "n_clicks"),
-    prevent_initial_call=True,
-)
-def close_edge_edit(_):
-    return False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : upload CSV
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("csv-path-store", "data"),
-    Output("csv-filename", "children"),
-    Output("btn-run", "disabled"),
-    Input("upload-csv", "contents"),
-    State("upload-csv", "filename"),
-    prevent_initial_call=True,
-)
-def handle_upload(contents, filename):
-    if contents is None:
-        return None, "", True
-    content_type, content_string = contents.split(",")
-    decoded = base64.b64decode(content_string)
-    save_path = str((UPLOADS_DIR / filename).resolve())
-    with open(save_path, "wb") as f:
-        f.write(decoded)
-    return save_path, f"✓ {filename}", False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : exécution du workflow
-# ─────────────────────────────────────────────────────────────────────────────
-_execution_results: dict = {}
-_execution_lock = threading.Lock()
-
 # Kernels persistants pour l'éditeur de notebooks
 _nb_kernels: dict = {}
 _nb_kernels_lock = threading.Lock()
@@ -1893,6 +1452,15 @@ _nb_kernels_lock = threading.Lock()
 # Agent results store
 _agent_results: dict = {}
 _agent_lock = threading.Lock()
+
+# Synchronisation pour la Q&A bidirectionnelle Agent ↔ Utilisateur
+_agent_reply_event: threading.Event = threading.Event()
+_agent_reply_value: str = ""
+_AGENT_REPLY_TIMEOUT: int = 300  # secondes avant auto-reprise (5 min)
+
+# RAG async results store
+_rag_state: dict = {"status": "idle", "answer": "", "figures": [], "msg_idx": -1}
+_rag_lock = threading.Lock()
 
 # Template analysis results store
 _tpl_results: dict = {}
@@ -1909,8 +1477,41 @@ def _make_execute_fn(kernel: dict):
     return execute_fn
 
 
+def _make_wait_for_user_fn():
+    """Crée un callable bloquant pour la Q&A bidirectionnelle Agent ↔ Utilisateur.
+
+    Lorsque l'agent appelle ask_user() :
+    1. Le statut passe à "waiting" et la question est stockée dans _agent_results.
+    2. Le thread se bloque sur _agent_reply_event (jusqu'à réponse ou timeout).
+    3. rag_send_message() détecte le statut "waiting", écrit la réponse et lève l'event.
+    4. Le thread reprend avec la réponse et continue le run_agent_loop.
+    """
+    def wait_for_user(question: str, options: list) -> str:
+        global _agent_reply_value
+        with _agent_lock:
+            _agent_results["status"] = "waiting"
+            _agent_results["pending_question"] = question
+            _agent_results["pending_options"] = options
+            _agent_results["thinking"] = ""
+        _agent_reply_event.clear()
+        with _agent_lock:
+            _agent_reply_value = ""
+        # Bloquer jusqu'à réponse ou timeout
+        replied = _agent_reply_event.wait(timeout=_AGENT_REPLY_TIMEOUT)
+        with _agent_lock:
+            reply = _agent_reply_value if replied else "continuer"
+            _agent_results["status"] = "running"
+            _agent_results.pop("pending_question", None)
+            _agent_results.pop("pending_options", None)
+        return reply
+    return wait_for_user
+
+
 def _run_agent_in_thread(csv_path: str, sexe: str, user_message: str,
-                          system_prompt_template: str, max_steps: int = None) -> None:
+                          system_prompt_template: str, max_steps: int = None,
+                          column_mapping: dict = None,
+                          value_mapping: dict = None,
+                          domain_id: str = "mortality") -> None:
     """Exécute run_agent_loop dans un thread background."""
     try:
         from inspector.kernel_snapshot import save_snapshot as _save_snapshot
@@ -1928,6 +1529,8 @@ def _run_agent_in_thread(csv_path: str, sexe: str, user_message: str,
 
     kernel["FILE_PATH"] = csv_path
     kernel["SEXE"] = sexe
+    kernel["COLUMN_MAPPING"] = column_mapping or {}
+    kernel["VALUE_MAPPING"] = value_mapping or {}
     # Paramètres métier lus depuis actuarial_params (déjà injectés par make_kernel,
     # mais réaffectés ici pour garantir la cohérence avec FILE_PATH et SEXE)
     from actuarial_params import PARAMS as _ap
@@ -1948,34 +1551,186 @@ def _run_agent_in_thread(csv_path: str, sexe: str, user_message: str,
         f"- FILE_PATH = '{csv_path}'\n"
         f"- SEXE = '{sexe}'\n"
         f"- DATE_FIN_OBSERVATION = '2023-12-31'\n"
-        f"- LAMBDA_WH = 100\n\n"
+        f"- LAMBDA_WH = 100\n"
+        f"- COLUMN_MAPPING = {json.dumps(column_mapping or {})}\n"
+        f"- VALUE_MAPPING = {json.dumps(value_mapping or {})}\n\n"
         f"Ces variables sont accessibles directement dans le kernel. "
         f"Commence immédiatement l'analyse sans demander de confirmation."
     )
+    if column_mapping or value_mapping:
+        full_message += (
+            "\n\nATTENTION CRITIQUE — ÉTAPE 1 OBLIGATOIRE :\n"
+            "Les colonnes du fichier ne correspondent PAS aux noms standards du pipeline.\n"
+            "Tu DOIS appeler load_data EXACTEMENT ainsi :\n\n"
+            f"  df_raw, summary = data_prep.load_data(\n"
+            f"      FILE_PATH,\n"
+            f"      column_mapping=COLUMN_MAPPING,\n"
+            f"      value_mapping=VALUE_MAPPING\n"
+            f"  )\n\n"
+            "Sans ces paramètres, clean_data échouera avec 'Missing required columns'.\n"
+            "PUIS appelle clean_data EXACTEMENT ainsi :\n\n"
+            f"  df_clean, report = data_prep.clean_data(\n"
+            f"      df_raw,\n"
+            f"      date_fin_observation=DATE_FIN_OBSERVATION\n"
+            f"  )\n"
+        )
 
     _ACTUARY_LOGGER.clear()
     _inspector_session_id = None  # identifiant de session partagé entre toutes les étapes
 
+    # Charger le contexte KB et le prompt selon le domaine
+    from pathlib import Path as _Path
+    from domain_config import get_domain as _get_domain
+    _domain_cfg = _get_domain(domain_id)
+    _kb_dir = _Path(__file__).parent / _domain_cfg["kb_dir"]
+    _kb_context = load_knowledge_base_context(kb_dir=_kb_dir)
+    _sp = system_prompt_template  # utilise le prompt passé par l'appelant (déjà résolu par send_chat_message)
+
+    # ── Phase 1 : Planning ────────────────────────────────────────────────
+    # Construire le contexte data pour le planner
+    data_context = (
+        f"Fichier CSV : {csv_path}\n"
+        f"Sexe : {sexe}\n"
+        f"Domaine : {domain_id}\n"
+    )
+
+    with _agent_lock:
+        _agent_results["status"] = "planning"
+        _agent_results["steps"] = []
+        _agent_results["thinking"] = ""
+
+    try:
+        plan = plan_agent(
+            user_message=full_message,
+            kb_context=_kb_context[:3000],  # tronquer pour le planner
+            data_context=data_context,
+        )
+    except Exception:
+        plan = []
+
+    if not plan:
+        # Fallback : lancer directement sans plan
+        pass
+    else:
+        # ── Phase 2 : Demande de confirmation du plan ─────────────────────
+        with _agent_lock:
+            _agent_results["status"] = "waiting"
+            _agent_results["pending_question"] = "Voici le plan d'analyse proposé. Cochez les étapes à exécuter :"
+            _agent_results["pending_options"] = [
+                f"**{s['titre']}** — {s['description']}" for s in plan
+            ]
+            _agent_results["pending_question_type"] = "checklist"
+            _agent_results["pending_plan"] = plan
+
+        # Attendre la réponse de l'utilisateur
+        _agent_reply_event.wait(timeout=_AGENT_REPLY_TIMEOUT)
+        _agent_reply_event.clear()
+
+        with _agent_lock:
+            reply = _agent_reply_value
+            _agent_results["status"] = "running"
+
+        # ── Boucle de replan si l'utilisateur demande un affinement ─────────
+        _replan_attempts = 0
+        while reply.startswith("REPLAN:") and _replan_attempts < 3:
+            _replan_attempts += 1
+            extra_context = reply[len("REPLAN:"):].strip()
+            with _agent_lock:
+                _agent_results["status"] = "planning"
+                _agent_results["status_detail"] = "🔄 Régénération du plan avec vos compléments…"
+            enriched_data_context = data_context + (
+                f"\n\nCompléments utilisateur : {extra_context}" if extra_context else ""
+            )
+            try:
+                plan = plan_agent(
+                    user_message=full_message,
+                    kb_context=_kb_context[:3000],
+                    data_context=enriched_data_context,
+                )
+            except Exception:
+                pass
+            with _agent_lock:
+                _agent_results["status"] = "waiting"
+                _agent_results["pending_question"] = (
+                    "Plan révisé. Cochez les étapes à exécuter :"
+                )
+                _agent_results["pending_options"] = [
+                    f"**{s['titre']}** — {s['description']}" for s in plan
+                ]
+                _agent_results["pending_question_type"] = "checklist"
+                _agent_results["pending_plan"] = plan
+                _agent_results["status_detail"] = ""
+            _agent_reply_event.wait(timeout=_AGENT_REPLY_TIMEOUT)
+            _agent_reply_event.clear()
+            with _agent_lock:
+                reply = _agent_reply_value
+                _agent_results["status"] = "running"
+
+        # Parser les étapes sélectionnées (reply = "1,2,3[|COMMENT:...]" ou "all")
+        extra_comment = ""
+        if "|COMMENT:" in reply:
+            reply, extra_comment = reply.split("|COMMENT:", 1)
+            extra_comment = extra_comment.strip()
+        if reply and reply.strip().lower() != "all":
+            try:
+                selected_ids = set(int(x.strip()) for x in reply.split(",") if x.strip().isdigit())
+                plan = [s for s in plan if s["id"] in selected_ids]
+            except Exception:
+                pass  # garder le plan complet si parse échoue
+
+        # Injecter le plan dans le system prompt
+        if plan:
+            plan_context = "\n\nPLAN D'ANALYSE APPROUVÉ PAR L'UTILISATEUR :\n" + "\n".join(
+                f"{s['id']}. {s['titre']} ({s.get('methode','')}) : {s['description']}"
+                for s in plan
+            )
+            plan_context += (
+                "\n\nEXÉCUTE CE PLAN DANS L'ORDRE. Ne saute aucune étape approuvée."
+                " Commence directement par l'étape 1 sans re-planifier."
+            )
+            if extra_comment:
+                plan_context += f"\n\nINSTRUCTION ADDITIONNELLE DE L'UTILISATEUR : {extra_comment}"
+                plan_context += "\nAdapte le code custom si nécessaire (ex: table unisexe, recodage de variables)."
+                plan_context += " Marque les steps de code custom avec un commentaire # CUSTOM dans le code."
+            _sp = _sp + plan_context
+
+        # Stocker le plan approuvé dans les résultats
+        with _agent_lock:
+            _agent_results["approved_plan"] = plan
+
     try:
         for event in run_agent_loop(
             user_message=full_message,
-            notebook_context="",
+            notebook_context=_kb_context,
             conversation_history=[],
             execute_fn=execute_fn,
-            system_prompt_template=system_prompt_template,
+            system_prompt_template=_sp,
             max_steps=max_steps,
+            wait_for_user_fn=_make_wait_for_user_fn(),
+            kb_dir=_kb_dir,
         ):
             with _agent_lock:
                 if event["type"] == "step":
                     figs_b64 = [base64.b64encode(f).decode()
                                 for f in event.get("figures", [])]
+                    desc = event.get("description", "")
+                    is_custom = "# CUSTOM" in event.get("code", "")
                     _agent_results["steps"].append({
-                        "description": event.get("description", ""),
+                        "description": desc,
                         "code": event.get("code", ""),
                         "output": event.get("output", ""),
                         "figures": figs_b64,
                         "success": not event.get("output", "").startswith("❌"),
+                        "display_outputs": kernel.pop("_last_display_outputs", []),
+                        "custom": is_custom,
                     })
+                    step_num = len(_agent_results["steps"])
+                    _agent_results["status_detail"] = f"⚙ Étape {step_num} terminée : {desc[:60]}"
+                    _agent_results["thinking"] = ""  # effacer bulle "thinking"
+                elif event["type"] == "thinking":
+                    _msg = event.get("message", "Réflexion…")
+                    _agent_results["status_detail"] = f"💭 {_msg[:80]}"
+                    _agent_results["thinking"] = _msg
                     # Snapshot pour l'inspecteur (best-effort)
                     if _inspector_available:
                         try:
@@ -1993,14 +1748,58 @@ def _run_agent_in_thread(csv_path: str, sexe: str, user_message: str,
                             pass
                 elif event["type"] == "summary":
                     _agent_results["summary"] = event.get("content", "")
-                    _agent_results["status"] = "done"
+                    _agent_results["status"] = "generating_report"
+                    _agent_results["thinking"] = ""
                 elif event["type"] == "error":
                     _agent_results["summary"] = event.get("content", "")
                     _agent_results["status"] = "error"
+                    _agent_results["thinking"] = ""
     except Exception as exc:
         with _agent_lock:
             _agent_results["summary"] = f"Erreur agent : {exc}"
             _agent_results["status"] = "error"
+
+    # ── Phase 4 : Génération des outputs ─────────────────────────────────
+    try:
+        from pathlib import Path as _OutPath
+        from datetime import datetime as _dt
+        _outputs_dir = _OutPath(__file__).parent / "outputs"
+        _outputs_dir.mkdir(exist_ok=True)
+        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+
+        with _agent_lock:
+            _steps = list(_agent_results.get("steps", []))
+            _summary = _agent_results.get("summary", "")
+            _approved_plan = _agent_results.get("approved_plan", [])
+
+        _pdf_path = str(_outputs_dir / f"rapport_{_ts}.pdf")
+        _trace_path = str(_outputs_dir / f"trace_{_ts}.md")
+        _nb_path = str(_outputs_dir / f"notebook_{_ts}.ipynb")
+
+        # Récupérer le prompt rédacteur issu de l'encodeur (peut être None)
+        _tpl = _ACTUARY_STATE.get_template()
+        _writer_prompt = (_tpl.get("agent_system_prompt") or None) if _tpl else None
+
+        generate_narrative_report(
+            _steps, _summary, full_message, domain_id, _pdf_path,
+            study_ref=f"Analyse {_ts}",
+            writer_prompt=_writer_prompt,
+            template_sections=_tpl.get("sections", []) if _tpl else None,
+            methodology=_tpl.get("methodology") if _tpl else None,
+        )
+        generate_reasoning_trace(_steps, _summary, full_message, _approved_plan, _trace_path)
+        generate_final_notebook(_steps, full_message, _nb_path)
+
+        with _agent_lock:
+            _agent_results["pdf_path"] = _pdf_path
+            _agent_results["trace_path"] = _trace_path
+            _agent_results["notebook_path"] = _nb_path
+            _agent_results["status"] = "done"
+    except Exception as _e:
+        import traceback as _tb2
+        print(f"[outputs] Erreur génération : {_e}\n{_tb2.format_exc()}", flush=True)
+        with _agent_lock:
+            _agent_results["status"] = "done"
 
     # Pré-calculer les embeddings RAG en arrière-plan
     def _precompute():
@@ -2036,251 +1835,47 @@ def _run_template_analysis_in_thread(pdf_bytes: bytes, filename: str) -> None:
             _tpl_results["progress"] = f"❌ Erreur : {exc}"
 
 
-def _run_in_thread(workflow_dict: dict, csv_path: str) -> None:
-    wf = Workflow.from_dict(workflow_dict)
+def _run_rag_in_thread(question: str, all_steps: list, exec_ns: dict,
+                       sp_rag: str, rag_history: list, summary: str,
+                       msg_idx: int) -> None:
+    """Exécute le RAG dans un thread background et stocke le résultat."""
+    with _rag_lock:
+        _rag_state["status"] = "running"
+        _rag_state["msg_idx"] = msg_idx
+        _rag_state["answer"] = ""
+        _rag_state["figures"] = []
     try:
-        kernel = make_kernel()
-    except Exception as exc:
-        with _execution_lock:
-            _execution_results["summary"] = f"Erreur initialisation kernel : {exc}"
-            _execution_results["status"] = "error"
-        return
-    kernel["FILE_PATH"] = csv_path
-    kernel["SEXE"] = "H"
-    from actuarial_params import PARAMS as _ap_wf
-    kernel["DATE_FIN_OBSERVATION"] = __import__("pandas").Timestamp(_ap_wf["observation"]["date_fin"])
-    kernel["LAMBDA_WH"] = _ap_wf["smoothing"]["lambda_wh"]
-    kernel["PARAMS"] = _ap_wf
-
-    # Partager le kernel avec le RAG (référence vivante — mis à jour à chaque step)
-    _ACTUARY_STATE.set_kernel(kernel)
-
-    _ACTUARY_LOGGER.clear()
-
-    for event in execute_workflow(wf, kernel):
-        with _execution_lock:
-            if event["type"] == "step_start":
-                _execution_results["steps"][event["node_id"]] = {
-                    "status": "running", "label": event["label"],
-                    "output": "", "figures": [],
-                }
-            elif event["type"] == "step_done":
-                figs_b64 = [base64.b64encode(f).decode()
-                            for f in event.get("figures", [])]
-                _execution_results["steps"][event["node_id"]] = {
-                    "status": "skipped" if event["skipped"] else "done",
-                    "label": event["label"],
-                    "output": event["output"],
-                    "figures": figs_b64,
-                }
-            elif event["type"] == "error":
-                _execution_results["steps"][event["node_id"]] = {
-                    "status": "error",
-                    "label": event.get("node_id", "?"),
-                    "output": event["message"],
-                    "figures": [],
-                }
-                _execution_results["status"] = "error"
-            elif event["type"] == "done":
-                _execution_results["status"] = "done"
-
-    # Pré-calculer les embeddings RAG en arrière-plan dès que l'analyse est terminée
-    def _precompute():
-        with _execution_lock:
-            all_steps = list(_execution_results.get("steps", {}).values())
-        log_chunks = _ACTUARY_LOGGER.to_chunks()
-        log_steps = [{"label": c["label"], "output": c["text"]} for c in log_chunks]
-        precompute_index(all_steps + log_steps, _ACTUARY_STATE)
-
-    threading.Thread(target=_precompute, daemon=True).start()
-
-
-@app.callback(
-    Output("exec-interval", "disabled"),
-    Output("run-status", "children"),
-    Input("btn-run", "n_clicks"),
-    State("workflow-store", "data"),
-    State("csv-path-store", "data"),
-    prevent_initial_call=True,
-)
-def start_execution(n_clicks, wf_data, csv_path):
-    if not csv_path or not wf_data:
-        return True, "Chargez d'abord un fichier CSV."
-    # Réinitialiser les résultats AVANT d'activer l'intervalle (même protection que l'agent).
-    with _execution_lock:
-        _execution_results.clear()
-        _execution_results["status"] = "running"
-        _execution_results["steps"] = {}
-        _execution_results["summary"] = ""
-    t = threading.Thread(target=_run_in_thread, args=(wf_data, csv_path), daemon=True)
-    t.start()
-    return False, "⏳ Exécution en cours…"
-
-
-@app.callback(
-    Output("results-panel", "children"),
-    Output("exec-interval", "disabled", allow_duplicate=True),
-    Output("run-status", "children", allow_duplicate=True),
-    Output("canvas", "elements", allow_duplicate=True),
-    Output("btn-word", "disabled"),
-    Input("exec-interval", "n_intervals"),
-    State("canvas", "elements"),
-    prevent_initial_call=True,
-)
-def refresh_results(n, canvas_elements):
-    with _execution_lock:
-        results = dict(_execution_results)
-
-    if not results:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-    steps = results.get("steps", {})
-    status = results.get("status", "running")
-
-    cards = []
-    for node_id, step in steps.items():
-        st = step["status"]
-        color_map = {"done": "success", "error": "danger",
-                     "skipped": "secondary", "running": "warning"}
-        badge_color = color_map.get(st, "secondary")
-        icon = {"done": "✓", "error": "✗", "skipped": "⊘", "running": "⏳"}.get(st, "?")
-        output_text = step["output"] or ""
-        figs_html = [
-            html.Img(src=f"data:image/png;base64,{fig_b64}",
-                     style={"width": "100%", "borderRadius": "4px", "marginTop": "8px"})
-            for fig_b64 in step.get("figures", [])
-        ]
-        cards.append(
-            dbc.Card(
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong(step["label"],
-                                            style={"fontSize": "12px", "color": "#2D2D2D"}), width=10),
-                        dbc.Col(dbc.Badge(f"{icon} {st}", color=badge_color,
-                                          style={"fontSize": "10px"}), width=2),
-                    ]),
-                    html.Pre(
-                        output_text[:500] + ("…" if len(output_text) > 500 else ""),
-                        style={"fontSize": "10px", "color": "#555", "marginTop": "6px",
-                               "maxHeight": "80px", "overflow": "hidden",
-                               "background": "#EDEAE0", "padding": "4px",
-                               "borderRadius": "3px"}
-                    ) if output_text else None,
-                    *figs_html,
-                ], style={"padding": "8px"}),
-                style={"marginBottom": "8px", "background": "#F5F2E7",
-                       "border": "1px solid #C5BDB0"},
+        has_data = any(k in exec_ns for k in ("df", "df_clean", "df_exposure", "df_qx", "df_smooth"))
+        if has_data:
+            answer, figures = answer_with_tools(
+                question=question,
+                steps=all_steps,
+                exec_ns=exec_ns,
+                state=_ACTUARY_STATE,
+                summary=summary,
+                system_prompt=sp_rag,
+                conversation_history=rag_history,
             )
-        )
-
-    new_elements = []
-    for el in (canvas_elements or []):
-        d = el.get("data", {})
-        if "source" not in d:
-            node_id = d.get("id", "")
-            st = steps.get(node_id, {}).get("status", "")
-            cls = {"running": "running", "done": "done",
-                   "error": "error", "skipped": "skipped"}.get(st, "notebook-node")
-            el = dict(el)
-            el["classes"] = cls
-        new_elements.append(el)
-
-    done = status in ("done", "error")
-    status_msg = ("✓ Terminé" if status == "done"
-                  else "✗ Erreur" if status == "error" else "⏳ En cours…")
-    return cards, done, status_msg, new_elements, not (status == "done")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : sauvegarde / chargement workflow
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("toast-container", "children"),
-    Input("btn-save", "n_clicks"),
-    State("workflow-store", "data"),
-    prevent_initial_call=True,
-)
-def save_workflow(n, wf_data):
-    if not wf_data:
-        return []
-    wf = Workflow.from_dict(wf_data)
-    path = WORKFLOWS_DIR / "workflow.json"
-    wf.save(str(path))
-    return dbc.Toast(
-        f"Workflow sauvegardé : {path}",
-        header="💾 Sauvegarde",
-        is_open=True,
-        duration=3000,
-        style={"minWidth": "280px"},
-        color="success",
-    )
-
-
-@app.callback(
-    Output("canvas", "elements", allow_duplicate=True),
-    Output("workflow-store", "data", allow_duplicate=True),
-    Input("btn-load-open", "n_clicks"),
-    prevent_initial_call=True,
-)
-def load_workflow(n):
-    path = WORKFLOWS_DIR / "workflow.json"
-    if not path.exists():
-        return dash.no_update, dash.no_update
-    wf = Workflow.load(str(path))
-    return wf.to_cytoscape_elements(), wf.to_dict()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Canvas : rapport Word
-# ─────────────────────────────────────────────────────────────────────────────
-@app.callback(
-    Output("template-path-store", "data"),
-    Output("template-filename", "children"),
-    Input("upload-template", "contents"),
-    State("upload-template", "filename"),
-    prevent_initial_call=True,
-)
-def handle_template_upload(contents, filename):
-    if contents is None:
-        return None, ""
-    content_type, content_string = contents.split(",")
-    decoded = base64.b64decode(content_string)
-    save_path = str((UPLOADS_DIR / filename).resolve())
-    with open(save_path, "wb") as f:
-        f.write(decoded)
-    return save_path, f"✓ {filename}"
-
-
-@app.callback(
-    Output("download-word", "data"),
-    Input("btn-word", "n_clicks"),
-    State("template-path-store", "data"),
-    State("csv-path-store", "data"),
-    prevent_initial_call=True,
-)
-def download_word_report(n_clicks, template_path, csv_path):
-    with _execution_lock:
-        steps_data = dict(_execution_results.get("steps", {}))
-        summary = _execution_results.get("summary", "")
-
-    steps = [
-        {
-            "label": s.get("label", ""),
-            "output": s.get("output", ""),
-            "figures": [base64.b64decode(f) for f in s.get("figures", [])],
-            "status": s.get("status", ""),
-        }
-        for s in steps_data.values()
-    ]
-    # Enrichir chaque étape avec le log structuré correspondant
-    log_report = _ACTUARY_LOGGER.to_report()
-    if log_report:
-        steps.append({"label": "Logs détaillés des fonctions", "output": log_report, "figures": []})
-    doc_bytes = generate_word_report(
-        steps=steps, summary=summary,
-        template_path=template_path, file_path=csv_path or "",
-    )
-    return dcc.send_bytes(doc_bytes, "rapport_mortalite.docx")
+            figs_b64 = [base64.b64encode(f).decode() for f in figures]
+        else:
+            answer = answer_with_rag(
+                question=question,
+                steps=all_steps,
+                summary=summary,
+                system_prompt=RAG_SYSTEM_PROMPT,
+                conversation_history=rag_history,
+                state=_ACTUARY_STATE,
+            )
+            figs_b64 = []
+        _ACTUARY_STATE.update_rag_ns(exec_ns)
+    except Exception as exc:
+        import traceback as _tb
+        answer = f"❌ Erreur RAG : {exc}\n\n```\n{_tb.format_exc()}\n```"
+        figs_b64 = []
+    with _rag_lock:
+        _rag_state["status"] = "done"
+        _rag_state["answer"] = answer
+        _rag_state["figures"] = figs_b64
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2468,26 +2063,345 @@ def reset_kernel_cb(n_clicks, nb_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Agent : upload CSV
+# Utilitaire — détection des problèmes de mapping à l'import
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_mapping_issues(path: str) -> dict:
+    """Lit les 200 premières lignes du CSV et détecte les colonnes/valeurs non-standards.
+
+    Retourne un dict vide ({}) si tout est OK, sinon un dict décrivant les problèmes.
+    """
+    import pandas as _pd_det
+    import importlib.util as _ilu_det
+
+    REQUIRED = ["date_naissance", "date_entree", "date_sortie", "cause_sortie", "sexe"]
+    VALID_SEXE = {"H", "F"}
+    VALID_CAUSE = {"deces", "autre"}
+
+    # Chargement du dictionnaire de synonymes depuis 01_data_preparation.py
+    try:
+        _dp_spec = _ilu_det.spec_from_file_location(
+            "_dp_det", str(_ROOT / "notebooks" / "01_data_preparation.py")
+        )
+        _dp_mod = _ilu_det.module_from_spec(_dp_spec)
+        _dp_spec.loader.exec_module(_dp_mod)
+        _SYNONYMS = _dp_mod._COLUMN_SYNONYMS
+    except Exception:
+        _SYNONYMS = {}
+
+    # Lecture d'un échantillon — détection automatique du séparateur et de l'encodage
+    import csv as _csv_det
+    sample = None
+    for _enc in ("utf-8", "latin-1", "cp1252"):
+        for _sep in (None, ";", ",", "\t"):  # None = laisser Sniffer choisir
+            try:
+                if _sep is None:
+                    try:
+                        with open(path, encoding=_enc, errors="replace") as _fh:
+                            _dialect = _csv_det.Sniffer().sniff(_fh.read(4096), delimiters=";,\t|")
+                        _sep = _dialect.delimiter
+                    except Exception:
+                        continue
+                _df_try = _pd_det.read_csv(path, sep=_sep, nrows=200, encoding=_enc, engine="python")
+                if len(_df_try.columns) > 1:
+                    sample = _df_try
+                    break
+            except Exception:
+                continue
+        if sample is not None:
+            break
+    if sample is None:
+        return {}
+
+    # Normalisation des noms de colonnes (même logique que normalize_column_names)
+    normalized: dict[str, str | None] = {}
+    for col in sample.columns:
+        norm = col.strip().lower().replace(" ", "_").replace("-", "_")
+        canonical = _SYNONYMS.get(norm)
+        normalized[col] = canonical  # None si pas de correspondance
+
+    # Canoniques déjà présents directement
+    direct_canonicals = {
+        c.strip().lower().replace(" ", "_").replace("-", "_")
+        for c in sample.columns
+    }
+    available = (
+        {v for v in normalized.values() if v}
+        | {c for c in REQUIRED if c in direct_canonicals}
+    )
+    unmapped_required = [r for r in REQUIRED if r not in available]
+
+    issues: dict = {}
+    needs_mapping = False
+
+    if unmapped_required:
+        issues["unmapped_required"] = unmapped_required
+        issues["all_cols"] = list(sample.columns)
+        needs_mapping = True
+
+    # Suggestions automatiques par similarité de nom pour les colonnes requises non trouvées
+    _NAME_HINTS = {
+        "date_naissance": {"naiss", "birth", "dob", "naissance", "born", "nee", "bdate"},
+        "date_entree":    {"entree", "entry", "effet", "start", "debut", "adhesion",
+                           "souscript", "contrat", "effect", "ouverture"},
+        "date_sortie":    {"sortie", "exit", "fin", "end", "death", "deces", "clot"},
+        "cause_sortie":   {"statut", "status", "cause", "reason", "exit_type", "motif"},
+        "sexe":           {"sexe", "sex", "gender", "genre", "ref"},
+    }
+    suggested: dict[str, str] = {}
+    unmapped_cols = [c for c in sample.columns if normalized.get(c) is None]
+    for req in unmapped_required:
+        hints = _NAME_HINTS.get(req, set())
+        for col in unmapped_cols:
+            col_lower = col.lower()
+            if any(h in col_lower for h in hints):
+                suggested[req] = col
+                break
+    if suggested:
+        issues["suggested_mapping"] = suggested
+
+    # Colonne sexe détectée (via synonymes puis heuristique sur le contenu)
+    sexe_col_raw = next(
+        (orig for orig, can in normalized.items() if can == "sexe"),
+        "sexe" if "sexe" in sample.columns else None,
+    )
+    # Heuristique : si sexe non trouvé via synonymes, scanner les colonnes non reconnues
+    if sexe_col_raw is None and "sexe" in unmapped_required:
+        _SEXE_HINTS = {"1", "2", "m", "f", "h", "homme", "femme", "male", "female", "man", "woman"}
+        for _col in sample.columns:
+            if normalized.get(_col) is not None:
+                continue
+            _vals = {str(v).strip().lower() for v in sample[_col].dropna().unique()}
+            if _vals and _vals <= _SEXE_HINTS and 1 <= len(_vals) <= 3:
+                sexe_col_raw = _col
+                break
+
+    if sexe_col_raw and sexe_col_raw in sample.columns:
+        # Alimenter la suggestion de colonne avec ce qu'on vient de détecter par contenu
+        if "sexe" in unmapped_required:
+            issues.setdefault("suggested_mapping", {}). \
+                setdefault("sexe", sexe_col_raw)
+        unique_sexe = [str(v) for v in sample[sexe_col_raw].dropna().unique()]
+        if not set(unique_sexe).issubset(VALID_SEXE):
+            issues["sexe_col_raw"] = sexe_col_raw
+            issues["sexe_values"] = sorted(unique_sexe)
+            issues["sexe_needs_mapping"] = True
+            needs_mapping = True
+
+    # Colonne cause_sortie détectée (via synonymes puis heuristique sur le contenu)
+    cause_col_raw = next(
+        (orig for orig, can in normalized.items() if can == "cause_sortie"),
+        "cause_sortie" if "cause_sortie" in sample.columns else None,
+    )
+    # Heuristique : si cause_sortie non trouvée via synonymes, scanner les colonnes non reconnues
+    if cause_col_raw is None and "cause_sortie" in unmapped_required:
+        _CAUSE_HINTS = {"actif", "sorti", "decede", "decedes", "deces", "décédé",
+                        "autre", "death", "alive", "active", "lapse", "lapsed",
+                        "sorti", "0", "1", "2", "d", "a"}
+        for _col in sample.columns:
+            if normalized.get(_col) is not None or _col == sexe_col_raw:
+                continue
+            _vals = {str(v).strip().lower() for v in sample[_col].dropna().unique()}
+            if _vals and _vals <= _CAUSE_HINTS and 1 <= len(_vals) <= 6:
+                cause_col_raw = _col
+                break
+
+    if cause_col_raw and cause_col_raw in sample.columns:
+        if "cause_sortie" in unmapped_required:
+            issues.setdefault("suggested_mapping", {}). \
+                setdefault("cause_sortie", cause_col_raw)
+        unique_cause = [str(v) for v in sample[cause_col_raw].dropna().unique()]
+        if not set(unique_cause).issubset(VALID_CAUSE):
+            issues["cause_col_raw"] = cause_col_raw
+            issues["cause_values"] = sorted(unique_cause)
+            issues["cause_needs_mapping"] = True
+            needs_mapping = True
+
+    if not needs_mapping:
+        return {}
+
+    issues.setdefault("all_cols", list(sample.columns))
+    return issues
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Agent : upload fichier via le chat
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
     Output("csv-path-agent-store", "data"),
-    Output("csv-filename-agent", "children"),
-    Output("btn-run-agent", "disabled"),
-    Output("btn-plan-execute", "disabled"),
-    Input("upload-csv-agent", "contents"),
-    State("upload-csv-agent", "filename"),
+    Output("chat-file-chip", "children"),
+    Output("column-mapping-store", "data"),
+    Output("mapping-validated-store", "data"),
+    Output("modal-column-mapping", "is_open"),
+    Input("upload-chat-file", "contents"),
+    State("upload-chat-file", "filename"),
     prevent_initial_call=True,
 )
-def handle_agent_upload(contents, filename):
+def handle_chat_upload(contents, filename):
     if contents is None:
-        return None, "", True, True
+        return None, "", None, False, False
     content_type, content_string = contents.split(",")
     decoded = base64.b64decode(content_string)
     save_path = str((UPLOADS_DIR / filename).resolve())
     with open(save_path, "wb") as f:
         f.write(decoded)
-    return save_path, f"✓ {filename}", False, False
+    issues = _detect_mapping_issues(save_path)
+    chip = dbc.Badge(
+        [filename, " ",
+         dbc.Button("✕", id="btn-clear-chat-file", color="link", size="sm",
+                    style={"padding": "0 4px", "fontSize": "10px", "color": "#fff",
+                           "fontWeight": "bold", "lineHeight": "1"})],
+        color="success",
+        style={"fontSize": "11px", "padding": "4px 8px", "cursor": "default"},
+    )
+    if issues:
+        return save_path, chip, issues, False, True
+    return save_path, chip, {}, True, False
+
+
+@app.callback(
+    Output("csv-path-agent-store", "data", allow_duplicate=True),
+    Output("chat-file-chip", "children", allow_duplicate=True),
+    Output("mapping-validated-store", "data", allow_duplicate=True),
+    Input("btn-clear-chat-file", "n_clicks"),
+    prevent_initial_call=True,
+)
+def clear_chat_file(n_clicks):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update
+    return None, html.Span(), False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Modal de mapping des colonnes
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("column-mapping-modal-body", "children"),
+    Input("column-mapping-store", "data"),
+    prevent_initial_call=True,
+)
+def populate_mapping_modal(mapping_data):
+    if not mapping_data:
+        return []
+    # Store already holds the validated form — don't re-populate
+    if "column_mapping" in mapping_data or "value_mapping" in mapping_data:
+        return []
+
+    children = [
+        html.Div("Certaines colonnes ou valeurs du fichier ne correspondent pas aux noms standards du pipeline.",
+                 style={"marginBottom": "12px", "fontSize": "12px", "color": "#856404"}),
+    ]
+
+    all_cols = mapping_data.get("all_cols", [])
+    col_options = [{"label": c, "value": c} for c in all_cols]
+    suggested = mapping_data.get("suggested_mapping", {})
+
+    # Colonnes requises non trouvées
+    for req_col in mapping_data.get("unmapped_required", []):
+        suggestion = suggested.get(req_col)
+        children.append(html.Div([
+            html.Label(f"Colonne « {req_col} » → quelle colonne du fichier ?",
+                       style={"fontSize": "12px", "marginBottom": "4px"}),
+            dcc.Dropdown(
+                id={"type": "col-map-dd", "index": req_col},
+                options=col_options,
+                value=suggestion,
+                placeholder="Sélectionner…" if not suggestion else None,
+                style={"fontSize": "12px", "marginBottom": "8px",
+                       "border": "1px solid #28a745" if suggestion else None},
+            ),
+            html.Div(f"✓ Suggestion automatique : {suggestion}",
+                     style={"fontSize": "11px", "color": "#28a745",
+                            "marginTop": "-6px", "marginBottom": "8px"}) if suggestion else None,
+        ]))
+
+    # Valeurs sexe non-standard
+    if mapping_data.get("sexe_needs_mapping"):
+        children.append(html.P(
+            f"Colonne « {mapping_data.get('sexe_col_raw', 'sexe')} » — mapper les valeurs de sexe :",
+            style={"fontSize": "12px", "fontWeight": "bold", "marginTop": "8px", "marginBottom": "6px"},
+        ))
+        for val in mapping_data.get("sexe_values", []):
+            children.append(dbc.Row([
+                dbc.Col(html.Label(f"{val!r} →", style={"fontSize": "12px"}), width=3),
+                dbc.Col(dcc.Dropdown(
+                    id={"type": "val-map-dd", "index": f"sexe||{val}"},
+                    options=[{"label": "H (Homme)", "value": "H"},
+                             {"label": "F (Femme)", "value": "F"}],
+                    value="H" if val.upper() in ("M", "H", "HOMME", "MALE", "1") else "F",
+                    clearable=False, style={"fontSize": "12px"},
+                ), width=4),
+            ], className="mb-2 align-items-center"))
+
+    # Valeurs cause_sortie non-standard
+    if mapping_data.get("cause_needs_mapping"):
+        children.append(html.P(
+            f"Colonne « {mapping_data.get('cause_col_raw', 'cause_sortie')} » — mapper les causes de sortie :",
+            style={"fontSize": "12px", "fontWeight": "bold", "marginTop": "8px", "marginBottom": "6px"},
+        ))
+        for val in mapping_data.get("cause_values", []):
+            children.append(dbc.Row([
+                dbc.Col(html.Label(f"{val!r} →", style={"fontSize": "12px"}), width=3),
+                dbc.Col(dcc.Dropdown(
+                    id={"type": "val-map-dd", "index": f"cause_sortie||{val}"},
+                    options=[{"label": "deces", "value": "deces"},
+                             {"label": "autre", "value": "autre"}],
+                    value="deces" if val.lower() in ("deces", "decede", "decedes", "death", "décès", "décédé", "mort", "1", "d") else "autre",
+                    clearable=False, style={"fontSize": "12px"},
+                ), width=4),
+            ], className="mb-2 align-items-center"))
+
+    return children
+
+
+@app.callback(
+    Output("column-mapping-store", "data", allow_duplicate=True),
+    Output("mapping-validated-store", "data", allow_duplicate=True),
+    Output("modal-column-mapping", "is_open", allow_duplicate=True),
+    Input("btn-validate-mapping", "n_clicks"),
+    Input("btn-skip-mapping", "n_clicks"),
+    State({"type": "col-map-dd", "index": dash.ALL}, "value"),
+    State({"type": "col-map-dd", "index": dash.ALL}, "id"),
+    State({"type": "val-map-dd", "index": dash.ALL}, "value"),
+    State({"type": "val-map-dd", "index": dash.ALL}, "id"),
+    State("column-mapping-store", "data"),
+    prevent_initial_call=True,
+)
+def validate_or_skip_mapping(validate_clicks, skip_clicks,
+                              col_values, col_ids, val_values, val_ids, current_data):
+    from dash import callback_context as _ctx
+    triggered = _ctx.triggered[0]["prop_id"] if _ctx.triggered else ""
+
+    if "btn-skip-mapping" in triggered:
+        return {}, True, False
+
+    if "btn-validate-mapping" not in triggered:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    current_data = current_data or {}
+
+    # Assemblage du mapping de colonnes
+    column_mapping: dict = {}
+    for v, id_dict in zip(col_values, col_ids):
+        if v:
+            req_col = id_dict["index"]
+            column_mapping[v] = req_col   # raw_col → canonical
+
+    # Assemblage du mapping de valeurs
+    value_mapping: dict = {}
+    for v, id_dict in zip(val_values, val_ids):
+        if v is None:
+            continue
+        idx = id_dict["index"]          # e.g. "sexe||M" or "cause_sortie||death"
+        parts = idx.split("||", 1)
+        if len(parts) != 2:
+            continue
+        col_canon, raw_val = parts
+        value_mapping.setdefault(col_canon, {})[raw_val] = v
+
+    current_data["column_mapping"] = column_mapping
+    current_data["value_mapping"] = value_mapping
+    return current_data, True, False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2520,161 +2434,693 @@ def reset_system_prompt(n_clicks):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Agent : lancer l'agent
+# Callbacks — Chat : envoi de message (unifié agent + RAG)
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
+    Output("unified-chat-store", "data"),
+    Output("chat-messages-area", "children"),
+    Output("chat-text-input", "value"),
     Output("agent-interval", "disabled"),
     Output("agent-run-status", "children"),
-    Output("btn-run-agent", "disabled", allow_duplicate=True),
+    Output("btn-chat-send", "disabled"),
     Output("btn-stop-agent", "disabled"),
-    Output("btn-plan-execute", "disabled", allow_duplicate=True),
-    Input("btn-run-agent", "n_clicks"),
+    Input("btn-chat-send", "n_clicks"),
+    State("chat-text-input", "value"),
+    State("unified-chat-store", "data"),
     State("csv-path-agent-store", "data"),
-    State("agent-user-message", "value"),
+    State("agent-domain-select", "value"),
     State("agent-sexe-select", "value"),
     State("system-prompt-store", "data"),
     State("toggle-stepbystep", "value"),
+    State("column-mapping-store", "data"),
     prevent_initial_call=True,
 )
-def start_agent(n_clicks, csv_path, user_message, sexe, system_prompt, stepbystep):
-    if not csv_path:
-        return True, "⚠ Chargez d'abord un fichier CSV.", False, True, False
-    sp = system_prompt if system_prompt else SYSTEM_PROMPT_TEMPLATE
-    msg = user_message or "Construis la table de mortalité d'expérience pour le fichier fourni."
-    max_steps = 1 if stepbystep else None
+def send_chat_message(n_clicks, text, history, csv_path,
+                      domain_id, sexe, system_prompt, stepbystep, mapping_data):
+    global _agent_reply_value
+
+    if not text or not text.strip():
+        return (dash.no_update,) * 7
+
+    history = list(history or [])
+    text = text.strip()
+
+    # ── Cas 1 : agent en attente d'une réponse (ask_user) ─────────────────
     with _agent_lock:
-        _agent_results.clear()
-        _agent_results["status"] = "running"
-        _agent_results["steps"] = []
-        _agent_results["summary"] = ""
-        _agent_results["csv_path"] = csv_path
-        _agent_results["sexe"] = sexe or "H"
-    t = threading.Thread(
-        target=_run_agent_in_thread,
-        args=(csv_path, sexe or "H", msg, sp, max_steps),
-        daemon=True,
-    )
-    t.start()
-    return False, "⏳ Agent en cours…", True, False, True
+        agent_status = _agent_results.get("status", "")
+
+    if agent_status == "waiting":
+        with _agent_lock:
+            _agent_reply_value = text
+        _agent_reply_event.set()
+        history.append({"role": "user", "content": text, "figures": [], "options": []})
+        history.append({"role": "assistant_rag",
+                        "content": f"*(Réponse transmise à l'agent : « {text} »)*",
+                        "figures": [], "options": []})
+        return (history, _build_unified_chat_messages(history),
+                "", dash.no_update, dash.no_update, dash.no_update, dash.no_update)
+
+    # ── Cas 2 : pas de CSV → question RAG (async) ─────────────────────────
+    if not csv_path and agent_status not in ("running", "waiting", "generating_report"):
+        history.append({"role": "user", "content": text, "figures": [], "options": []})
+        # Placeholder immédiat — remplacé par refresh_agent_results quand le thread finit
+        history.append({"role": "assistant_rag", "content": "⏳ *Réflexion en cours…*",
+                        "figures": [], "options": []})
+        msg_idx = len(history) - 1
+        all_steps, summary = _get_rag_context()
+        exec_ns = _ACTUARY_STATE.get_exec_namespace()
+        sp_rag = system_prompt or RAG_TOOLS_SYSTEM_PROMPT
+        rag_history_fmt = [
+            {"role": "user" if m["role"] == "user" else "assistant", "content": m["content"]}
+            for m in history[:-1]  # exclure le placeholder
+        ]
+        threading.Thread(
+            target=_run_rag_in_thread,
+            args=(text, all_steps, exec_ns, sp_rag, rag_history_fmt, summary, msg_idx),
+            daemon=True,
+        ).start()
+        return (history, _build_unified_chat_messages(history), "", False,
+                "💬 RAG en cours…", False, True)
+
+    # ── Cas 3 : CSV présent + agent idle → lancer une nouvelle analyse ────
+    if agent_status not in ("running", "waiting", "generating_report"):
+        history.append({"role": "user", "content": text, "figures": [], "options": []})
+        # Charger le prompt selon le domaine
+        domain_id = domain_id or "mortality"
+        sp = _load_domain_prompt(domain_id) or (system_prompt or SYSTEM_PROMPT_TEMPLATE)
+        max_steps = 1 if stepbystep else None
+        col_mapping = (mapping_data or {}).get("column_mapping", {})
+        val_mapping = (mapping_data or {}).get("value_mapping", {})
+
+        # Si un template encodeur est chargé, injecter la liste des éléments requis
+        # dans le message pour que l'agent de calcul sache quoi produire.
+        _tpl = _ACTUARY_STATE.get_template()
+        _enriched_text = text
+        if _tpl:
+            _required = _build_required_elements_note(_tpl)
+            if _required:
+                _enriched_text = text + "\n\n" + _required
+
+        with _agent_lock:
+            _agent_results.clear()
+            _agent_results["status"] = "running"
+            _agent_results["steps"] = []
+            _agent_results["summary"] = ""
+            _agent_results["csv_path"] = csv_path
+            _agent_results["sexe"] = sexe or "H"
+        threading.Thread(
+            target=_run_agent_in_thread,
+            args=(csv_path, sexe or "H", _enriched_text, sp, max_steps, col_mapping, val_mapping),
+            kwargs={"domain_id": domain_id},
+            daemon=True,
+        ).start()
+        return (history, _build_unified_chat_messages(history),
+                "", False, "⏳ Agent en cours…", True, False)
+
+    # Agent déjà en cours → ignorer (l'utilisateur peut attendre ou stop)
+    return (dash.no_update,) * 7
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — Agent : rafraîchissement résultats
+# Callbacks — Agent : rafraîchissement résultats (polling)
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
-    Output("agent-results-panel", "children"),
+    Output("unified-chat-store", "data", allow_duplicate=True),
+    Output("chat-messages-area", "children", allow_duplicate=True),
     Output("agent-interval", "disabled", allow_duplicate=True),
     Output("agent-run-status", "children", allow_duplicate=True),
-    Output("btn-run-agent", "disabled", allow_duplicate=True),
+    Output("btn-chat-send", "disabled", allow_duplicate=True),
     Output("btn-stop-agent", "disabled", allow_duplicate=True),
-    Output("btn-plan-execute", "disabled", allow_duplicate=True),
     Input("agent-interval", "n_intervals"),
+    State("unified-chat-store", "data"),
     prevent_initial_call=True,
 )
-def refresh_agent_results(n):
+def refresh_agent_results(n, history):
+    import time as _time_mod
+
+    # ── Cas RAG async : remplacer le placeholder quand le thread a fini ───────
+    with _rag_lock:
+        rag_status = _rag_state["status"]
+        rag_answer = _rag_state["answer"]
+        rag_figures = list(_rag_state["figures"])
+        rag_msg_idx = _rag_state["msg_idx"]
+
+    if rag_status == "done" and rag_msg_idx >= 0:
+        history = list(history or [])
+        if rag_msg_idx < len(history):
+            history[rag_msg_idx] = {
+                "role": "assistant_rag",
+                "content": rag_answer,
+                "figures": rag_figures,
+                "options": [],
+            }
+        with _rag_lock:
+            _rag_state["status"] = "idle"
+            _rag_state["msg_idx"] = -1
+        with _agent_lock:
+            ag_status = _agent_results.get("status", "")
+        agent_running = ag_status in ("running", "waiting", "generating_report")
+        return (history, _build_unified_chat_messages(history),
+                not agent_running, "" if not agent_running else "⏳ Agent en cours…",
+                agent_running, not agent_running)
+
     with _agent_lock:
         results = dict(_agent_results)
 
     if not results:
-        return (dash.no_update, dash.no_update, dash.no_update,
-                dash.no_update, dash.no_update, dash.no_update)
+        return (dash.no_update,) * 6
 
+    history = list(history or [])
     steps = results.get("steps", [])
     status = results.get("status", "running")
     summary = results.get("summary", "")
 
-    cards = []
+    # Indices déjà présents dans l'historique
+    existing_step_indices = {
+        e.get("step_index")
+        for e in history
+        if e.get("role") == "agent_step" and e.get("step_index") is not None
+    }
+    new_entries = []
+
+    # Nouveaux steps
     for i, step in enumerate(steps):
-        figs_html = [
-            html.Img(
-                src=f"data:image/png;base64,{fig_b64}",
-                style={"width": "100%", "borderRadius": "4px", "marginTop": "8px"},
-            )
-            for fig_b64 in step.get("figures", [])
-        ]
-        code = step.get("code", "")
-        output = step.get("output", "")
-        success = "❌" not in output
-        step_id = f"step-code-{i}"
-        cards.append(
-            dbc.Card(
-                dbc.CardBody([
-                    html.P(f"Étape {i+1}  {'✅' if success else '❌'}",
-                           style={"fontSize": "10px", "color": "#999", "marginBottom": "2px"}),
-                    html.Strong(step["description"],
-                                style={"fontSize": "12px", "color": "#2D2D2D"}),
-                    # Sortie (tronquée)
-                    html.Pre(
-                        (output)[:600] + ("…" if len(output) > 600 else ""),
-                        style={
-                            "fontSize": "10px", "color": "#555" if success else "#c0392b",
-                            "marginTop": "6px", "maxHeight": "80px", "overflow": "hidden",
-                            "background": "#EDEAE0", "padding": "4px", "borderRadius": "3px",
-                        },
-                    ) if output else None,
-                    # Bouton + code collapsible
-                    html.Div([
-                        dbc.Button(
-                            "{ } Voir le code",
-                            id={"type": "btn-toggle-code", "index": i},
-                            size="sm", color="link",
-                            style={"fontSize": "10px", "padding": "0", "color": "#888"},
-                        ),
-                        dbc.Collapse(
-                            html.Pre(
-                                code,
-                                style={
-                                    "fontSize": "10px", "background": "#2b2b2b",
-                                    "color": "#f8f8f2", "padding": "8px",
-                                    "borderRadius": "3px", "marginTop": "4px",
-                                    "overflowX": "auto", "maxHeight": "200px",
-                                },
-                            ),
-                            id={"type": "collapse-code", "index": i},
-                            is_open=False,
-                        ),
-                    ]) if code else None,
-                    *figs_html,
-                ], style={"padding": "8px"}),
-                style={"marginBottom": "8px", "background": "#F5F2E7",
-                       "border": f"1px solid {'#C5BDB0' if success else '#F44336'}"},
-            )
-        )
+        if i not in existing_step_indices:
+            output = step.get("output", "")
+            new_entries.append({
+                "role": "agent_step",
+                "step_index": i,
+                "content": step.get("description", ""),
+                "code": step.get("code", ""),
+                "output": output,
+                "figures": step.get("figures", []),
+                "display_outputs": step.get("display_outputs", []),
+                "success": "❌" not in output,
+                "options": [],
+                "timestamp": _time_mod.time(),
+            })
 
-    if summary:
-        cards.append(
-            dbc.Card(
-                dbc.CardBody([
-                    html.H6("Synthèse finale", style={"color": "#2D2D2D", "fontWeight": "bold"}),
-                    dcc.Markdown(summary, style={"fontSize": "12px", "color": "#333"}),
-                ], style={"padding": "12px"}),
-                style={"marginBottom": "8px",
-                       "background": "#E8F5E9" if status == "done" else "#FFEBEE",
-                       "border": f"1px solid {'#4CAF50' if status == 'done' else '#F44336'}"},
-            )
+    # Question de l'agent si status == "waiting"
+    if status == "waiting":
+        pending_q = results.get("pending_question", "")
+        pending_opts = results.get("pending_options", [])
+        pending_q_type = results.get("pending_question_type", "choice")
+        pending_plan = results.get("pending_plan", [])
+        already_injected = any(
+            e.get("role") == "agent_question" and e.get("content") == pending_q
+            for e in history
         )
+        if pending_q and not already_injected:
+            # Utiliser step_index unique basé sur la longueur de l'historique courant
+            _q_step_idx = len(history) + len(new_entries)
+            entry = {
+                "role": "agent_question",
+                "content": pending_q,
+                "options": pending_opts,
+                "question_type": pending_q_type,
+                "figures": [],
+                "timestamp": _time_mod.time(),
+                "step_index": _q_step_idx,
+            }
+            if pending_q_type == "checklist" and pending_plan:
+                entry["plan"] = pending_plan
+            new_entries.append(entry)
 
+    # Résumé final — uniquement quand les chemins sont disponibles (après Phase 4)
+    if summary and status in ("done", "error"):
+        already_has_summary = any(e.get("role") == "agent_summary" for e in history)
+        if not already_has_summary:
+            new_entries.append({
+                "role": "agent_summary",
+                "content": summary,
+                "success": status == "done",
+                "figures": [],
+                "options": [],
+                "downloads": {
+                    "pdf": results.get("pdf_path", ""),
+                    "notebook": results.get("notebook_path", ""),
+                    "trace": results.get("trace_path", ""),
+                },
+                "timestamp": _time_mod.time(),
+            })
+
+    history = history + new_entries
     done = status in ("done", "error")
-    status_msg = ("✓ Terminé" if status == "done"
-                  else "✗ Erreur" if status == "error" else "⏳ En cours…")
+    status_detail = results.get("status_detail", "")
+    status_msg = {
+        "done": "✓ Terminé",
+        "error": "✗ Erreur",
+        "waiting": "⏸ En attente de votre validation…",
+        "planning": "🗺 Génération du plan…",
+        "generating_report": "📝 Rédaction du rapport…",
+    }.get(status, status_detail or "⏳ En cours…")
 
-    return cards, done, status_msg, not done, done, not done
+    thinking_msg = results.get("thinking", "")
+
+    if status == "waiting":
+        # Ne pas re-rendre : l'utilisateur interagit avec la checklist
+        chat_children = (
+            _build_unified_chat_messages(history) if new_entries
+            else dash.no_update
+        )
+    elif new_entries or (thinking_msg and status == "running") or status == "generating_report":
+        bubbles = _build_unified_chat_messages(history)
+        if thinking_msg and status == "running":
+            bubbles = list(bubbles) + [_build_thinking_bubble(thinking_msg)]
+        elif status == "generating_report":
+            bubbles = list(bubbles) + [_build_thinking_bubble("Rédaction narrative du rapport en cours…")]
+        chat_children = bubbles
+    else:
+        chat_children = dash.no_update
+
+    return (history, chat_children, done, status_msg, not done, done)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — construction des bulles de chat
 # ─────────────────────────────────────────────────────────────────────────────
+def _render_display_outputs(display_outputs: list) -> list:
+    """Convertit les display_outputs (DataFrames capturés) en composants Dash."""
+    items = []
+    for do in display_outputs:
+        html_content = do.get("html")
+        text_content = do.get("text", "")
+        if html_content:
+            items.append(html.Div(
+                dash_dangerously_set_inner_html.DangerouslySetInnerHTML(  # type: ignore[attr-defined]
+                    __html=html_content
+                ) if False else  # pragma: no cover
+                # Fallback: rendu HTML via iframe ou dcc.Markdown
+                dcc.Markdown(
+                    f"```\n{text_content[:2000]}\n```" if text_content else "",
+                    style={"fontSize": "11px", "overflowX": "auto"},
+                ),
+                style={"overflowX": "auto", "marginTop": "6px"},
+            ))
+        elif text_content:
+            items.append(html.Pre(
+                text_content[:2000],
+                style={"fontSize": "11px", "background": "#F5F2E7",
+                       "borderRadius": "4px", "padding": "6px",
+                       "overflowX": "auto", "marginTop": "6px"},
+            ))
+    return items
+
+
+def _build_thinking_bubble(message: str):
+    """Bulle animée 'thinking' affichée pendant que l'agent réfléchit."""
+    return html.Div(
+        [
+            html.Div("🤖 Agent", style={"fontSize": "10px", "color": "#999", "marginBottom": "3px"}),
+            html.Div(
+                [
+                    html.Span("💭 ", style={"fontSize": "14px"}),
+                    html.Em(message, style={"color": "#666", "fontSize": "12px"}),
+                    html.Span(" ●●●", style={
+                        "color": "#AAA",
+                        "fontSize": "12px",
+                        "marginLeft": "4px",
+                        "animation": "thinking-dots 1.2s infinite",
+                    }),
+                ],
+                style={
+                    "background": "#F8F8F8",
+                    "border": "1px dashed #CCC",
+                    "borderRadius": "4px 12px 12px 12px",
+                    "padding": "8px 12px",
+                    "maxWidth": "75%",
+                    "alignSelf": "flex-start",
+                    "fontStyle": "italic",
+                },
+            ),
+        ],
+        style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start",
+               "marginBottom": "8px"},
+    )
+
+
+def _build_unified_chat_messages(history: list[dict]) -> list:
+    """Construit les bulles de la conversation unifiée (agent + RAG).
+
+    Gère 6 rôles :
+      user          → bulle verte droite
+      assistant_rag → bulle blanche gauche (réponse RAG)
+      agent_step    → carte beige/rouge avec toggle code + figures + DataFrames
+      agent_question→ bulle jaune + boutons d'options
+      agent_summary → carte verte/rouge finale
+      system        → texte gris centré (info système)
+    """
+    bubbles = []
+    for msg in history:
+        role = msg.get("role", "assistant_rag")
+        content = msg.get("content", "")
+        figures = msg.get("figures", [])
+        options = msg.get("options", [])
+
+        # ── user ──────────────────────────────────────────────────────────────
+        if role == "user":
+            bubbles.append(html.Div(
+                [
+                    html.Div("Vous", style={"fontSize": "10px", "color": "#999",
+                                            "marginBottom": "3px", "textAlign": "right"}),
+                    html.Div(
+                        dcc.Markdown(content, style={"margin": "0", "fontSize": "13px",
+                                                     "lineHeight": "1.6"}),
+                        style={"background": "#D4EDDA", "border": "1px solid #B8DACC",
+                               "borderRadius": "12px 4px 12px 12px",
+                               "padding": "10px 14px", "maxWidth": "85%",
+                               "alignSelf": "flex-end",
+                               "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"},
+                    ),
+                ],
+                style={"display": "flex", "flexDirection": "column", "alignItems": "flex-end"},
+            ))
+
+        # ── agent_question ────────────────────────────────────────────────────
+        elif role == "agent_question":
+            question_type = msg.get("question_type", "choice")
+            step_idx = msg.get("step_index", 0)
+            plan = msg.get("plan", [])
+
+            if question_type == "checklist" and plan:
+                # Rendu checklist pour confirmation du plan
+                checklist_options = []
+                for s in plan:
+                    methode = s.get("methode", "")
+                    formule = s.get("formule", "")
+                    alternatives = s.get("alternatives", "")
+                    is_custom = s.get("custom_code", False)
+                    detail_parts = []
+                    if methode:
+                        detail_parts.append(html.Span(f"⚙ {methode}", style={"color": "#555", "fontSize": "11px"}))
+                    if formule:
+                        detail_parts.append(html.Code(f"  {formule}", style={"fontSize": "11px", "background": "#F0EDE0", "padding": "1px 4px", "borderRadius": "3px"}))
+                    if alternatives:
+                        detail_parts.append(html.Span(f"  (alt: {alternatives})", style={"color": "#888", "fontSize": "10px", "fontStyle": "italic"}))
+                    label = html.Div([
+                        html.Span([
+                            html.Strong(f"{s['id']}. {s['titre']}"),
+                            html.Span(" 🔧 code custom" if is_custom else "", style={"color": "#0066CC", "fontSize": "10px", "marginLeft": "4px"}),
+                            html.Span(" (obligatoire)" if s.get("obligatoire") else "", style={"color": "#B05010", "fontSize": "10px", "marginLeft": "4px"}),
+                        ]),
+                        html.Div(s.get("description", ""), style={"color": "#555", "fontSize": "11px", "marginTop": "2px"}),
+                        html.Div(detail_parts, style={"marginTop": "3px"}) if detail_parts else None,
+                    ])
+                    checklist_options.append({"label": label, "value": s["id"]})
+
+                all_ids = [s["id"] for s in plan]
+
+                checklist_card = html.Div([
+                    dcc.Markdown(content, style={"marginBottom": "8px"}),
+                    dbc.Checklist(
+                        id={"type": "plan-checklist", "index": step_idx},
+                        options=checklist_options,
+                        value=all_ids,
+                        style={"marginBottom": "12px"},
+                    ),
+                    # Zone de texte libre pour compléments / ajustements
+                    html.Div([
+                        html.Label("Compléments ou ajustements (optionnel) :",
+                                   style={"fontSize": "11px", "color": "#666", "marginBottom": "4px"}),
+                        dcc.Textarea(
+                            id={"type": "plan-comment", "index": step_idx},
+                            placeholder="Ex : table unisexe souhaitable, exclure les âges > 80, appliquer une correction de sélection…",
+                            style={"width": "100%", "height": "60px", "fontSize": "12px",
+                                   "resize": "vertical", "borderRadius": "6px",
+                                   "border": "1px solid #D4C89A", "padding": "6px 8px",
+                                   "background": "#FFFDF5", "fontFamily": "inherit"},
+                        ),
+                    ], style={"marginBottom": "10px"}),
+                    html.Div([
+                        dbc.Button(
+                            "▶ Lancer l'analyse",
+                            id={"type": "btn-confirm-plan", "index": step_idx},
+                            color="warning", size="sm", className="me-2",
+                        ),
+                        dbc.Button(
+                            "🔄 Affiner le plan",
+                            id={"type": "btn-replan", "index": step_idx},
+                            color="secondary", size="sm", outline=True,
+                        ),
+                    ]),
+                ], style={
+                    "background": "#FFF8E8",
+                    "border": "1px solid #E8B84B",
+                    "borderRadius": "8px",
+                    "padding": "12px 16px",
+                    "maxWidth": "740px",
+                    "marginBottom": "8px",
+                })
+
+                bubbles.append(html.Div(
+                    [
+                        html.Div("🤖 Agent", style={"fontSize": "10px", "color": "#999",
+                                                    "marginBottom": "3px"}),
+                        checklist_card,
+                    ],
+                    style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start"},
+                ))
+            else:
+                # Rendu standard avec boutons de choix
+                btn_children = [
+                    dbc.Button(opt, id={"type": "agent-option-btn", "index": i},
+                               size="sm", color="warning", outline=True,
+                               className="me-1 mt-1", style={"fontSize": "11px"})
+                    for i, opt in enumerate(options)
+                ]
+                bubbles.append(html.Div(
+                    [
+                        html.Div("🤖 Agent", style={"fontSize": "10px", "color": "#999",
+                                                    "marginBottom": "3px"}),
+                        html.Div(
+                            [
+                                dcc.Markdown(content, style={"margin": "0", "fontSize": "13px",
+                                                             "lineHeight": "1.6"}),
+                                html.Div(btn_children, style={"marginTop": "6px"}) if btn_children else None,
+                            ],
+                            style={"background": "#FFF3CD", "border": "1px solid #F0C040",
+                                   "borderRadius": "4px 12px 12px 12px",
+                                   "padding": "10px 14px", "maxWidth": "90%",
+                                   "alignSelf": "flex-start",
+                                   "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"},
+                        ),
+                    ],
+                    style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start"},
+                ))
+
+        # ── assistant_rag ─────────────────────────────────────────────────────
+        elif role == "assistant_rag":
+            fig_elems = [
+                html.Img(src=f"data:image/png;base64,{f}",
+                         style={"maxWidth": "100%", "borderRadius": "6px",
+                                "marginTop": "8px", "display": "block"})
+                for f in figures
+            ]
+            bubbles.append(html.Div(
+                [
+                    html.Div("RAG", style={"fontSize": "10px", "color": "#999",
+                                           "marginBottom": "3px"}),
+                    html.Div(
+                        [dcc.Markdown(content, style={"margin": "0", "fontSize": "13px",
+                                                      "lineHeight": "1.6"})] + fig_elems,
+                        style={"background": "#FFFFFF", "border": "1px solid #C5BDB0",
+                               "borderRadius": "4px 12px 12px 12px",
+                               "padding": "10px 14px", "maxWidth": "90%",
+                               "alignSelf": "flex-start",
+                               "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"},
+                    ),
+                ],
+                style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start"},
+            ))
+
+        # ── agent_step ────────────────────────────────────────────────────────
+        elif role == "agent_step":
+            step_idx = msg.get("step_index", 0)
+            success = msg.get("success", True)
+            code = msg.get("code", "")
+            output = msg.get("output", "")
+            disp_outputs = msg.get("display_outputs", [])
+            is_custom = msg.get("custom", False)
+            step_figs = [
+                html.Img(src=f"data:image/png;base64,{f}",
+                         style={"maxWidth": "100%", "borderRadius": "6px",
+                                "marginTop": "8px", "display": "block"})
+                for f in figures
+            ]
+            card_bg = "#EEF4FF" if is_custom else ("#F5F2E8" if success else "#FFF0F0")
+            card_children = [
+                # Header
+                html.Div([
+                    html.Span(f"Étape {step_idx + 1}  ",
+                              style={"fontSize": "10px", "color": "#999"}),
+                    html.Span("✅" if success else "❌",
+                              style={"marginRight": "6px"}),
+                    html.Span("🔧 CODE CUSTOM  " if is_custom else "",
+                              style={"fontSize": "10px", "color": "#0066CC",
+                                     "fontWeight": "bold", "marginRight": "4px"}),
+                    html.Strong(content[:120],
+                                style={"fontSize": "12px", "color": "#2D2D2D"}),
+                ], style={"marginBottom": "4px"}),
+            ]
+            # Output preview
+            if output:
+                card_children.append(html.Pre(
+                    output[:800] + ("…" if len(output) > 800 else ""),
+                    style={"fontSize": "10px", "background": "#FAFAFA",
+                           "border": "1px solid #E0E0E0", "borderRadius": "4px",
+                           "padding": "4px 8px", "overflowX": "auto",
+                           "maxHeight": "120px", "overflowY": "auto",
+                           "marginBottom": "4px"},
+                ))
+            # Code toggle
+            if code:
+                card_children.append(html.Div([
+                    dbc.Button(
+                        "{ } afficher le code", size="sm", color="link",
+                        id={"type": "btn-toggle-code", "index": step_idx},
+                        style={"fontSize": "10px", "padding": "0", "marginBottom": "2px"},
+                    ),
+                    dbc.Collapse(
+                        html.Pre(code,
+                                 style={"background": "#2b2b2b", "color": "#f8f8f2",
+                                        "fontSize": "10px", "borderRadius": "4px",
+                                        "padding": "8px", "overflowX": "auto",
+                                        "maxHeight": "300px", "overflowY": "auto"}),
+                        id={"type": "collapse-code", "index": step_idx},
+                        is_open=False,
+                    ),
+                ]))
+            # DataFrames
+            card_children.extend(_render_display_outputs(disp_outputs))
+            # Figures
+            card_children.extend(step_figs)
+
+            bubbles.append(html.Div(
+                [
+                    html.Div("🤖 Agent", style={"fontSize": "10px", "color": "#999",
+                                                "marginBottom": "3px"}),
+                    html.Div(
+                        card_children,
+                        style={
+                            "background": card_bg,
+                            "border": f"1px solid {'#A8C4F9' if is_custom else ('#C5BDB0' if success else '#F9A8A8')}",
+                            "borderRadius": "4px 12px 12px 12px",
+                            "padding": "10px 14px", "maxWidth": "95%",
+                            "alignSelf": "flex-start",
+                            "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+                        },
+                    ),
+                ],
+                style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start"},
+            ))
+
+        # ── agent_summary ─────────────────────────────────────────────────────
+        elif role == "agent_summary":
+            success = msg.get("success", True)
+            downloads = msg.get("downloads", {})
+            summary_children = [
+                dcc.Markdown(content, style={"margin": "0", "fontSize": "13px",
+                                             "lineHeight": "1.6"}),
+            ]
+            # Boutons de téléchargement si des outputs ont été générés
+            if downloads and any(downloads.values()):
+                dl_buttons = []
+                if downloads.get("pdf"):
+                    dl_buttons.append(
+                        dbc.Button("Télécharger le rapport PDF",
+                                   id="btn-dl-pdf", color="success", size="sm",
+                                   className="me-2")
+                    )
+                if downloads.get("notebook"):
+                    dl_buttons.append(
+                        dbc.Button("Télécharger le notebook",
+                                   id="btn-dl-nb", color="primary", size="sm",
+                                   className="me-2")
+                    )
+                if downloads.get("trace"):
+                    dl_buttons.append(
+                        dbc.Button("Télécharger la trace",
+                                   id="btn-dl-trace", color="secondary", size="sm")
+                    )
+                if dl_buttons:
+                    summary_children.append(
+                        html.Div(dl_buttons, style={"marginTop": "8px"})
+                    )
+
+            bubbles.append(html.Div(
+                [
+                    html.Div("Synthèse", style={"fontSize": "10px", "color": "#999",
+                                                "marginBottom": "3px"}),
+                    html.Div(
+                        summary_children,
+                        style={
+                            "background": "#E8F5E9" if success else "#FFEBEE",
+                            "border": f"1px solid {'#A5D6A7' if success else '#FFCDD2'}",
+                            "borderRadius": "4px 12px 12px 12px",
+                            "padding": "14px", "maxWidth": "95%",
+                            "alignSelf": "flex-start",
+                            "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+                        },
+                    ),
+                ],
+                style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start"},
+            ))
+
+        # ── system ────────────────────────────────────────────────────────────
+        elif role == "system":
+            bubbles.append(html.Div(
+                content,
+                style={"textAlign": "center", "color": "#AAA",
+                       "fontSize": "11px", "padding": "4px 0"},
+            ))
+
+    return bubbles
+
+
 def _build_chat_messages(history: list[dict]) -> list:
     bubbles = []
     for msg in history:
-        is_user = msg["role"] == "user"
+        role = msg.get("role", "assistant")
+        is_user = role == "user"
+        is_agent = role == "agent"   # question posée par l'agent via ask_user
         figures = msg.get("figures", [])
+        options = msg.get("options", [])
+
+        # Couleur et alignement selon le rôle
+        if is_user:
+            label, bg, border, radius, align = (
+                "Vous", "#D4EDDA", "#B8DACC", "12px 4px 12px 12px", "flex-end"
+            )
+        elif is_agent:
+            label, bg, border, radius, align = (
+                "🤖 Agent", "#FFF3CD", "#F0C040", "4px 12px 12px 12px", "flex-start"
+            )
+        else:
+            label, bg, border, radius, align = (
+                "RAG", "#FFFFFF", "#C5BDB0", "4px 12px 12px 12px", "flex-start"
+            )
+
         bubble_children = [
             dcc.Markdown(msg["content"],
                          style={"margin": "0", "fontSize": "13px",
                                 "lineHeight": "1.6"}),
         ]
-        # Figures inline pour les réponses RAG
+        # Boutons d'options pour les questions de l'agent
+        if is_agent and options:
+            bubble_children.append(html.Div(
+                [
+                    dbc.Button(
+                        opt,
+                        id={"type": "agent-option-btn", "index": i},
+                        size="sm", color="warning", outline=True,
+                        className="me-1 mt-1",
+                        style={"fontSize": "11px"},
+                    )
+                    for i, opt in enumerate(options)
+                ],
+                style={"marginTop": "6px"},
+            ))
+        # Figures inline
         for fig_b64 in figures:
             bubble_children.append(
                 html.Img(
@@ -2683,10 +3129,11 @@ def _build_chat_messages(history: list[dict]) -> list:
                            "marginTop": "8px", "display": "block"},
                 )
             )
+
         bubble = html.Div(
             [
                 html.Div(
-                    "Vous" if is_user else "RAG",
+                    label,
                     style={"fontSize": "10px", "color": "#999",
                            "marginBottom": "3px",
                            "textAlign": "right" if is_user else "left"},
@@ -2694,19 +3141,18 @@ def _build_chat_messages(history: list[dict]) -> list:
                 html.Div(
                     bubble_children,
                     style={
-                        "background": "#D4EDDA" if is_user else "#FFFFFF",
-                        "border": "1px solid " + ("#B8DACC" if is_user else "#C5BDB0"),
-                        "borderRadius": "12px " + ("4px 12px 12px" if is_user
-                                                    else "12px 12px 4px"),
+                        "background": bg,
+                        "border": f"1px solid {border}",
+                        "borderRadius": radius,
                         "padding": "10px 14px",
                         "maxWidth": "90%",
-                        "alignSelf": "flex-end" if is_user else "flex-start",
+                        "alignSelf": align,
                         "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
                     },
                 ),
             ],
             style={"display": "flex", "flexDirection": "column",
-                   "alignItems": "flex-end" if is_user else "flex-start"},
+                   "alignItems": align},
         )
         bubbles.append(bubble)
     return bubbles
@@ -2714,9 +3160,6 @@ def _build_chat_messages(history: list[dict]) -> list:
 
 def _get_rag_context() -> tuple[list[dict], str]:
     """Construit les steps et le summary depuis les résultats disponibles + logs."""
-    with _execution_lock:
-        wf_steps = list(_execution_results.get("steps", {}).values())
-        summary = _execution_results.get("summary", "")
     with _agent_lock:
         ag_steps = list(_agent_results.get("steps", []))
         ag_summary = _agent_results.get("summary", "")
@@ -2736,7 +3179,7 @@ def _get_rag_context() -> tuple[list[dict], str]:
     tpl_summary = ""
     if tpl:
         tpl_summary = tpl.get("rag_summary", "")
-    return wf_steps + ag_steps + log_steps + pdf_steps + src_steps, summary or ag_summary or tpl_summary
+    return ag_steps + log_steps + pdf_steps + src_steps, ag_summary or tpl_summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2822,106 +3265,224 @@ def handle_rag_pdf_upload(contents_list, filenames):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Callbacks — RAG : chat
+# Callback — Options de l'agent : envoi direct de la réponse
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
-    Output("rag-chat-messages", "children"),
-    Output("rag-history-store", "data"),
-    Output("rag-chat-input", "value"),
-    Input("btn-rag-send", "n_clicks"),
-    Input("rag-chat-input", "n_submit"),
-    State("rag-chat-input", "value"),
-    State("rag-history-store", "data"),
-    State("rag-system-prompt-store", "data"),
+    Output("unified-chat-store", "data", allow_duplicate=True),
+    Output("chat-messages-area", "children", allow_duplicate=True),
+    Input({"type": "agent-option-btn", "index": dash.ALL}, "n_clicks"),
+    State({"type": "agent-option-btn", "index": dash.ALL}, "children"),
+    State("unified-chat-store", "data"),
     prevent_initial_call=True,
 )
-def rag_send_message(n_clicks, n_submit, question, history, system_prompt):
-    if not question or not question.strip():
-        return dash.no_update, dash.no_update, dash.no_update
-
-    history = history or []
-    history.append({"role": "user", "content": question.strip()})
-
+def select_agent_option(n_clicks_list, option_labels, history):
+    global _agent_reply_value
+    if not any(n for n in n_clicks_list if n):
+        return dash.no_update, dash.no_update
+    from dash import callback_context as _ctx
+    if not _ctx.triggered:
+        return dash.no_update, dash.no_update
+    triggered_prop = _ctx.triggered[0]["prop_id"]
+    import json as _json
     try:
-        all_steps, summary = _get_rag_context()
-        exec_ns = _ACTUARY_STATE.get_exec_namespace()
-        answer, figures = answer_with_tools(
-            question=question.strip(),
-            steps=all_steps,
-            exec_ns=exec_ns,
-            state=_ACTUARY_STATE,
-            summary=summary,
-            system_prompt=system_prompt or RAG_TOOLS_SYSTEM_PROMPT,
-            conversation_history=history,
-        )
-        _ACTUARY_STATE.update_rag_ns(exec_ns)
-        # Convertir les bytes en base64 pour le stockage JSON
-        figs_b64 = [base64.b64encode(f).decode() for f in figures]
-    except Exception as exc:
-        import traceback
-        answer = f"❌ Erreur RAG : {exc}\n\n```\n{traceback.format_exc()}\n```"
-        figs_b64 = []
+        triggered_id = _json.loads(triggered_prop.split(".")[0])
+        idx = triggered_id["index"]
+        chosen = option_labels[idx]
+    except Exception:
+        return dash.no_update, dash.no_update
 
-    history.append({"role": "assistant", "content": answer, "figures": figs_b64})
-    return _build_chat_messages(history), history, ""
+    history = list(history or [])
+    with _agent_lock:
+        agent_status = _agent_results.get("status", "")
+    if agent_status == "waiting":
+        with _agent_lock:
+            _agent_reply_value = chosen
+        _agent_reply_event.set()
+        import time as _time_mod
+        history.append({"role": "user", "content": chosen, "figures": [], "options": [],
+                        "timestamp": _time_mod.time()})
+    return history, _build_unified_chat_messages(history)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callback — Confirmation du plan d'analyse (checklist) + Affiner le plan
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("unified-chat-store", "data", allow_duplicate=True),
+    Output("chat-messages-area", "children", allow_duplicate=True),
+    Input({"type": "btn-confirm-plan", "index": dash.ALL}, "n_clicks"),
+    Input({"type": "btn-replan", "index": dash.ALL}, "n_clicks"),
+    State({"type": "plan-checklist", "index": dash.ALL}, "value"),
+    State({"type": "plan-comment", "index": dash.ALL}, "value"),
+    State("unified-chat-store", "data"),
+    prevent_initial_call=True,
+)
+def confirm_plan(confirm_clicks, replan_clicks, selected_ids_list, comments_list, history):
+    global _agent_reply_value
+    import time as _time_plan
+
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update
+
+    triggered_id = ctx.triggered[0]["prop_id"]
+    is_replan = "btn-replan" in triggered_id
+    is_confirm = "btn-confirm-plan" in triggered_id
+    if not is_replan and not is_confirm:
+        return dash.no_update, dash.no_update
+
+    # Index du bouton cliqué
+    clicks_list = replan_clicks if is_replan else confirm_clicks
+    if not any(clicks_list):
+        return dash.no_update, dash.no_update
+    triggered_idx = next((i for i, n in enumerate(clicks_list) if n), 0)
+
+    selected_ids = selected_ids_list[triggered_idx] if triggered_idx < len(selected_ids_list) else []
+    comment = (comments_list[triggered_idx] or "").strip() if triggered_idx < len(comments_list) else ""
+
+    history = list(history or [])
+
+    if is_replan:
+        # Envoyer "REPLAN:<commentaire>" pour que l'agent régénère un plan enrichi
+        reply = f"REPLAN:{comment}" if comment else "REPLAN:"
+        with _agent_lock:
+            _agent_reply_value = reply
+        _agent_reply_event.set()
+        history.append({
+            "role": "user",
+            "content": f"🔄 Demande d'affinement du plan" + (f" : *{comment}*" if comment else ""),
+            "figures": [], "options": [], "timestamp": _time_plan.time(),
+        })
+    else:
+        # Lancer l'analyse — transmettre IDs + commentaire éventuel
+        ids_str = ",".join(str(i) for i in sorted(selected_ids)) if selected_ids else "all"
+        reply = f"{ids_str}|COMMENT:{comment}" if comment else ids_str
+        with _agent_lock:
+            _agent_reply_value = reply
+        _agent_reply_event.set()
+        n_selected = len(selected_ids)
+        msg = f"▶ Plan validé — {n_selected} étape(s) sélectionnée(s)"
+        if comment:
+            msg += f"\n\n*Instruction additionnelle : {comment}*"
+        history.append({
+            "role": "user",
+            "content": msg,
+            "figures": [], "options": [], "timestamp": _time_plan.time(),
+        })
+
+    return history, _build_unified_chat_messages(history)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Téléchargement des outputs générés
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("download-agent-pdf", "data"),
+    Input("btn-dl-pdf", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_pdf(n):
+    with _agent_lock:
+        path = _agent_results.get("pdf_path", "")
+    if not path or not Path(path).exists():
+        return dash.no_update
+    return dcc.send_file(path)
 
 
 @app.callback(
-    Output("rag-chat-messages", "children", allow_duplicate=True),
-    Output("rag-history-store", "data", allow_duplicate=True),
+    Output("download-agent-trace", "data"),
+    Input("btn-dl-trace", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_trace(n):
+    with _agent_lock:
+        path = _agent_results.get("trace_path", "")
+    if not path or not Path(path).exists():
+        return dash.no_update
+    return dcc.send_file(path)
+
+
+@app.callback(
+    Output("download-agent-notebook", "data"),
+    Input("btn-dl-nb", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_notebook(n):
+    with _agent_lock:
+        path = _agent_results.get("notebook_path", "")
+    if not path or not Path(path).exists():
+        return dash.no_update
+    return dcc.send_file(path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callback — Effacer la conversation
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("unified-chat-store", "data", allow_duplicate=True),
+    Output("chat-messages-area", "children", allow_duplicate=True),
     Input("btn-rag-clear", "n_clicks"),
     prevent_initial_call=True,
 )
-def rag_clear_chat(_):
-    _ACTUARY_STATE.reset_rag_ns()   # libère aussi les variables calculées par le RAG
+def clear_unified_chat(_):
+    _ACTUARY_STATE.reset_rag_ns()
     placeholder = html.Div(
-        "Conversation effacée. Posez votre prochaine question.",
-        style={"color": "#999", "fontSize": "13px",
+        "Conversation effacée.",
+        style={"color": "#AAA", "fontSize": "13px",
                "textAlign": "center", "marginTop": "60px"},
     )
-    return [placeholder], []
+    return [], [placeholder]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Callback — Expand/collapse RAG chat
+# Callback — Collapse/expand panneau notebook
 # ─────────────────────────────────────────────────────────────────────────────
-
-_CONFIG_NORMAL = {
-    "background": "#F0EDE3", "padding": "12px",
-    "height": "calc(100vh - 88px)", "overflowY": "auto",
-    "borderRight": "1px solid #C5BDB0",
-    "width": "16.666%", "minWidth": "160px", "flexShrink": "0",
+_NOTEBOOK_PANEL_VISIBLE = {
+    "width": "30%", "minWidth": "200px", "maxWidth": "55%",
+    "flexShrink": "0", "height": "100%", "overflow": "hidden",
+    "background": "#FBF8F1",
 }
-_CONV_NORMAL = {
-    "background": "#FBF8F1", "padding": "0",
-    "borderRight": "1px solid #C5BDB0",
-    "flex": "1", "minWidth": "300px", "overflow": "hidden",
-    "height": "calc(100vh - 88px)",
-}
-_CONFIG_HIDDEN = {
-    "display": "none",
-}
-_CONV_EXPANDED = {
-    "background": "#FBF8F1", "padding": "0",
-    "borderRight": "1px solid #C5BDB0",
-    "flex": "1", "minWidth": "300px", "overflow": "hidden",
-    "height": "calc(100vh - 88px)",
-}
+_NOTEBOOK_PANEL_HIDDEN = {"display": "none"}
 
 
 @app.callback(
-    Output("agent-config-col", "style"),
-    Output("agent-conv-col", "style"),
-    Output("rag-expanded-store", "data"),
-    Input("btn-expand-chat", "n_clicks"),
-    State("rag-expanded-store", "data"),
+    Output("agent-notebook-panel", "style"),
+    Output("btn-collapse-notebook", "children"),
+    Input("btn-collapse-notebook", "n_clicks"),
+    State("agent-notebook-panel", "style"),
     prevent_initial_call=True,
 )
-def toggle_chat_expand(_n, is_expanded):
-    new_expanded = not (is_expanded or False)
-    if new_expanded:
-        return _CONFIG_HIDDEN, _CONV_EXPANDED, True
-    return _CONFIG_NORMAL, _CONV_NORMAL, False
+def toggle_notebook_panel(_n, current_style):
+    if current_style and current_style.get("display") == "none":
+        return _NOTEBOOK_PANEL_VISIBLE, "◧ Notebook"
+    return _NOTEBOOK_PANEL_HIDDEN, "□ Notebook"
+
+
+# Callback — Toggle panneau config agent
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("collapse-agent-config", "is_open"),
+    Input("btn-toggle-agent-config", "n_clicks"),
+    State("collapse-agent-config", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_agent_config(_n, is_open):
+    return not (is_open or False)
+
+
+# Callback — Chargement du domaine → mise à jour du system prompt
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("system-prompt-store", "data", allow_duplicate=True),
+    Output("system-prompt-textarea", "value", allow_duplicate=True),
+    Input("agent-domain-select", "value"),
+    prevent_initial_call=True,
+)
+def load_domain_config(domain_id):
+    sp = _load_domain_prompt(domain_id or "mortality")
+    if sp is None:
+        sp = SYSTEM_PROMPT_TEMPLATE
+    return sp, sp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2949,49 +3510,6 @@ def toggle_prompt_modal(open_clicks, close_clicks, is_open):
 )
 def toggle_report_section(_n, is_open):
     return not is_open
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Callback — Plan-and-Execute : Canvas → Agent
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.callback(
-    Output("agent-user-message", "value"),
-    Output("btn-run-agent", "n_clicks"),
-    Input("btn-plan-execute", "n_clicks"),
-    State("workflow-store", "data"),
-    State("agent-user-message", "value"),
-    prevent_initial_call=True,
-)
-def plan_and_execute(n, wf_data, current_msg):
-    if not wf_data:
-        return dash.no_update, dash.no_update
-    try:
-        wf = Workflow.from_dict(wf_data)
-        order = wf.execution_order()
-        steps_labels = []
-        for node_id in order:
-            node = wf.get_node(node_id)
-            if node:
-                steps_labels.append(node.label)
-        if not steps_labels:
-            return dash.no_update, dash.no_update
-        plan_prefix = (
-            "Voici le plan d'analyse à suivre (dans cet ordre) :\n"
-            + "\n".join(f"  {i+1}. {label}" for i, label in enumerate(steps_labels))
-            + "\n\nRéalise chaque étape dans l'ordre en utilisant les fonctions "
-            "disponibles dans ta bibliothèque actuarielle. "
-            "Tu gardes la main sur la façon de réaliser chaque étape.\n\n"
-        )
-        base_msg = (current_msg or "").strip()
-        if base_msg:
-            new_msg = plan_prefix + base_msg
-        else:
-            new_msg = plan_prefix + "Construis la table de mortalité d'expérience pour le fichier fourni."
-    except Exception:
-        return dash.no_update, dash.no_update
-    # Mettre à jour le message puis déclencher le bouton run
-    return new_msg, 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3226,6 +3744,56 @@ def download_template(n_clicks, template, pdf_filename):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers — template encodeur
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_required_elements_note(template: dict) -> str:
+    """Génère une note listant les éléments requis par le template encodeur.
+
+    Cette note est injectée dans le message utilisateur envoyé à l'agent de calcul
+    pour qu'il sache quels tableaux et graphiques produire avant de conclure.
+    """
+    lines: list[str] = []
+    title = template.get("report_title", "")
+    if title:
+        lines.append(f"RAPPORT CIBLE : {title}")
+        lines.append("─" * 40)
+
+    tables = template.get("tables", [])
+    figures = template.get("figures", [])
+
+    if tables:
+        lines.append("TABLEAUX OBLIGATOIRES à produire avant de conclure :")
+        for t in tables:
+            cols = ", ".join(t.get("columns", [])[:6])
+            lines.append(f"  □ {t.get('id', '?')} — {t.get('name', '?')}"
+                         + (f" (colonnes : {cols})" if cols else ""))
+
+    if figures:
+        lines.append("GRAPHIQUES OBLIGATOIRES à produire avant de conclure :")
+        for f in figures:
+            lines.append(f"  □ {f.get('id', '?')} — {f.get('title', '?')}"
+                         + f" (x={f.get('x_axis', '?')}, y={f.get('y_axis', '?')})")
+
+    meth = template.get("methodology", {})
+    if meth:
+        parts = []
+        if meth.get("smoother"):
+            parts.append(f"lissage {meth['smoother']}"
+                         + (f" λ={meth['lambda']}" if meth.get("lambda") else ""))
+        if meth.get("reference_table"):
+            parts.append(f"référence {meth['reference_table']}")
+        if meth.get("age_min") and meth.get("age_max"):
+            parts.append(f"âges {meth['age_min']}–{meth['age_max']} ans")
+        if parts:
+            lines.append("MÉTHODE IMPOSÉE : " + ", ".join(parts))
+
+    return "\n".join(lines) if lines else ""
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Callbacks — Chargement template dans l'onglet Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3239,6 +3807,12 @@ def download_template(n_clicks, template, pdf_filename):
     prevent_initial_call=True,
 )
 def load_agent_template(contents, filename):
+    """Charge un template.json exporté par l'encodeur.
+
+    Le champ agent_system_prompt est destiné au sous-agent RÉDACTEUR (report_agent),
+    pas à l'agent de calcul. On le stocke via _ACTUARY_STATE sans toucher au
+    system-prompt-store de l'agent de calcul.
+    """
     if not contents:
         return dash.no_update, dash.no_update, dash.no_update, True
     try:
@@ -3246,12 +3820,13 @@ def load_agent_template(contents, filename):
         template = json.loads(base64.b64decode(b64).decode("utf-8"))
     except Exception as exc:
         return dash.no_update, dash.no_update, f"❌ {exc}", True
-    prompt = template.get("agent_system_prompt", "")
-    if not prompt:
-        return dash.no_update, dash.no_update, "⚠ Pas de prompt dans ce template", True
+    writer_prompt = template.get("agent_system_prompt", "")
+    if not writer_prompt:
+        return dash.no_update, dash.no_update, "⚠ Pas de prompt rédacteur dans ce template", True
     _ACTUARY_STATE.set_template(template)
     title = template.get("report_title", filename)
-    return prompt, prompt, f"✓ {title}", False
+    # Le system-prompt-store de l'agent de calcul reste inchangé.
+    return dash.no_update, dash.no_update, f"✓ {title} — prompt rédacteur chargé", False
 
 
 @app.callback(
@@ -3278,14 +3853,21 @@ def clear_agent_template(_):
     prevent_initial_call=True,
 )
 def send_template_to_agent(n_clicks, template):
+    """Envoie un template analysé vers l'onglet Agent.
+
+    Le prompt rédacteur (agent_system_prompt) est stocké dans _ACTUARY_STATE
+    pour être transmis au report_agent en fin d'analyse.
+    L'agent de calcul garde son prompt standard (SYSTEM_PROMPT_TEMPLATE).
+    """
     if not template:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update, True
-    prompt = template.get("agent_system_prompt", "")
-    if not prompt:
-        return dash.no_update, dash.no_update, dash.no_update, "⚠ Pas de prompt", True
+    writer_prompt = template.get("agent_system_prompt", "")
+    if not writer_prompt:
+        return dash.no_update, dash.no_update, dash.no_update, "⚠ Pas de prompt rédacteur", True
     _ACTUARY_STATE.set_template(template)
     title = template.get("report_title", "?")
-    return "tab-agent", prompt, prompt, f"✓ {title}", False
+    # Navigation vers tab-agent ; system-prompt-store inchangé.
+    return "tab-agent", dash.no_update, dash.no_update, f"✓ {title} — prompt rédacteur chargé", False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3651,12 +4233,12 @@ def open_notebook_from_picker(nb_value_input, _n_open, nb_value_state):
 
 @app.callback(
     Output("nb-picker", "options", allow_duplicate=True),
-    Input("tools-sub-tabs", "active_tab"),
+    Input("main-tabs", "active_tab"),
     prevent_initial_call=True,
 )
 def refresh_nb_picker(active_tab):
-    """Rafraîchit la liste des notebooks quand l'onglet Notebook devient actif."""
-    if active_tab != "tools-notebook":
+    """Rafraîchit la liste des notebooks quand l'onglet Agent devient actif."""
+    if active_tab != "tab-agent":
         raise dash.exceptions.PreventUpdate
     return [{"label": d["label"], "value": d["value"]} for d in _list_notebooks()]
 
@@ -3750,7 +4332,7 @@ def toggle_step_code(n, is_open):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Drag-to-resize : poignée entre colonne Résultats Agent et colonne Outils
+# Drag-to-resize + auto-scroll + drag-and-drop sur la textarea
 # ─────────────────────────────────────────────────────────────────────────────
 app.clientside_callback(
     """
@@ -3759,44 +4341,81 @@ app.clientside_callback(
         if (window._agentResizeReady) return window.dash_clientside.no_update;
 
         function _setup() {
-            var handle  = document.getElementById('agent-resize-handle');
-            var convCol = document.getElementById('agent-conv-col');
-            var toolCol = document.getElementById('agent-tools-col');
-            if (!handle || !convCol || !toolCol) {
+            var handle    = document.getElementById('agent-resize-handle');
+            var chatCol   = document.getElementById('agent-chat-col');
+            var notebookPanel = document.getElementById('agent-notebook-panel');
+            if (!handle || !chatCol || !notebookPanel) {
                 setTimeout(_setup, 300);
                 return;
             }
             window._agentResizeReady = true;
 
-            var isResizing = false;
-            var startX     = 0;
-            var startW     = 0;
+            // ── Drag-to-resize ─────────────────────────────────────────────
+            var isResizing = false, startX = 0, startW = 0;
 
             handle.addEventListener('mousedown', function(e) {
                 isResizing = true;
-                startX     = e.clientX;
-                startW     = toolCol.getBoundingClientRect().width;
-                document.body.style.cursor    = 'col-resize';
+                startX = e.clientX;
+                startW = notebookPanel.getBoundingClientRect().width;
+                document.body.style.cursor = 'col-resize';
                 document.body.style.userSelect = 'none';
                 e.preventDefault();
             });
-
             document.addEventListener('mousemove', function(e) {
                 if (!isResizing) return;
-                var delta   = startX - e.clientX;   // vers la gauche = plus large
-                var newW    = Math.max(200, Math.min(800, startW + delta));
-                toolCol.style.width    = newW + 'px';
-                toolCol.style.minWidth = newW + 'px';
+                var delta = startX - e.clientX;
+                var newW = Math.max(200, Math.min(800, startW + delta));
+                notebookPanel.style.width = newW + 'px';
+                notebookPanel.style.minWidth = newW + 'px';
                 handle.style.background = '#A09890';
             });
-
             document.addEventListener('mouseup', function() {
                 if (!isResizing) return;
                 isResizing = false;
-                document.body.style.cursor    = '';
+                document.body.style.cursor = '';
                 document.body.style.userSelect = '';
                 handle.style.background = '#C5BDB0';
             });
+
+            // ── Auto-scroll chat-messages-area ─────────────────────────────
+            var observer = new MutationObserver(function() {
+                var el = document.getElementById('chat-messages-area');
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+            var messagesEl = document.getElementById('chat-messages-area');
+            if (messagesEl) observer.observe(messagesEl, {childList: true, subtree: true});
+
+            // ── Drag-and-drop sur la textarea ──────────────────────────────
+            function _setupDrop() {
+                var ta = document.getElementById('chat-text-input');
+                if (!ta || ta._ddReady) return;
+                ta._ddReady = true;
+                ta.addEventListener('dragover', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    ta.style.borderColor = '#4CAF50';
+                });
+                ta.addEventListener('dragleave', function(e) {
+                    ta.style.borderColor = '#C5BDB0';
+                });
+                ta.addEventListener('drop', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    ta.style.borderColor = '#C5BDB0';
+                    var files = e.dataTransfer.files;
+                    if (!files.length) return;
+                    var uploadInput = document.querySelector('#upload-chat-file input[type=file]');
+                    if (uploadInput) {
+                        try {
+                            var dt = new DataTransfer();
+                            dt.items.add(files[0]);
+                            uploadInput.files = dt.files;
+                            uploadInput.dispatchEvent(new Event('change', {bubbles: true}));
+                        } catch(err) { console.warn('drop failed', err); }
+                    }
+                });
+            }
+            _setupDrop();
+            // Re-try after any navigation (the textarea may be re-rendered)
+            setTimeout(_setupDrop, 1000);
         }
         _setup();
         return window.dash_clientside.no_update;
@@ -3809,6 +4428,34 @@ app.clientside_callback(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Enter pour envoyer (Shift+Enter = nouvelle ligne)
+# ─────────────────────────────────────────────────────────────────────────────
+app.clientside_callback(
+    """
+    function(dummy) {
+        if (window._enterSendBound) return window.dash_clientside.no_update;
+        window._enterSendBound = true;
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter' || e.shiftKey) return;
+            var container = document.getElementById('chat-text-input');
+            if (!container) return;
+            var target = e.target;
+            var inside = (target === container || container.contains(target));
+            if (!inside) return;
+            e.preventDefault();
+            var btn = document.getElementById('btn-chat-send');
+            if (btn && !btn.disabled) btn.click();
+        }, true);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("enter-bind-store", "data"),
+    Input("main-tabs", "active_tab"),
+    prevent_initial_call=False,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Canvas Actuarial — http://localhost:8050")
-    app.run(debug=False, port=8050, host="::", use_reloader=False)
+    app.run(debug=True, port=8050, host="::", use_reloader=False)

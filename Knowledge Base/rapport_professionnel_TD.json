@@ -1,0 +1,74 @@
+[
+  {
+    "id": "rapport_TD_structure_sections",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "structure_rapport",
+    "type": "standard_professionnel",
+    "tags": ["rapport", "certification", "structure", "sections", "plan", "temporaire_deces", "TD"],
+    "titre": "Structure standard d'un rapport de certification de table de mortalité d'expérience",
+    "contenu": "Un rapport professionnel de certification de table TD suit 7 sections ordonnées :\n1. Préambule — contexte de la certification, historique des tables précédentes, objectifs de la mise à jour.\n2. Données initiales — provenance, période d'observation, règles de retraitement (exclusions, doublons, qualité).\n3. Statistiques descriptives de la base retraitée — effectifs sous risque et décès par année, répartition par âge et sexe, dérive temporelle de l'exposition.\n4. Décès observés vs décès modélisés — comparaison O/A par tranches d'âge, niveau de prudence global.\n5. Comparaison avec la table d'expérience précédente — SMR inter-tables, évolution des taux par âge.\n6. Positionnement par rapport aux tables réglementaires — abattements TH0002/TF0002, SMR réglementaire H et F.\n7. Domaine de validité et suivi — contrats concernés, indicateurs de suivi à produire annuellement.\nChaque section doit combiner texte narratif, tableau(x) de synthèse et figure(s) illustrative(s)."
+  },
+  {
+    "id": "rapport_TD_tableaux",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "tableaux_obligatoires",
+    "type": "standard_professionnel",
+    "tags": ["tableau", "format", "exposition", "deces", "statistiques_descriptives", "table_experience", "sexe"],
+    "titre": "Tableaux obligatoires dans un rapport de certification — format et colonnes attendus",
+    "contenu": "Quatre tableaux sont systématiquement présents dans un rapport de certification TD :\n\nT1 — Construction de la base (section Données initiales)\nColonnes : Année | Exposition (années-personnes) | Décès observés | Décès prédits (table précédente)\nObjet : traçabilité de la qualité des données et évolution temporelle.\n\nT2 — Statistiques descriptives de la base retraitée\nColonnes : Année | Exposition | Taux de décès | Âge moyen\nObjet : stabilité interannuelle du portefeuille, dérive d'âge.\n\nT3 — Positionnement de la mortalité masculine vs féminine\nColonnes : Âge | Taux de décès masculin | Taux de décès féminin | Ratio H/F\nObjet : cohérence H/F, validation du sens de la différence par âge.\n\nT4 — Table de mortalité d'expérience finale\nColonnes : Âge | qx expérience | qx référence (TH0002/TF0002) | Abattement | IC_inf | IC_sup\nObjet : livrable principal du rapport, base des provisions."
+  },
+  {
+    "id": "rapport_TD_figures",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "figures_obligatoires",
+    "type": "standard_professionnel",
+    "tags": ["graphique", "figure", "visualisation", "exposition", "deces_observes", "deces_modelises", "comparaison_tables", "abattement"],
+    "titre": "Figures obligatoires dans un rapport de certification — type et contenu attendus",
+    "contenu": "Un rapport TD professionnel comporte au minimum 3 figures :\n\nF1 — Exposition au risque et nombre de décès (courbe + barres)\nAxes : Années (x) | Exposition années-personnes (y gauche), Nombre de décès (y droite)\nObjet : vue d'ensemble de la profondeur et de la richesse du portefeuille.\n\nF2 — Décès observés vs décès modélisés par tranche d'âge (barres groupées)\nAxes : Tranches d'âge quinquennales (x) | Nombre de décès (y)\nObjet : illustration visuelle du niveau de prudence, identification des tranches sous/sur-estimées.\n\nF3 — Comparaison taux de décès table actuelle vs table précédente (scatter/ligne)\nAxes : Âge (x) | Taux de décès (y, échelle log conseillée)\nObjet : évolution des qx entre les deux certifications, détection des ruptures.\n\nFigures supplémentaires fréquentes :\nF4 — Taux bruts vs taux lissés avec intervalles de confiance (obligatoire dans la section construction).\nF5 — Abattements par âge par rapport à TH0002/TF0002 (barres horizontales centruées sur 1.0).\nF6 — Courbe de survie S(t) empirique vs théorique."
+  },
+  {
+    "id": "rapport_TD_section_stats_descriptives",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "statistiques_descriptives",
+    "type": "guideline_narrative",
+    "tags": ["statistiques_descriptives", "retraitement", "qualite_donnees", "expositions", "pyramide_ages"],
+    "titre": "Guideline narrative — Section statistiques descriptives de la base retraitée",
+    "contenu": "La section statistiques descriptives doit :\n1. Décrire les exclusions effectuées : nombre de lignes initiales, nombre après retraitement, motifs principaux (âges hors plage, dates incohérentes, cause de sortie inconnue).\n2. Présenter la pyramide des âges de l'exposition : distribution par tranche quinquennale H/F.\n3. Montrer l'évolution temporelle : exposition et décès par année calendaire pour identifier une éventuelle dérive (sélection, anti-sélection, effet crise).\n4. Calculer le taux de décès brut global et par sexe comme premier indicateur de crédibilité.\nTon attendu : factuel, chiffré, sans interprétation prématurée."
+  },
+  {
+    "id": "rapport_TD_section_deces_observes",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "deces_observes_modelises",
+    "type": "guideline_narrative",
+    "tags": ["SMR", "prudence", "deces_observes", "deces_attendus", "chi2", "validation"],
+    "titre": "Guideline narrative — Section décès observés vs modélisés",
+    "contenu": "La section comparaison O/A doit :\n1. Calculer les décès attendus sous la table candidate pour chaque tranche d'âge.\n2. Présenter le tableau O/A : D_obs | D_exp | Ratio O/A | Commentaire.\n3. Calculer le SMR global et par décennie d'âge avec IC à 95 %.\n4. Conclure sur le niveau de prudence : SMR < 1 = table prudente (sur-estimation du risque), SMR > 1 = table insuffisamment prudente.\n5. Effectuer le test du chi-deux sur l'adéquation globale (p-value > 0.05 = bon ajustement).\nFormule SMR = Σ D_obs / Σ (E_x × μ_x^ref). Un SMR entre 0.85 et 1.15 est généralement jugé acceptable pour la certification."
+  },
+  {
+    "id": "rapport_TD_section_positionnement",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "positionnement_reglementaire",
+    "type": "guideline_narrative",
+    "tags": ["TH0002", "TF0002", "abattement", "reglementaire", "prudence", "positionnement"],
+    "titre": "Guideline narrative — Section positionnement par rapport aux tables réglementaires",
+    "contenu": "La section positionnement réglementaire doit :\n1. Calculer les abattements par âge : a_x = qx_experience / qx_TH0002 (ou TF0002).\n2. Montrer graphiquement les abattements centrés sur 1.0 avec bandes de tolérance ±10 %.\n3. Interpréter les écarts : âges où le portefeuille est plus/moins mortel que la table réglementaire.\n4. Calculer l'abattement global (= SMR sur TH0002/TF0002) et conclure sur l'adéquation à la table de référence.\n5. Si régression logistique disponible : présenter les coefficients a et b du modèle logit q_x = logit(a + b·x) et le R².\nNote réglementaire : une table d'expérience TD doit généralement être plus prudente (abattement < 1) que les tables réglementaires pour être certifiable."
+  },
+  {
+    "id": "rapport_TD_section_suivi",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "suivi_indicateurs",
+    "type": "guideline_narrative",
+    "tags": ["suivi", "indicateurs", "mise_a_jour", "plan_surveillance", "SMR_annuel"],
+    "titre": "Guideline narrative — Section suivi de la table",
+    "contenu": "La section suivi doit préciser :\n1. La fréquence de recalcul recommandée (annuelle pour portefeuilles > 50 000 contrats, triennale sinon).\n2. Les indicateurs de surveillance annuels à produire : SMR glissant sur 3 ans, ratio O/A par décennie, test de Kolmogorov-Smirnov sur la distribution des âges au décès.\n3. Les seuils d'alerte déclenchant une recertification anticipée : SMR > 1.2 sur 2 exercices consécutifs ou rupture structurelle détectée.\n4. Le domaine de validité : tranches d'âge couvertes, types de contrats éligibles, durées maximales."
+  },
+  {
+    "id": "rapport_TD_tableau7_figure8",
+    "source": "AF8796-TD3_v1.0 — Certification table de mortalité (Allianz, contrats temporaire décès)",
+    "section": "tableau_synthese_final",
+    "type": "standard_professionnel",
+    "tags": ["tableau7", "figure8", "deces_observes", "deces_modelises", "rapport_OA", "IC", "exposition", "visualisation", "synthese"],
+    "titre": "Tableau 7 et Figure 8 — Table de synthèse finale O/A par âge (format rapport professionnel)",
+    "contenu": "TABLEAU 7 — Table de synthèse décès observés vs modélisés par âge (page 9 du rapport AF8796-TD3_v1.0)\nColonnes exactes (dans cet ordre) :\n  Age | Exposition | Proportion (%) | D_obs | D_exp | Écart | Rapport O/A | IC Min 95% | IC Max 95%\n\nDéfinitions :\n  - Exposition : années-personnes E_x sur la période d'observation\n  - Proportion (%) : E_x / E_x_total × 100 — part de chaque âge dans le portefeuille\n  - D_obs : décès observés sur la période\n  - D_exp : décès attendus sous la table candidate (= E_x × qx_lisse)\n  - Écart : D_obs − D_exp\n  - Rapport O/A : D_obs / D_exp (= SMR local par âge)\n  - IC Min/Max 95% : intervalle de confiance à 95 % sur qx (Poisson ou Wilson)\n\nNormes d'interprétation :\n  - Rapport O/A < 0.85 → table nettement prudente sur cette tranche\n  - Rapport O/A entre 0.85 et 1.15 → zone d'acceptabilité pour certification\n  - Rapport O/A > 1.15 → insuffisamment prudent, révision de la table requise\n  - La somme colonne D_obs / somme D_exp = SMR global (doit figurer en pied de tableau)\n\nFIGURE 8 — Graphique décès observés vs modélisés par tranche d'âge quinquennale (page 9)\nType : barres groupées côte à côte\nAxes : Tranches d'âge quinquennales (x) | Nombre de décès (y)\nSéries : D_obs (barres bleues) et D_exp (barres orange)\nLégende obligatoire. Titre : 'Décès observés vs modélisés par tranche d'âge'\nFonction : visualization.plot_observed_vs_expected(exposure_table)"
+  }
+]

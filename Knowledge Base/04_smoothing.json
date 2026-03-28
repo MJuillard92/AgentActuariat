@@ -1,0 +1,176 @@
+[
+  {
+    "id": "lissage_chunk_0",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "definitions_notations",
+    "type": "methodologie",
+    "tags": [
+      "operateurs_differences",
+      "difference_avant",
+      "difference_arriere",
+      "difference_centrale",
+      "delta",
+      "binomiaux",
+      "notations"
+    ],
+    "titre": "Définitions et notations — opérateurs de différences discrètes",
+    "contenu": "Les méthodes de lissage utilisent systématiquement des opérateurs de différentiation discrète appliqués à une série u(x). Trois opérateurs sont distingués : (1) Différence avant : delta_+ u(x) = u(x+1) - u(x) ; (2) Différence arrière : delta_- u(x) = u(x) - u(x-1) ; (3) Différence centrale : delta_0 u(x) = u(x + 1/2) - u(x - 1/2). Ces opérateurs s'appliquent de manière récursive : delta^2 u(x) = delta(delta u) = u(x+2) - 2*u(x+1) + u(x). Formule générale à l'ordre n via les coefficients binomiaux : delta^n u(x) = sum_{j=0}^{n} (-1)^j * C(n,j) * u(x + n - j). La matrice Kz utilisée dans Whittaker-Henderson est construite à partir de ces coefficients binomiaux alternés d'ordre z (positifs pour z pair, commençant positivement). Exemple pour z=2 : coefficients [1, -2, 1] ; pour z=3 : coefficients [1, -3, 3, -1]. Ces opérateurs sont également à la base des formules d'interpolation d'Everett (différences centrales) et des contraintes de régularité des splines."
+  },
+  {
+    "id": "lissage_chunk_1",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "introduction",
+    "type": "methodologie",
+    "tags": [
+      "lissage",
+      "ajustement",
+      "fidelite",
+      "regularite",
+      "taux_bruts",
+      "arbitrage"
+    ],
+    "titre": "Introduction — Objectif du lissage et arbitrage fidélité/régularité",
+    "contenu": "Le lissage vise à réviser les taux bruts q_x_hat pour mieux estimer les vrais taux q_x, en réduisant l'erreur e_x = q_x_hat - q_x due aux fluctuations d'échantillonnage. Deux contraintes sont à équilibrer conjointement : (1) la précision (fidélité) : les taux révisés doivent rester proches des taux initiaux ; (2) la régularité : la suite des taux ajustés doit être aussi régulière que possible. L'arbitrage dépend du phénomène observé. Exemple : en arrêt de travail, les pics de fin de mois correspondent à des décisions médicales réelles et ne doivent PAS être lissés, contrairement aux fluctuations quotidiennes. Deux grandes familles de méthodes : (A) Ajustement paramétrique — on suppose une forme a priori (ex. Makeham), inclut les splines et interpolations à jonctions lisses ; (B) Lissage non paramétrique — on applique des traitements aux données brutes sans forme imposée, inclut les moyennes mobiles, Whittaker-Henderson et lissages bayésiens. Convention sémantique : 'ajustement' = cadre paramétrique, 'lissage' = cadre non paramétrique (graduation en anglais)."
+  },
+  {
+    "id": "lissage_chunk_2",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "splines_cubiques",
+    "type": "methodologie",
+    "tags": [
+      "splines",
+      "cubique",
+      "noeuds",
+      "moindres_carres",
+      "parametrique",
+      "ajustement"
+    ],
+    "titre": "Splines cubiques — construction, nœuds et moindres carrés pondérés",
+    "contenu": "Principe : découper la plage [x0, x2] en sous-intervalles et ajuster un polynôme de degré 3 sur chaque arc, avec continuité de la valeur, de la pente et de la courbure aux points de jonction (nœuds). Cas à 2 arcs : p0(x) sur [x0, x1] et p1(x) sur [x1, x2]. On pose p0(x) = c1 + c2*x + c3*x^2 + c4*x^3 et p1(x) = p0(x) + c5*(x - x1)^3. Cela donne 5 inconnues. La résolution utilise les moindres carrés pondérés : minimiser M = sum_x w_x * (q_x_hat - q_x)^2, ce qui conduit au système normal X'wX*c = X'w*q_hat, résolu par c = (X'wX)^{-1} * X'w*q_hat. Cas général avec n nœuds : matrice X de taille (m, n+4), même estimateur. Choix des nœuds : si moins de 4 valeurs dans un intervalle, les taux ajustés = taux bruts ; choisir des intervalles suffisamment larges ; les ruptures de forme des taux bruts guident le placement. Avantage : le spline peut interpoler les valeurs manquantes. Préférer les splines cubiques aux interpolations d'Everett quand les deux sont applicables."
+  },
+  {
+    "id": "lissage_chunk_3",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "interpolations_jonctions_lisses",
+    "type": "methodologie",
+    "tags": [
+      "interpolation",
+      "Everett",
+      "Karup-King",
+      "quatre_points",
+      "valeurs_manquantes"
+    ],
+    "titre": "Interpolations à jonctions lisses — Everett et formule de Karup-King",
+    "contenu": "Contexte : quand les taux bruts sont disponibles par groupes d'âges (paliers) et qu'on veut les taux annuels. L'objectif n'est PAS de lisser des valeurs irrégulières mais de compléter des valeurs manquantes. Formule générale d'Everett : q_{x+s} = F(s)*q_x_hat + F(1-s)*q_{x+1}_hat pour 0 <= s <= 1, où F(s) = p0(s) + p2(s)*delta^2 + ... avec delta l'opérateur de différence centrale. Les contraintes de régularité imposent : continuité (p_i(0) = 0), égalité des dérivées aux jonctions (F'(2) = F'+(0)), égalité des dérivées secondes (p_i''(0) = 0). Formule à 4 points (la plus utilisée, m=2) : q_{x+s} en fonction de q_{x-1}, q_x, q_{x+1}, q_{x+2}. On détermine p0(s) = s et p1(s) avec les contraintes de continuité/dérivabilité. Formule de Karup-King (cas particulier l=0, standard en pratique) : p1(s) = (1/2)*s*(s-1)*(s^2 - 1). Note importante : les splines cubiques permettent également l'interpolation et doivent être préférées à ces formules."
+  },
+  {
+    "id": "lissage_chunk_4",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "moyennes_mobiles",
+    "type": "methodologie",
+    "tags": [
+      "moyennes_mobiles",
+      "non_parametrique",
+      "symetrique",
+      "bords",
+      "2D",
+      "BCAC"
+    ],
+    "titre": "Moyennes mobiles — formule, contraintes et extension 2D",
+    "contenu": "Formule de base (symétrique) : q_x_hat_lisse = sum_{i=-r}^{r} a_i * q_{x+i} avec a_{-i} = a_i. Limite majeure : traitement des bords difficile, peut laisser des irrégularités. Contrainte de préservation des polynômes de degré 3 : sum a_i = 1 et sum i^2 * a_i = 0 (les moyennes mobiles ne doivent pas modifier une série déjà polynomiale d'ordre 3). Extension en dimension 2 (âge x ancienneté) : lisser en une seule passe dans les deux dimensions simultanément évite de dégrader le premier lissage. Formule BCAC pour le lissage 2D : q_hat(i,j) = (1/2)*q(i,j) + (1/16)*sum_{(k,l) voisins de (i,j)} q(k,l), la somme portant sur les 8 points entourant (i,j). Usage : utilisé pour lisser les provisions calculées à partir de tables réglementaires brutes. Inconvénient : la moyenne arithmétique est sensible aux valeurs extrêmes ; ne pas utiliser seul comme seule méthode de révision des taux bruts."
+  },
+  {
+    "id": "lissage_chunk_5",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "whittaker_henderson_1D",
+    "type": "methodologie",
+    "tags": [
+      "whittaker_henderson",
+      "fidelite",
+      "regularite",
+      "parametre_h",
+      "parametre_z",
+      "Cholesky",
+      "matrice_K",
+      "taux_ajustes",
+      "lissage_bayesien"
+    ],
+    "titre": "Whittaker-Henderson 1D — critères F et S, formule des taux ajustés, résolution",
+    "contenu": "Principe : minimiser M = F + h*S, combinaison linéaire du critère de fidélité F et du critère de régularité S. Critère de fidélité : F = sum_{i=1}^{p} w_i * (q_i_hat - q_i)^2. Critère de régularité : S = sum_{i=1}^{p-z} (delta^z q_i)^2 où delta^z est l'opérateur de différence d'ordre z. Paramètre h : contrôle l'arbitrage fidélité/régularité (h grand = plus lisse, h petit = plus fidèle). Paramètre z : ordre de différentiation, typiquement z=2 ou z=3 en pratique. Formule matricielle des taux ajustés : q* = (W + h * Kz' * Kz)^{-1} * W * q_hat, où W = diag(w_i) matrice de poids de taille (p x p), Kz matrice de différences d'ordre z de taille ((p-z) x p) dont les coefficients sont les binômes alternés d'ordre z. Exemple pour z=2, p=5 : Kz = [[1, -2, 1, 0, 0], [0, 1, -2, 1, 0], [0, 0, 1, -2, 1]]. Résolution : la matrice C = W + h*Kz'*Kz est symétrique définie positive ; utiliser la décomposition de Cholesky pour l'inverser (ne pas inverser directement car Kz'*Kz seule n'est pas inversible). Interprétation bayésienne : Whittaker-Henderson est équivalent au MAP d'un modèle bayésien avec loi a priori f(q) proportionnelle à exp(-lambda * S(q)) et erreurs normales. h joue le rôle du ratio des variances (erreur / a priori)."
+  },
+  {
+    "id": "lissage_chunk_6",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "whittaker_henderson_2D",
+    "type": "methodologie",
+    "tags": [
+      "whittaker_henderson",
+      "2D",
+      "matriciel",
+      "Kv",
+      "Kh",
+      "arret_travail",
+      "age_anciennete",
+      "lissage_conjoint"
+    ],
+    "titre": "Whittaker-Henderson 2D — extension matricielle, matrices Kv/Kh, lissage conjoint",
+    "contenu": "Contexte : tables à deux dimensions (ex. âge à l'entrée x ancienneté en arrêt de travail). Critère généralisé : M = F + alpha*Sv + beta*Sh, avec Sv = régularité verticale (sur i à j fixé), Sh = régularité horizontale (sur j à i fixé), paramètres alpha et beta séparés pour chaque dimension. Réduction au cas 1D : vectoriser la matrice q_hat en vecteur u de taille p*q tel que u_{q*(i-1)+j} = q_hat_{ij}. Construire la matrice de poids W* diagonale de taille (p*q x p*q) en copiant les lignes de la matrice w_{ij}. Construire les matrices Kv_z (régularité verticale, taille q*(p-z) x p*q) et Kh_y (régularité horizontale, taille p*(q-y) x p*q) par blocs selon la méthode de Knorr (1984). Formule des valeurs lissées : q* = (W* + alpha*Kv_z'*Kv_z + beta*Kh_y'*Kh_y)^{-1} * W* * u. Exemple concret (p=4, q=3, z=2, y=1) : Kv_z de dimensions (6 x 12), Kh_y de dimensions (8 x 12). La méthode 2D est plus efficace que deux lissages 1D successifs car elle évite de dégrader le premier lissage. Application typique : maintien en arrêt de travail avec dimensions âge à l'entrée et ancienneté."
+  },
+  {
+    "id": "lissage_chunk_7",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "validation",
+    "type": "methodologie",
+    "tags": [
+      "validation",
+      "khi_deux",
+      "SMR",
+      "changements_de_signe",
+      "test_statistique",
+      "ajustement"
+    ],
+    "titre": "Validation de l'ajustement — Khi-deux, SMR, test des changements de signe",
+    "contenu": "1. TEST KHI-DEUX : vérifie que les taux révisés ne sont pas trop éloignés des taux estimés. Statistique : Z = sum_{i=1}^{p} n_i * (q_i_hat - q_i*)^2 / (q_i* * (1 - q_i*)). Distribution asymptotique : chi^2(p - r - 1) pour ajustement paramétrique avec r paramètres. Pour lissage non paramétrique, le nombre de degrés de liberté est moins direct (voir Giesecke 1981 pour Whittaker-Henderson). 2. SMR (Standardized Mortality Ratio) : rapport décès observés / décès attendus dans la population de référence. SMR = (sum D_i) / (sum n_i * q_i*). D suit une loi binomiale approchée par Poisson. Intervalle de confiance (Liddell 1984) : bornes basées sur chi^2 à partir du nombre de décès observé D. Un SMR proche de 1 indique une bonne adéquation à la table de référence. 3. TEST DES CHANGEMENTS DE SIGNE : le signe de d_x = q_x_hat - q_x* a une probabilité 1/2 d'être positif. Sous indépendance des âges, le nombre de changements de signe dans la série des d_x suit une loi binomiale B(p-1, 1/2). Nombre moyen attendu : (p-1)/2. Statistique gaussienne : S = (2n - (p-1)) / sqrt(p-1) où n est le nombre de changements de signe observé. En pratique : préférer les tests unilatéraux si les taux ajustés sont délibérément plus prudents que les taux bruts (ex. table d'expérience pour contrat décès)."
+  },
+  {
+    "id": "lissage_chunk_8",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "methodes_noyau",
+    "type": "methodologie",
+    "tags": [
+      "noyau",
+      "kernel",
+      "bande_passante",
+      "Epanechnikov",
+      "gaussien",
+      "Kaplan-Meier",
+      "censure",
+      "Marron-Padgett",
+      "densite",
+      "fonction_hasard"
+    ],
+    "titre": "Méthodes de noyau — estimation de densité et correction pour la censure",
+    "contenu": "Contexte : quand on estime la fonction de survie par une méthode non-paramétrique, la fonction obtenue n'est pas dérivable et on ne peut pas en déduire directement la fonction de hasard. Les méthodes de noyau régularisent l'estimateur empirique de la densité. Estimateur à noyau : f_hat_{h,n}(x) = (1/nh) * sum_{i=1}^{n} K((x - X_i)/h), où K est le noyau (fonction régulière, positive, d'intégrale 1) et h la bande passante. Convergence : quand h -> 0 et nh -> +inf, f_hat converge vers f(x) avec sqrt(nh)*(f_hat(x) - f(x)) -> N(0, f(x)*int(K(u)^2 du)). Noyaux usuels : gaussien K(u) = (1/sqrt(2*pi)) * exp(-u^2/2) ; Epanechnikov K(u) = (3/4)*(1 - u^2) * 1_{|u|<=1}. Difficulté principale : choix de la bande passante h optimale. Correction pour la censure (Marron-Padgett 1987) : en présence de censure à droite, l'estimateur direct est biaisé. L'estimateur corrigé remplace le saut uniforme 1/n par le saut de l'estimateur de Kaplan-Meier lors d'une sortie non censurée : f_hat_{h,n}(t) = (1/h) * sum_{i=1}^{n} (d_i/r_i) * K((t - T_i)/h), où d_i est l'indicateur de sortie non censurée et r_i le nombre à risque juste avant T_i. Référence : Wand et Jones [1995] pour une présentation complète."
+  },
+  {
+    "id": "lissage_chunk_9",
+    "source": "Planchet_ISFA_lissage_v4.11",
+    "section": "kimeldorf_jones_bayesien",
+    "type": "methodologie",
+    "tags": [
+      "Kimeldorf-Jones",
+      "bayesien",
+      "loi_a_priori",
+      "posteriori",
+      "normale_multidimensionnelle",
+      "matrice_Sigma",
+      "matrice_V",
+      "moyenne_ponderee",
+      "stochastique",
+      "mortalite",
+      "parametres_lissage"
+    ],
+    "titre": "Méthode de Kimeldorf-Jones — lissage bayésien avec loi a priori normale",
+    "contenu": "Cadre général bayésien : on suppose q = (q_x) issu d'une loi a priori f_q(.), et les observations q_hat suivent la loi conditionnelle f_{q_hat|q}(.). La loi a posteriori f_{q|q_hat} est obtenue par le théorème de Bayes, et les taux ajustés sont le mode de cette loi a posteriori. Méthode de Kimeldorf-Jones (Kimeldorf et Jones, 1967) : hypothèse que f_q est une loi normale multidimensionnelle N(m, Sigma). La loi de l'expérience (produit de binomiales) est approchée par une normale de matrice de variance V diagonale avec V_{ii} = n_i * q_i * (1 - q_i). La loi a posteriori est également normale, ce qui donne les taux ajustés : q* = (Sigma^{-1} + V^{-1})^{-1} * (Sigma^{-1} * m + V^{-1} * q_hat). Forme alternative utile pour les calculs : q* = q_hat + (I + V * Sigma^{-1})^{-1} * (m - q_hat). Interprétation : q* est une moyenne pondérée entre les taux bruts q_hat et les taux a priori m, le poids relatif dépendant du rapport V/Sigma. En pratique V est inconnu : on le remplace par n_i * q_hat_i * (1 - q_hat_i) ou par les estimations a priori n_i * m_i * (1 - m_i). Calibration des paramètres : m = taux de référence (table BCAC pour arrêt de travail, table INSEE pour mortalité). Sigma : structure de corrélation décroissante avec l'écart d'âge, Sigma_{ij} = sigma_i * sigma_j * rho^{|i-j|} avec rho le coefficient de corrélation entre deux termes consécutifs. Avantage supplémentaire : fournit un modèle stochastique de mortalité en donnant une loi (normale) sur les taux de sortie."
+  }
+]

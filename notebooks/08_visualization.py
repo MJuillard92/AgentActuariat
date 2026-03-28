@@ -24,6 +24,11 @@ except ImportError:
     _LOGGER = _NoLogger()
 
 # ---------------------------------------------------------------------------
+# Figure buffer — capturé par capture_figures() dans workflow_executor.py
+# ---------------------------------------------------------------------------
+_FIGURE_BUFFER: list[bytes] = []
+
+# ---------------------------------------------------------------------------
 # Theme constants
 # ---------------------------------------------------------------------------
 _BG_COLOR = '#FBF8F1'
@@ -66,13 +71,15 @@ def _apply_theme(fig, axes_list):
 
 
 def _fig_to_bytes(fig) -> bytes:
-    """Render figure to PNG bytes and close it."""
+    """Render figure to PNG bytes, store in buffer for capture, and close it."""
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
                 facecolor=_BG_COLOR)
     plt.close(fig)
     buf.seek(0)
-    return buf.read()
+    data = buf.read()
+    _FIGURE_BUFFER.append(data)
+    return data
 
 
 # ---------------------------------------------------------------------------
