@@ -31,6 +31,154 @@ from openai import OpenAI
 import config
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Planning : prompt système et fonction de planification
+# ─────────────────────────────────────────────────────────────────────────────
+
+PLANNING_SYSTEM_PROMPT = """\
+Tu es un expert actuariel senior chargé de planifier une analyse quantitative.
+À partir du message utilisateur, des données disponibles et de la doctrine actuarielle,
+génère un plan d'analyse structuré et détaillé en macro-étapes.
+
+RÈGLES :
+- Entre 4 et 8 étapes maximum.
+- Chaque étape doit nommer la MÉTHODE STATISTIQUE exacte utilisée (ex : estimateur de Kaplan-Meier,
+  méthode de Whittaker-Henderson, Chain-Ladder, Bornhuetter-Ferguson, etc.).
+- Inclure la FORMULE mathématique clé de chaque étape (notation actuarielle standard).
+- Mentionner les ALTERNATIVES si plusieurs méthodes existent (ex : "Kaplan-Meier ou taux centraux").
+- Si une adaptation des données est nécessaire (ex : table unisexe, recodage), signaler une étape
+  "Code custom" avec justification.
+- Ne génère PAS de code Python, seulement le plan méthodologique.
+- Pour une table de mortalité TD/TF, les étapes typiques sont :
+  1. Chargement / nettoyage (contrôle qualité, dates incohérentes, âges hors plage)
+  2. Calcul des expositions (Kaplan-Meier central / initial, E_x = Σ durées_obs_ans)
+  3. Taux bruts (q̂_x = D_x / E_x ou estimateur K-M : q̂_x = 1 - ∏(1 - d_i/n_i))
+  4. Lissage (Whittaker-Henderson : min Σ(w_x(q̂_x-q_x)²) + λΣ(Δ²q_x)²)
+  5. Validation statistique (test χ², SMR, intervalles de confiance Poisson)
+  6. Positionnement réglementaire (abattements vs TH0002/TF0002, SMR global)
+
+Réponds UNIQUEMENT avec un JSON valide (sans markdown autour) :
+{
+  "steps": [
+    {
+      "id": 1,
+      "titre": "...",
+      "description": "Description précise de ce que produit cette étape.",
+      "methode": "Nom de la méthode statistique exacte utilisée",
+      "formule": "Notation mathématique clé (ex: q̂_x = D_x / E_x)",
+      "alternatives": "Méthodes alternatives si applicables (ou null)",
+      "outils": ["module.fonction"],
+      "custom_code": false,
+      "obligatoire": true
+    }
+  ]
+}
+"""
+
+_PLAN_FALLBACK: list[dict] = [
+    {
+        "id": 1,
+        "titre": "Chargement et nettoyage",
+        "description": "Charger le CSV et nettoyer les données.",
+        "outils": ["data_prep.load_data", "data_prep.clean_data"],
+        "obligatoire": True,
+    },
+    {
+        "id": 2,
+        "titre": "Calcul des expositions",
+        "description": "Calculer l'exposition au risque par âge.",
+        "outils": ["exposure.compute_exposure_by_age"],
+        "obligatoire": True,
+    },
+    {
+        "id": 3,
+        "titre": "Taux bruts",
+        "description": "Calculer les taux de mortalité bruts.",
+        "outils": ["crude_rates.compute_crude_rates"],
+        "obligatoire": False,
+    },
+    {
+        "id": 4,
+        "titre": "Lissage et validation",
+        "description": "Lisser les taux et valider statistiquement.",
+        "outils": ["smoothing.smooth_rates", "diagnostics.run_diagnostics"],
+        "obligatoire": False,
+    },
+]
+
+
+def plan_agent(
+    user_message: str,
+    kb_context: str,
+    data_context: str,
+    model: str | None = None,
+) -> list[dict]:
+    """Appelle l'API OpenAI pour générer un plan d'analyse actuariel structuré.
+
+    Args:
+        user_message:  Message de l'utilisateur décrivant l'analyse souhaitée.
+        kb_context:    Extrait de la base de connaissances actuarielle (doctrine).
+        data_context:  Informations sur les données disponibles (chemin CSV, sexe, domaine).
+        model:         Modèle OpenAI à utiliser. None → utilise config.REASONING_MODEL.
+
+    Returns:
+        Liste de dicts représentant les étapes du plan.
+        Retourne _PLAN_FALLBACK en cas d'échec.
+    """
+    _model = model or config.PLANNING_MODEL
+
+    prompt_user = (
+        f"Message utilisateur :\n{user_message}\n\n"
+        f"Données disponibles :\n{data_context}\n\n"
+        f"Doctrine actuarielle (extrait) :\n{kb_context[:3000]}\n\n"
+        "Génère le plan d'analyse en JSON."
+    )
+
+    try:
+        client = _get_client()
+        call_kwargs: dict = dict(
+            model=_model,
+            messages=[
+                {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt_user},
+            ],
+        )
+        # Utiliser response_format si disponible (modèles gpt-4o et suivants)
+        _is_o_model = _model.startswith("o")
+        if _is_o_model:
+            call_kwargs["max_completion_tokens"] = 4096
+        else:
+            call_kwargs["max_tokens"] = 2048
+            call_kwargs["temperature"] = 0.3
+            try:
+                call_kwargs["response_format"] = {"type": "json_object"}
+            except Exception:
+                pass
+
+        response = client.chat.completions.create(**call_kwargs)
+        raw = response.choices[0].message.content or ""
+
+        # Parser le JSON — chercher le premier bloc { ... }
+        raw_stripped = raw.strip()
+        # Enlever les éventuels blocs markdown ```json ... ```
+        if raw_stripped.startswith("```"):
+            lines = raw_stripped.split("\n")
+            raw_stripped = "\n".join(
+                l for l in lines
+                if not l.strip().startswith("```")
+            ).strip()
+
+        data = json.loads(raw_stripped)
+
+        steps = data.get("steps", [])
+        if isinstance(steps, list) and steps:
+            return steps
+        return _PLAN_FALLBACK
+
+    except Exception:
+        return _PLAN_FALLBACK
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Base de connaissances actuarielle (Knowledge Base)
 # ─────────────────────────────────────────────────────────────────────────────
 _KB_DIR = Path(__file__).parent / "Knowledge Base"
@@ -443,8 +591,12 @@ peux pas conclure sans avoir couvert chacun de ces points :
   □ Sélection et application du lissage (auto_select_smoother)
       → "close"   : ARRÊTE et demande confirmation humaine avant de continuer
       → "escalate": ARRÊTE et explique le problème à l'utilisateur
-  □ Validation statistique : intervalles de confiance + test du chi-deux
-  □ SMR (compute_smr) et comparaison à une table de référence
+  □ Validation statistique : intervalles de confiance + test du chi-deux (chi_square_test)
+  □ SMR (compute_smr) et comparaison à une table de référence (benchmarking.load_reference_table)
+  □ Backtesting O/A : tableau décès observés vs modélisés par décennie d'âge
+      → construire t7 (Tableau 7 — Étape 7) avec D_obs, D_exp, écart, rapport O/A
+      → visualization.plot_observed_vs_expected(exposure_table)  ← OBLIGATOIRE
+  □ Graphiques obligatoires : plot_crude_vs_smoothed + plot_smr_by_age + plot_observed_vs_expected
   □ Export de la table finale (benchmarking.export_table)
   □ Synthèse avec justification de chaque choix méthodologique
 
@@ -720,7 +872,18 @@ def run_agent_loop(
     _steps_done = 0
     _limit = max_steps if max_steps is not None else MAX_ITERATIONS
 
-    for _ in range(MAX_ITERATIONS):
+    for _iter in range(MAX_ITERATIONS):
+        # ── Événement "thinking" : indique à l'UI ce que l'agent s'apprête à faire
+        if _iter == 0:
+            _thinking_msg = "Analyse de la demande et des données disponibles…"
+        else:
+            _last_role = messages[-1].get("role", "") if messages else ""
+            if _last_role == "tool":
+                _thinking_msg = "Analyse du résultat et décision de la prochaine action…"
+            else:
+                _thinking_msg = "Réflexion en cours…"
+        yield {"type": "thinking", "message": _thinking_msg}
+
         call_kwargs = dict(
             model=config.REASONING_MODEL,
             messages=messages,
@@ -728,7 +891,7 @@ def run_agent_loop(
             tool_choice="auto",
         )
         if _is_o_model:
-            call_kwargs["max_completion_tokens"] = config.MAX_TOKENS
+            call_kwargs["max_completion_tokens"] = config.MAX_COMPLETION_TOKENS
         else:
             call_kwargs["max_tokens"] = config.MAX_TOKENS
             call_kwargs["temperature"] = config.TEMPERATURE
@@ -877,3 +1040,98 @@ def run_agent_loop(
         "type": "error",
         "content": f"L'agent a dépassé la limite de {MAX_ITERATIONS} itérations sans terminer.",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers pour la boucle encodeur-décodeur
+# ─────────────────────────────────────────────────────────────────────────────
+
+def make_isolated_kernel() -> dict:
+    """Crée un kernel Python isolé, utilisable dans la boucle encodeur.
+
+    Équivalent à workflow_executor.make_kernel() mais clairement nommé
+    pour signaler qu'il ne partage pas l'état avec l'agent actuariel principal.
+    Chaque appel retourne un namespace indépendant.
+    """
+    from workflow_executor import make_kernel as _mk
+    return _mk()
+
+
+def run_agent_on_synthetic(
+    system_prompt: str,
+    kernel: dict | None = None,
+    n: int = 50_000,
+    sexe: str = "H",
+    seed: int = 42,
+) -> tuple[list[dict], str]:
+    """Lance run_agent_loop sur des données synthétiques.
+
+    Utilisé par la boucle d'optimisation de l'encodeur pour évaluer la qualité
+    du prompt sans données réelles. Le prompt est universel (structure + méthode) —
+    les valeurs numériques varient mais la structure du rapport doit rester identique.
+
+    Args:
+        system_prompt: Section MISSION + section technique à évaluer.
+        kernel:        Namespace Python isolé. None → make_isolated_kernel().
+        n:             Nombre de contrats synthétiques (50 000 par défaut).
+        sexe:          'H' ou 'F'.
+        seed:          Graine pour la reproductibilité.
+
+    Returns:
+        (steps, summary) où steps est la liste des events "step"
+        et summary est la synthèse finale de l'agent.
+    """
+    import tempfile, os as _os, pandas as _pd
+
+    if kernel is None:
+        kernel = make_isolated_kernel()
+
+    # Générer des données synthétiques et les écrire dans un fichier CSV temporaire
+    data_prep = kernel.get("data_prep")
+    if data_prep is None or not hasattr(data_prep, "generate_synthetic_data"):
+        raise RuntimeError(
+            "Module data_prep non chargé dans le kernel — "
+            "vérifiez que make_isolated_kernel() charge correctement les modules."
+        )
+
+    synth_df = data_prep.generate_synthetic_data(n=n, sexe=sexe, seed=seed)
+
+    tmp_dir = Path(__file__).parent / "uploads"
+    tmp_dir.mkdir(exist_ok=True)
+    tmp_csv = tmp_dir / f"_synthetic_{seed}_{n}_{sexe}.csv"
+    synth_df.to_csv(tmp_csv, index=False, encoding="utf-8")
+
+    kernel["FILE_PATH"] = str(tmp_csv)
+    kernel["SEXE"] = sexe
+
+    # Message utilisateur minimal pour démarrer l'analyse
+    user_message = (
+        f"Analyse le portefeuille synthétique ({n:,} contrats, sexe {sexe}) "
+        f"disponible dans FILE_PATH. Construis la table de mortalité complète "
+        f"selon les instructions du prompt et produis tous les livrables demandés."
+    )
+
+    from notebook_runner import execute_cell as _exec_cell
+    from workflow_executor import capture_figures as _cap_figs
+
+    def _execute_fn(code: str) -> tuple:
+        output = _exec_cell(code, kernel)
+        figs = _cap_figs(kernel)
+        return output, figs
+
+    steps: list[dict] = []
+    summary: str = ""
+
+    for event in run_agent_loop(
+        user_message=user_message,
+        notebook_context="",
+        conversation_history=[],
+        execute_fn=_execute_fn,
+        system_prompt_template=system_prompt,
+    ):
+        if event.get("type") == "step":
+            steps.append(event)
+        elif event.get("type") == "summary":
+            summary = event.get("content", "")
+
+    return steps, summary

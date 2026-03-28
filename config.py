@@ -2,19 +2,24 @@
 # Configuration de l'agent actuariel
 # Modifier ce fichier pour changer les modèles, les limites ou les chemins.
 #
-# Architecture 3-LLM :
-#   REASONING_MODEL  — boucle ReAct de l'agent (raisonnement complexe, multi-étapes)
-#   FORMATTER_MODEL  — réponses RAG et mise en forme des rapports (léger, bon marché)
-#   ANALYSIS_MODEL   — analyse structurée des PDFs de référence (extraction JSON)
+# Architecture 4-LLM :
+#   PLANNING_MODEL   — phase de planification (raisonnement structuré, JSON)
+#   REASONING_MODEL  — boucle ReAct de l'agent (code, décisions métier)
+#   FORMATTER_MODEL  — réponses RAG et mise en forme (léger, bon marché)
+#   ANALYSIS_MODEL   — analyse structurée des PDFs (extraction JSON)
 #
 # Préconisations OpenAI (performance / coût) :
-#   Raisonnement  → gpt-4o          : meilleur rapport qualité/coût pour ReAct
+#   Planning      → o4-mini         : raisonnement structuré, JSON fiable (~$1.1/1M)
+#   ReAct/code    → gpt-4o-mini     : rapide, excellent code Python (~$0.15/1M)
 #   Formatage     → gpt-4o-mini     : suffisant pour synthèse et RAG
-#   Analyse PDF   → gpt-4o          : nécessaire pour l'extraction JSON structurée
+#   Analyse PDF   → gpt-4o          : nécessaire pour extraction JSON complexe
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Agent ReAct principal — raisonnement, planification, décisions métier
-REASONING_MODEL = "o4-mini"
+# Phase de planification — génère le plan structuré, formules, méthodes
+PLANNING_MODEL = "o4-mini"
+
+# Agent ReAct principal — exécution code Python, décisions métier step par step
+REASONING_MODEL = "gpt-4o-mini"
 
 # Réponses RAG et mise en forme des rapports — synthèse, questions/réponses
 FORMATTER_MODEL = "gpt-4o-mini"
@@ -26,7 +31,8 @@ ANALYSIS_MODEL = "gpt-4o"
 MODEL = REASONING_MODEL
 
 # Paramètres de génération de l'agent
-MAX_TOKENS = 40000   # o3-mini consomme des tokens de raisonnement internes en plus du code
+MAX_TOKENS = 16000          # max_tokens pour modèles non-o (gpt-4o, gpt-4o-mini : limite 16384)
+MAX_COMPLETION_TOKENS = 40000  # max_completion_tokens pour modèles o-series (o4-mini, o3…)
 TEMPERATURE = 0.2
 
 # Chemins

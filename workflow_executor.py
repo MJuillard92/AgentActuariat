@@ -74,17 +74,25 @@ def evaluate_condition(condition: str, kernel_state: dict) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _capture_figures(kernel: dict) -> list[bytes]:
+    figs: list[bytes] = []
+
+    # Drainer le buffer du module visualization (figures fermées après savefig)
+    viz = kernel.get("visualization")
+    if viz is not None and hasattr(viz, "_FIGURE_BUFFER"):
+        figs.extend(viz._FIGURE_BUFFER)
+        viz._FIGURE_BUFFER.clear()
+
+    # Capturer les figures matplotlib encore ouvertes (fallback)
     plt = kernel.get("plt")
-    if plt is None:
-        return []
-    figs = []
-    for fn in plt.get_fignums():
-        fig = plt.figure(fn)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-        buf.seek(0)
-        figs.append(buf.read())
-    plt.close("all")
+    if plt is not None:
+        for fn in plt.get_fignums():
+            fig = plt.figure(fn)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+            buf.seek(0)
+            figs.append(buf.read())
+        plt.close("all")
+
     return figs
 
 
