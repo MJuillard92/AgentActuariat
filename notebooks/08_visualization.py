@@ -26,7 +26,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Figure buffer — capturé par capture_figures() dans workflow_executor.py
 # ---------------------------------------------------------------------------
-_FIGURE_BUFFER: list[bytes] = []
+_FIGURE_BUFFER = []  # list of PNG bytes
 
 # ---------------------------------------------------------------------------
 # Theme constants

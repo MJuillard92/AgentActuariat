@@ -124,24 +124,47 @@ class WriterAgent:
                     }
 
                     # Exécution du tool
+                    context_for_tool = None
+                    if fn_name == "reasoning":
+                        context_for_tool = {
+                            "user_message": history[-1].get("content", "") if history else "",
+                            "history": history,
+                            "csv_columns": list(df.columns) if df is not None else [],
+                        }
                     result = call_tool(
                         tool_name=fn_name,
                         function_name=function_name,
                         params=params,
                         df=df,
                         data=data_store,
+                        context=context_for_tool,
                     )
 
-                    # Stocker le résultat dans data_store pour build_pdf
+                    # Stocker le résultat dans data_store pour les tools suivants
                     _RESULT_KEYS = {
                         "portfolio_summary": "summary",
                         "age_distribution":  "ages",
                         "time_series":       "series",
                         "segmentation":      "segmentation",
+                        # builder
+                        "exposure":          "exposure_table",
+                        "crude_rates":       "qx_table",
+                        "smoothing":         "smoothed_table",
+                        "diagnostics":       "diagnostics",
+                        "validation":        "validation",
+                        "benchmarking":      "benchmarking",
                     }
-                    store_key = _RESULT_KEYS.get(function_name, function_name)
                     if "erreur" not in result:
-                        data_store[store_key] = result
+                        store_key = _RESULT_KEYS.get(function_name, function_name)
+                        # Pour builder.exposure, stocker exposure_table directement
+                        if fn_name == "builder" and function_name == "exposure":
+                            data_store["exposure_table"] = result.get("exposure_table", [])
+                        elif fn_name == "builder" and function_name == "crude_rates":
+                            data_store["qx_table"] = result.get("qx_table", [])
+                        elif fn_name == "builder" and function_name == "smoothing":
+                            data_store["smoothed_table"] = result.get("smoothed_table", [])
+                        else:
+                            data_store[store_key] = result
 
                     yield {
                         "type": "tool_result",
@@ -152,10 +175,15 @@ class WriterAgent:
                     }
 
                     # Ajouter le résultat dans les messages (format OpenAI tool result)
+                    # Les images base64 sont tronquées pour ne pas saturer le contexte
+                    result_for_msg = {
+                        k: ("<image base64 tronquée>" if k == "image_b64" else v)
+                        for k, v in result.items()
+                    }
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": json.dumps(result, ensure_ascii=False, default=str)[:6000],
+                        "content": json.dumps(result_for_msg, ensure_ascii=False, default=str)[:6000],
                     })
 
             # ── Cas 2 : réponse texte ─────────────────────────────────────────

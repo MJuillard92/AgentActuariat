@@ -20,9 +20,15 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
+
+# Add project root (for agent.py) and agent_builder/ (for judge_agent.py) to path
+_PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import dash
 import dash_bootstrap_components as dbc
@@ -337,7 +343,8 @@ def _run_simulation_thread() -> None:
     """Lance une simulation complète : données synthétiques → report_agent → PDF."""
     import tempfile
     from pathlib import Path as _Path
-    from report_agent.report_agent import generate_narrative_report
+    from report_agent.generate_report import generate_mortality_report as _gen_mortality_report
+    from report_payload_builder import build_report_payload as _build_report_payload, build_exposure_deciles as _bde
 
     with _enc_lock:
         template = dict(_enc_results.get("template") or {})
@@ -364,31 +371,78 @@ def _run_simulation_thread() -> None:
         domain_label = _infer_domain_label(template)
         report_title = template.get("report_title", "Rapport actuariel")
 
-        # Générer les graphiques directement via numpy (pas de parsing de texte)
-        from report_agent.report_agent import _generate_demo_charts
-        prebuilt_figures = _generate_demo_charts(methodology)
-
         with _enc_lock:
-            _enc_results["sim_progress"] = (
-                f"{len(prebuilt_figures)} graphiques générés — rédaction du rapport…"
-            )
+            _enc_results["sim_progress"] = "Génération des données synthétiques et du rapport…"
+
+        # Données synthétiques Gompertz-Makeham
+        import numpy as _np
+        _rng = _np.random.default_rng(42)
+        _age_min = int((methodology or {}).get("age_min", 25))
+        _age_max = int((methodology or {}).get("age_max", 85))
+        _ages  = _np.arange(_age_min, _age_max + 1, dtype=float)
+        _n     = len(_ages)
+        _A, _B, _c = 0.0003, 0.000025, 0.10
+        _q_ref = _np.clip(_A + _B * _np.exp(_c * (_ages - 50)), 5e-5, 0.9)
+        _exp   = _np.maximum(
+            _rng.integers(300, 3500, _n).astype(float) * _np.linspace(1.0, 0.25, _n),
+            20.0,
+        )
+        _deaths = _rng.poisson(_q_ref * _exp).astype(float)
+        _q_brut = _np.where(_exp > 0, _deaths / _exp, _q_ref)
+        _kernel  = _np.exp(-0.5 * (_np.arange(-4, 5, dtype=float) / 2.0) ** 2)
+        _kernel /= _kernel.sum()
+        _q_lisse = _np.maximum(_np.convolve(_q_brut, _kernel, mode="same"), 1e-5)
+        _ic_inf  = _np.maximum(0.0, _q_lisse - 1.96 * _np.sqrt(_q_lisse / _np.maximum(_exp, 1.0)))
+        _ic_sup  = _q_lisse + 1.96 * _np.sqrt(_q_lisse / _np.maximum(_exp, 1.0))
+        _D_obs   = float(_deaths.sum())
+        _D_exp   = float((_q_ref * _exp).sum())
+        _smr     = _D_obs / _D_exp
+        _D_i     = max(_D_obs, 1.0)
+        _smr_lo  = (_D_i/_D_exp)*(1-1/(9*_D_i)-1.96/(3*_np.sqrt(_D_i)))**3
+        _smr_hi  = ((_D_i+1)/_D_exp)*(1-1/(9*(_D_i+1))+1.96/(3*_np.sqrt(_D_i+1)))**3
+        _chi2    = float(_np.sum((_deaths - _q_ref*_exp)**2 / _np.maximum(_q_ref*_exp, 1.0)))
+        _ddl     = max(_n - 2, 1)
+        try:
+            from scipy.stats import chi2 as _chi2d
+            _pval = float(1 - _chi2d.cdf(_chi2, _ddl))
+        except Exception:
+            _pval = 0.05
+        _abat = float(_np.sum(_q_lisse * _exp) / max(float(_np.sum(_q_ref * _exp)), 1e-10))
+
+        _portfolio = {
+            "n_assures": 10000, "n_contrats_actifs": 10000,
+            "type_contrat": domain_label or "vie_entiere",
+            "periode_debut": "2010-01-01", "periode_fin": "2023-12-31",
+            "age_min": _age_min, "age_max": _age_max,
+            "segmentation": "global", "table_reference": "TH00-02",
+        }
+        _qualite = {
+            "traitements_appliques": [
+                {"nom": "Simulation", "description": f"Données synthétiques — {report_title}"},
+            ],
+            "stats_annuelles": [
+                {"annee": yr, "exposition": int(_exp.sum() / 14),
+                 "age_moyen": round(float(_np.average(_ages, weights=_exp)), 1),
+                 "deces": int(_deaths.sum() / 14)}
+                for yr in range(2010, 2024)
+            ],
+        }
+
+        _mortality_payload = _build_report_payload(
+            ages=_ages, exposure=_exp, deaths_observed=_deaths,
+            q_brut=_q_brut, q_lisse=_q_lisse, ic_inf=_ic_inf, ic_sup=_ic_sup,
+            q_ref=_q_ref, methode="whittaker_henderson",
+            parametres={"lambda": 1000, "ordre": 2},
+            smr_global=_smr, smr_ic_inf=_smr_lo, smr_ic_sup=_smr_hi,
+            chi2_stat=_chi2, chi2_ddl=_ddl, chi2_pvalue=_pval,
+            abattement_global=_abat,
+            portfolio_info=_portfolio, qualite_info=_qualite,
+            trace_info={"study_ref": "SIMULATION", "writer_prompt_len": len(mission)},
+        )
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             tmp_path = f.name
-
-        generate_narrative_report(
-            steps=steps,
-            summary=summary,
-            user_message=f"Simulation — {report_title}",
-            domain_label=domain_label,
-            output_path=tmp_path,
-            study_ref="SIMULATION",
-            writer_prompt=mission,
-            template_sections=template.get("sections", []),
-            prebuilt_figures=prebuilt_figures,
-            methodology=methodology,
-            pdf_reference_path=template.get("source_pdf"),
-        )
+        _gen_mortality_report(_mortality_payload, output_path=tmp_path)
 
         pdf_bytes = _Path(tmp_path).read_bytes()
         try:

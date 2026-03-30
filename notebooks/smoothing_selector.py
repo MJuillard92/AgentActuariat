@@ -148,6 +148,10 @@ def auto_select_smoother(
     # On accepte un dict externe pour faciliter les tests unitaires, mais en
     # production les paramètres viennent toujours d'actuarial_params.PARAMS.
     if params is None:
+        import sys as _sys, os as _os
+        _nb = _os.path.dirname(_os.path.abspath(__file__))
+        if _nb not in _sys.path:
+            _sys.path.insert(0, _nb)
         from actuarial_params import PARAMS
         params = PARAMS
 
