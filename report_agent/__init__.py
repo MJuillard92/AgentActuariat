@@ -1,4 +1,14 @@
-"""report_agent — Agent rédacteur LLM pour rapports actuariels narratifs."""
-from report_agent.report_agent import generate_narrative_report
+"""
+report_agent — Génération du rapport PDF de certification
+de la table de mortalité d'expérience.
 
-__all__ = ["generate_narrative_report"]
+Usage :
+    from report_agent.validate_payload import validate
+    from report_agent.generate_report import generate_mortality_report
+
+    result = validate(payload)
+    if not result.valid:
+        raise ValueError(result.refusal_message())
+    pdf_path = generate_mortality_report(payload, output_path="rapport.pdf")
+"""
+__version__ = "1.0.0"

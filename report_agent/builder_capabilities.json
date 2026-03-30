@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "tools": {
+    "statistical_analysis": {
+      "description": "Analyse descriptive des données du portefeuille. Ne calcule pas de tables de mortalité — uniquement exploration et statistiques descriptives.",
+      "functions": {
+        "portfolio_summary": {
+          "description": "Résumé global du portefeuille : nb contrats, période couverte, exposition totale (personne-années), nb décès, âge min/max effectif, taux brut global.",
+          "required_columns": ["date_entree", "cause_sortie"],
+          "optional_columns": ["date_sortie", "date_naissance", "duree_obs_ans", "sexe"],
+          "column_notes": "L'exposition est calculée depuis date_entree/date_sortie si duree_obs_ans est absent. L'âge est calculé depuis date_naissance + date_entree.",
+          "params": {}
+        },
+        "age_distribution": {
+          "description": "Distribution des âges d'entrée en observation par tranches de 5 ans. Optionnellement segmentée par sexe.",
+          "required_columns": ["date_entree", "date_naissance"],
+          "optional_columns": ["sexe"],
+          "column_notes": "L'âge est calculé comme date_entree - date_naissance. La ventilation par sexe requiert la colonne sexe.",
+          "params": {
+            "by_sex": "bool — si true, produit une distribution séparée H/F. Défaut : false.",
+            "band_width": "int — largeur des tranches d'âge en années. Défaut : 5."
+          }
+        },
+        "time_series": {
+          "description": "Décès et exposition (personne-années) par année calendaire. Détecte automatiquement les années avec données manquantes ou anormales.",
+          "required_columns": ["date_entree"],
+          "optional_columns": ["date_sortie", "cause_sortie"],
+          "column_notes": "Sans date_sortie, l'exposition est approximée à 1 PA par contrat actif. Sans cause_sortie, le comptage de décès est à zéro.",
+          "params": {}
+        },
+        "segmentation": {
+          "description": "Répartition des contrats et des décès par variables catégorielles : sexe, produit, statut. Retourne des tableaux de comptage avec pourcentages.",
+          "required_columns": [],
+          "optional_columns": ["sexe", "produit", "cause_sortie"],
+          "column_notes": "Fonctionne sans colonnes obligatoires. Si aucune colonne catégorielle n'est trouvée, utilise toutes les colonnes avec moins de 20 valeurs distinctes.",
+          "params": {
+            "columns": "list[str] — colonnes à analyser. Si vide, utilise sexe, produit, statut par défaut."
+          }
+        }
+      }
+    },
+    "build_pdf": {
+      "description": "Génération de rapports PDF actuariels.",
+      "functions": {
+        "descriptive_report": {
+          "description": "Rapport PDF descriptif du portefeuille : statistiques de base, pyramide des âges, séries temporelles et segmentation. Ne contient pas de calculs actuariels.",
+          "required_columns": [],
+          "optional_columns": [],
+          "column_notes": "Utilise les résultats des analyses statistical_analysis déjà effectuées.",
+          "params": {
+            "output_path": "str — chemin de sortie du PDF. Défaut : /tmp/rapport_descriptif.pdf.",
+            "title": "str — titre du rapport. Défaut : 'Analyse descriptive du portefeuille'."
+          }
+        },
+        "certification_report": {
+          "description": "Rapport PDF de certification réglementaire : lissage des taux, validation SMR, test chi2, abattements. Nécessite que les calculs actuariels aient été effectués (tool build_table, Phase 2).",
+          "required_columns": [],
+          "optional_columns": [],
+          "params": {
+            "output_path": "str — chemin de sortie du PDF.",
+            "brief": "dict — brief de l'étude produit lors du dialogue."
+          },
+          "disponible": false,
+          "raison": "Nécessite le tool build_table (Phase 2 — non encore disponible)."
+        }
+      }
+    }
+  },
+  "hors_perimetre": {
+    "build_table": {
+      "description": "Construction de tables de mortalité d'expérience (lissage, SMR, chi2, abattements). Phase 2 — non encore disponible.",
+      "disponible": false
+    },
+    "chain_ladder": {
+      "disponible": false,
+      "raison": "Module non-vie — hors périmètre actuariel vie."
+    },
+    "bornhuetter_ferguson": {
+      "disponible": false,
+      "raison": "Module non-vie — hors périmètre actuariel vie."
+    },
+    "tarification_auto": {
+      "disponible": false,
+      "raison": "Tarification dommages — hors périmètre."
+    },
+    "ibnr": {
+      "disponible": false,
+      "raison": "Module IBNR non implémenté."
+    }
+  }
+}
