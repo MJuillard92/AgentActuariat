@@ -1,0 +1,548 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{mdframed}
+\newcommand{\up}[1]{\textsuperscript{#1}}
+
+\geometry{margin=2.5cm}
+
+% En-têtes
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Agent Actuariat — Architecture LLM}
+\lhead{\leftmark}
+\cfoot{\thepage}
+
+% Couleurs
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.97,0.97,0.97}
+\definecolor{alertblue}{rgb}{0.0,0.3,0.7}
+\definecolor{alertyellow}{rgb}{0.9,0.7,0.0}
+
+% Style de code
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codepurple},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codegreen},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{codegray}
+}
+
+\lstset{style=pythonstyle}
+
+% Boîte d'alerte
+\newmdenv[
+  backgroundcolor=backcolour,
+  linecolor=alertblue,
+  linewidth=2pt,
+  leftmargin=0,
+  rightmargin=0,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+]{infobox}
+
+\newmdenv[
+  backgroundcolor=yellow!10,
+  linecolor=alertyellow,
+  linewidth=2pt,
+  leftmargin=0,
+  rightmargin=0,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+]{warningbox}
+
+% Titre
+\title{
+  \Large\textbf{Agent Actuariat}\\[0.5em]
+  \large Réflexion architecturale et refactorisation\\
+  vers une gestion dynamique du contexte LLM\\[0.5em]
+  \normalsize Migration vers LangGraph et catalogue à 3 niveaux
+}
+\author{Marc Juillard}
+\date{31 mars 2026}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Contexte et problème initial}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Le problème constaté}
+
+Lors de l'exécution du pipeline de construction de table de mortalité sur le
+portefeuille \texttt{données\_actif\_decede.txt} (530~345 lignes, 7 colonnes),
+le pipeline crashait systématiquement à partir de l'étape~19 avec l'erreur
+suivante :
+
+\begin{warningbox}
+\texttt{Error code: 429 --- Limit 30,000 TPM, Requested 30,440. Request too
+large for gpt-4o.}
+\end{warningbox}
+
+Ce crash intervenait à l'étape du benchmarking, juste avant la génération du
+rapport PDF, rendant le pipeline incapable de produire son livrable final.
+
+\subsection{Anatomie d'un appel LLM dans le pipeline}
+
+Un pipeline de construction de table de mortalité comprend une dizaine d'étapes
+(exposition, taux bruts, diagnostics, lissage, validation, benchmarking,
+rapport PDF). À chaque étape, l'agent envoie à l'API OpenAI un message
+contenant \emph{la totalité du contexte accumulé} depuis le début de la
+session. En effet, les modèles de type GPT ne maintiennent aucune mémoire
+inter-appels : chaque requête est autonome et doit embarquer l'intégralité
+de l'historique conversationnel.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  box/.style={rectangle, draw, rounded corners, minimum width=8cm, minimum height=0.7cm, fill=backcolour},
+  arrow/.style={->, thick, >=Latex}
+]
+\node[box] (t1) at (0, 6) {Tour 1 : prompt système (17k) + message user};
+\node[box] (t2) at (0, 5) {Tour 2 : prompt (17k) + user + résultat exposure};
+\node[box] (t3) at (0, 4) {Tour 3 : prompt (17k) + user + exposure + crude\_rates};
+\node      (dots) at (0, 3) {\vdots};
+\node[box, fill=red!15] (t10) at (0, 2) {Tour 10 : \textbf{30~440 tokens} $\rightarrow$ \textbf{429}};
+\draw[arrow] (t1) -- (t2);
+\draw[arrow] (t2) -- (t3);
+\draw[arrow] (t3) -- (dots);
+\draw[arrow] (dots) -- (t10);
+\end{tikzpicture}
+\caption{Croissance linéaire du contexte LLM à chaque tour du pipeline}
+\end{figure}
+
+La taille du contexte croît à chaque tour d'environ 500 à 800 tokens
+(résultat du tool call précédent). Avec un prompt système de 17~000 tokens,
+la limite de 30~000 TPM est atteinte dès le dixième appel.
+
+\subsection{La cause racine}
+
+L'architecture précédente injectait un catalogue enrichi dans le prompt
+système. Ce catalogue, généré à partir des contrats de 19 tools actuariels
+(11 sections documentaires chacun), pesait \textbf{17~000 tokens}. Il était
+retransmis \emph{intégralement à chaque appel LLM}, soit environ 10 fois pour
+un pipeline complet.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Composant & Avant refactorisation & Après refactorisation\\
+\midrule
+Prompt système & 17~000 tokens & 4~553 -- 11~595 tokens\\
+Coût total (12 tours) & $\sim$230~000 tokens & $\sim$90~000 tokens\\
+Coût estimé par run & $\sim$0,60 USD & $\sim$0,25 USD\\
+Crash au tour & 10 & jamais\\
+\bottomrule
+\end{tabular}
+\caption{Impact de la refactorisation sur la consommation de tokens}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Réflexion sur la nécessité du catalogue}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Tous les champs sont-ils utiles à chaque appel ?}
+
+La première question posée était la suivante : \emph{l'agent a-t-il besoin de
+tout le catalogue à chaque appel LLM ?}
+
+Une analyse champ par champ du catalogue YAML a conduit à distinguer trois
+catégories d'information :
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{lXl}
+\toprule
+Champ & Utilité & Verdict\\
+\midrule
+\texttt{short\_description} & Décider quel tool appeler & Indispensable\\
+\texttt{depends\_on} & Construire l'ordre d'exécution & Indispensable\\
+\texttt{when\_to\_use / not} & Éviter les appels hors contexte & Indispensable\\
+\texttt{prerequisites} & Vérifier ce qui doit exister avant & Indispensable\\
+\texttt{quality\_gates.blocking} & Règles comportementales critiques & Indispensable\\
+\texttt{reasoning\_hint} & Guidance directe de l'agent & Indispensable\\
+\texttt{params} & Paramètres à passer à la fonction & Indispensable\\
+\midrule
+\texttt{outputs.return\_payload} & L'agent voit les vraies clés en résultat & Bruit\\
+\texttt{description} & Version longue de \texttt{short\_description} & Redondant\\
+\texttt{display\_name} & Usage UI uniquement & Inutile pour l'agent\\
+\texttt{domain / capability\_group} & Métadonnées organisationnelles & Inutile pour l'agent\\
+\texttt{required\_by} & Inverse de \texttt{depends\_on}, superflu & Inutile pour l'agent\\
+\texttt{exemplar\_query} & Redondant avec \texttt{reasoning\_hint} & Supprimable\\
+\texttt{client\_visible} & Usage UI uniquement & Inutile pour l'agent\\
+\bottomrule
+\end{tabularx}
+\caption{Classification des champs du catalogue selon leur utilité réelle pour l'agent}
+\end{table}
+
+\subsection{La question clé : quand chaque information est-elle nécessaire ?}
+
+L'analyse plus fine a révélé que la valeur du catalogue varie non seulement
+selon les champs, mais aussi selon la \emph{phase cognitive} de l'agent :
+
+\begin{infobox}
+\textbf{Phase de qualification} : l'agent doit répondre à ``est-ce faisable ? qu'est-ce qu'il me manque ?''. Il n'a besoin que de la description courte
+et des prérequis.
+
+\textbf{Phase de planification} : l'agent construit la séquence complète avec
+paramètres. C'est le seul moment où la totalité des informations est exploitée.
+
+\textbf{Phase d'exécution} : l'agent avance pas à pas. Il connaît déjà son plan
+et n'a besoin que des quality gates pour détecter une anomalie.
+\end{infobox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Architecture à 3 niveaux de catalogue}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Les 3 niveaux}
+
+La solution retenue consiste à faire varier le contenu du prompt système selon
+la phase cognitive active, via trois niveaux de catalogue :
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{llXl}
+\toprule
+Niveau & Tokens & Champs injectés & Déclencheur\\
+\midrule
+MIDDLE & $\sim$2~500 & \texttt{short\_description}, \texttt{when\_not\_to\_use},
+  \texttt{prerequisites} & 1\textsuperscript{er} message user, plan non établi\\
+FULL & $\sim$8~000 & Tous les champs utiles & Message user + plan existant (replanification)\\
+LIGHT & $\sim$1~300 & \texttt{short\_description}, \texttt{depends\_on},
+  \texttt{quality\_gates.blocking} & Dernier message = résultat de tool\\
+\bottomrule
+\end{tabularx}
+\caption{Les 3 niveaux de catalogue et leurs déclencheurs}
+\end{table}
+
+\subsection{Logique de transition}
+
+Le niveau actif est déterminé à chaque tour par une règle simple sur le type
+du dernier message dans la conversation :
+
+\begin{lstlisting}[language=Python, caption={Logique de sélection du niveau de catalogue}]
+def _get_catalogue_level(state: AgentState) -> str:
+    last_msg = state["messages"][-1]
+
+    # Tour d'exécution : dernier message = résultat de tool
+    if isinstance(last_msg, ToolMessage):
+        return "light"
+
+    # Premier contact : l'agent ne sait pas encore ce qu'il peut faire
+    if not state["plan_established"]:
+        return "middle"
+
+    # Message utilisateur avec plan existant = replanification
+    return "full"
+\end{lstlisting}
+
+La variable \texttt{plan\_established} passe à \texttt{True} dès le premier
+tool call exécuté.
+
+\subsection{Cas d'un retour à FULL en cours d'exécution}
+
+Un point important a été identifié : l'exécution n'est pas toujours linéaire.
+Trois situations justifient un retour au niveau FULL en cours de pipeline :
+
+\begin{enumerate}
+  \item Un tool retourne une erreur structurelle (colonne manquante, données
+    corrompues) qui invalide l'ensemble du plan.
+  \item Un résultat remet en cause les hypothèses initiales (ex.~: 80\% des
+    âges non crédibles, le pipeline standard ne s'applique pas).
+  \item L'utilisateur envoie un nouveau message en cours d'exécution,
+    réorientant volontairement l'analyse.
+\end{enumerate}
+
+En revanche, les ajustements mineurs (doubler \texttt{lambda\_wh} si
+\texttt{n\_non\_monotone} > 0) \emph{ne} justifient pas un retour à FULL :
+ils sont gérés par les quality gates dans le catalogue LIGHT et les
+\texttt{agent\_instructions}.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Séparation CalculationAgent / WriterAgent}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Deux tâches cognitives distinctes}
+
+L'agent monolithique précédent (\texttt{WriterAgent}) mêlait deux modes
+cognitifs fondamentalement différents :
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+ & CalculationAgent & WriterAgent\\
+\midrule
+Question centrale & Les chiffres sont-ils justes ? & Le rapport est-il bon ?\\
+Raisonnement & Actuariel, rigoureux, déterministe & Éditorial, narratif, qualitatif\\
+Tools & \texttt{builder}, \texttt{statistical\_analysis}, \texttt{graphs}, \texttt{reasoning} & Tous (\texttt{build\_pdf}, \texttt{graphs}, \texttt{builder} en rappel)\\
+Catalogue & MIDDLE / FULL / LIGHT selon phase & FULL systématiquement\\
+Séquence & Quality gates bloquants & Structure narrative du rapport\\
+\bottomrule
+\end{tabularx}
+\caption{Comparaison des deux agents}
+\end{table}
+
+\subsection{Interface de communication : le data\_store}
+
+Le \texttt{data\_store} est le dictionnaire de résultats accumulés au fil
+de l'exécution. Il constitue l'interface de communication entre les deux
+agents : le \texttt{CalculationAgent} le remplit, le \texttt{WriterAgent}
+le consomme. Le \texttt{WriterAgent} peut cependant rappeler des tools de
+calcul s'il constate qu'une donnée manque pour compléter son rapport.
+
+\subsection{Mécanisme de handoff}
+
+La transition du \texttt{CalculationAgent} vers le \texttt{WriterAgent} est
+signalée par l'inclusion du marqueur \texttt{<HANDOFF\_WRITER>} dans la
+réponse de l'agent. Une arête conditionnelle du graphe LangGraph détecte
+ce marqueur et route l'exécution vers le nœud Writer.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Migration vers LangGraph}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Pourquoi LangGraph maintenant ?}
+
+Trois facteurs ont motivé le choix de migrer vers LangGraph dès cette
+refactorisation plutôt qu'attendre :
+
+\begin{enumerate}
+  \item La gestion du niveau de catalogue (MIDDLE / FULL / LIGHT) crée un
+    état qui doit être porté entre les nœuds. LangGraph fournit ce mécanisme
+    nativement via le \texttt{StateGraph} et le \texttt{AgentState}.
+
+  \item La séparation CalculationAgent / WriterAgent implique un mécanisme
+    de routing conditionnel que LangGraph rend explicite et traçable.
+
+  \item L'agent va devoir couvrir d'autres domaines actuariels (tarification,
+    provisionnement). L'ajout d'un superviseur LangGraph pour router entre
+    agents spécialisés sera trivial à partir de cette architecture, alors qu'il
+    nécessiterait une réécriture depuis la boucle manuelle.
+\end{enumerate}
+
+\subsection{Limites de LangGraph}
+
+Pour mémoire, LangGraph rend le code moins lisible pour les cas simples :
+
+\begin{lstlisting}[language=Python, caption={Boucle manuelle (ancienne approche) — très lisible}]
+while steps < MAX_STEPS:
+    response = llm.chat.completions.create(messages=messages)
+    if response has tool_call:
+        result = call_tool(tool_name, params)
+        messages.append(result)
+    else:
+        yield final_message; break
+\end{lstlisting}
+
+LangGraph exige la connaissance de \texttt{StateGraph}, \texttt{TypedDict},
+\texttt{add\_conditional\_edges}, etc. La règle retenue est la suivante :
+\emph{dès que la logique de l'agent nécessite un diagramme pour être expliquée,
+LangGraph la rend plus lisible que la boucle manuelle}.
+
+\subsection{Structure du graphe}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node/.style={rectangle, draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, fill=backcolour},
+  decision/.style={diamond, draw, minimum width=2.5cm, minimum height=0.7cm, fill=yellow!20, aspect=2.5},
+  arrow/.style={->, thick, >=Latex},
+  label/.style={font=\footnotesize, midway, above}
+]
+
+\node[node] (start)   at (0, 8)    {START};
+\node[node] (router)  at (0, 7)    {router};
+\node[node] (calc)    at (-3, 5.5) {calculation\_node};
+\node[node] (writer)  at (3, 5.5)  {writer\_node};
+\node[node] (toolsc)  at (-3, 3.5) {tools\_node (calc)};
+\node[node] (toolsw)  at (3, 3.5)  {tools\_node (writer)};
+\node[node] (end)     at (0, 1.5)  {END};
+
+\draw[arrow] (start) -- (router);
+\draw[arrow] (router) -- node[label, left]{calculation} (calc);
+\draw[arrow] (router) -- node[label, right]{writer} (writer);
+
+\draw[arrow] (calc) -- node[label, left]{tools} (toolsc);
+\draw[arrow] (toolsc) -- (calc);
+\draw[arrow] (calc) -- node[label, above, sloped]{to\_writer} (writer);
+\draw[arrow] (calc) -- node[label, right, sloped]{end} (end);
+
+\draw[arrow] (writer) -- node[label, right]{tools} (toolsw);
+\draw[arrow] (toolsw) -- (writer);
+\draw[arrow] (writer) -- node[label, above, sloped]{end} (end);
+
+\end{tikzpicture}
+\caption{Graphe LangGraph de l'agent actuariel}
+\end{figure}
+
+\subsection{L'AgentState}
+
+L'état partagé entre tous les nœuds contient :
+
+\begin{lstlisting}[language=Python, caption={AgentState — état partagé du graphe}]
+class AgentState(TypedDict):
+    messages:          Annotated[list[AnyMessage], add_messages]
+    df_json:           str | None       # DataFrame sérialisé
+    data_store:        dict             # résultats accumulés
+    context_docs:      list[dict]       # documents uploadés
+    plan_established:  bool             # True après le 1er tool call
+    active_agent:      str              # "calculation" | "writer"
+    events:            list[dict]       # events canvas (rétrocompatibilité)
+    step_by_step:      bool
+    pending_tool_call: dict | None
+\end{lstlisting}
+
+\subsection{Rétrocompatibilité avec l'interface canvas}
+
+L'interface Dash (\texttt{canvas\_app.py}) attendait des événements sous forme
+de dictionnaires Python générés par un générateur. Pour préserver cette interface
+sans réécrire le canvas, un adaptateur \texttt{stream\_agent()} a été créé. Il
+expose exactement la même signature que l'ancien \texttt{writer\_agent.run\_agent\_loop()}
+et traduit les mises à jour d'état LangGraph en événements canvas identiques :
+
+\begin{lstlisting}[language=Python, caption={Interface identique à l'ancienne API}]
+# Avant
+for event in WriterAgent().run_agent_loop(history, df=df, ...):
+    process(event)
+
+# Après (même interface, même events)
+for event in stream_agent(history, df=df, ...):
+    process(event)
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Roadmap : superviseur multi-domaines}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Architecture cible future}
+
+La refactorisation actuelle pose les fondations d'une architecture
+multi-domaines. Lorsqu'un second domaine actuariel sera ajouté (tarification,
+provisionnement), il suffira d'ajouter un \texttt{SupervisorAgent} LangGraph
+qui route entre les agents spécialisés selon l'intent de la demande :
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node/.style={rectangle, draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, fill=backcolour},
+  arrow/.style={->, thick, >=Latex}
+]
+
+\node[node] (user)    at (0, 6)    {Demande utilisateur};
+\node[node] (super)   at (0, 4.5)  {SupervisorAgent};
+\node[node] (mort)    at (-4, 3)   {MortalityAgent};
+\node[node] (tarif)   at (-1.3, 3) {PricingAgent};
+\node[node] (prov)    at (1.3, 3)  {ProvAgent};
+\node[node] (writer)  at (4, 3)    {WriterAgent};
+
+\draw[arrow] (user) -- (super);
+\draw[arrow] (super) -- (mort);
+\draw[arrow] (super) -- (tarif);
+\draw[arrow] (super) -- (prov);
+\draw[arrow] (super) -- (writer);
+\draw[arrow] (mort) -- (writer);
+\draw[arrow] (tarif) -- (writer);
+\draw[arrow] (prov) -- (writer);
+
+\end{tikzpicture}
+\caption{Architecture cible multi-domaines avec superviseur LangGraph}
+\end{figure}
+
+\subsection{Ce qui sera trivial à migrer}
+
+\begin{itemize}
+  \item L'actuel \texttt{CalculationAgent} devient le \texttt{MortalityAgent}
+    sans modification.
+  \item Le \texttt{WriterAgent} reste transverse à tous les domaines.
+  \item Le \texttt{SupervisorAgent} reçoit le catalogue MIDDLE de chaque domaine
+    pour router correctement — quelques centaines de tokens supplémentaires.
+  \item Le \texttt{data\_store} devient l'interface contractuelle entre domaines :
+    un agent de tarification peut consommer l'exposition produite par
+    le MortalityAgent.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Bilan de la refactorisation}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Fichiers créés et modifiés}
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{lXl}
+\toprule
+Fichier & Rôle & Action\\
+\midrule
+\texttt{report\_agent/agents/state.py} & \texttt{AgentState} TypedDict & Créé\\
+\texttt{report\_agent/agents/tools\_node.py} & Exécution tools + step-by-step & Créé\\
+\texttt{report\_agent/agents/calculation.py} & Nœud CalculationAgent & Créé\\
+\texttt{report\_agent/agents/writer.py} & Nœud WriterAgent & Créé\\
+\texttt{report\_agent/agents/graph.py} & Graphe LangGraph + \texttt{stream\_agent()} & Créé\\
+\texttt{report\_agent/tools/catalogue.py} & 3 méthodes MIDDLE/FULL/LIGHT & Modifié\\
+\texttt{loader.py} & Paramètre \texttt{level} & Modifié\\
+\texttt{canvas\_app.py} & Worker thread → \texttt{stream\_agent()} & Modifié\\
+\texttt{run\_pipeline.py} & → \texttt{stream\_agent()} & Modifié\\
+\texttt{requirements.txt} & \texttt{langgraph}, \texttt{langchain-openai} & Modifié\\
+\bottomrule
+\end{tabularx}
+\caption{Bilan des fichiers impactés par la refactorisation}
+\end{table}
+
+\subsection{Résultats du pipeline de validation}
+
+Le pipeline complet a été exécuté sur le portefeuille de référence
+(530~345 lignes) après la refactorisation, avec les résultats suivants :
+
+\begin{itemize}
+  \item \textbf{40 étapes exécutées} sans crash ni erreur 429
+  \item \textbf{Lissage adaptatif} : Whittaker escaladé de $\lambda=1000$ à
+    $\lambda=50000$, puis basculement automatique sur Gompertz
+    (\texttt{n\_non\_monotone = 0}, $R^2 = 0.93$)
+  \item \textbf{Validation} : 46 âges avec intervalles de confiance Poisson
+    (largeur moyenne 0.023)
+  \item \textbf{Benchmarking} : facteur d'abattement global 0.496 vs TH0002
+  \item \textbf{PDF généré} avec succès
+  \item \textbf{Prompt système} : 4~553 tokens sur les tours d'exécution
+    (vs 17~000 auparavant, soit $-73\%$)
+\end{itemize}
+
+\end{document}
