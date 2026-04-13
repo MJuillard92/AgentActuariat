@@ -1,0 +1,2169 @@
+{
+  "session_id": "2604122136",
+  "timestamp": "2026-04-12T21:40:07.211923",
+  "csv_filename": "données_actif_decede.txt",
+  "n_tool_calls": 7,
+  "data_store": {
+    "_reasoning_log": [
+      "Pour construire la table de mortalité et préparer le rapport, je vais suivre un processus structuré, conforme aux outils disponibles. Voici comment nous allons procéder :\n\n### Étape 0 — Validation du dictionnaire de données\n\n> Voici comment j'interprète votre fichier :\n>\n> | Colonne       | Rôle détecté                        | Valeurs typiques          |\n> |---------------|-------------------------------------|---------------------------|\n> | `CTREFFET`    | Date d'entrée en observation        | dates                     |\n> | `DATE_SORTIE` | Date de sortie                      | dates                     |\n> | `CLINAISS`    | Date de naissance                   | dates                     |\n> | `STATUT`      | Cause de sortie (décès / vivant…)   | D, V, …                   |\n> | `SEXEREF`     | Sexe de l'assuré                    | H, F,…                    |\n> | `CDPROD`      | Produit / type de contrat           | valeurs de produit        |\n\n**Colonnes non reconnues** (à préciser) : Pas de colonnes non reconnues dans les données.\n\nEst-ce correct ? Y a-t-il des colonnes mal interprétées ou à exclure ? Une fois la validation obtenue, je pourrai passer à la phase de planification interne pour construire la table de mortalité.",
+      "### Phase de planification interne\n\n#### 1. OBJECTIF\nConstruire la table de mortalité d'expérience à partir des données fournies et générer un rapport de certification complet.\n\n#### 2. DONNÉES DISPONIBLES\n- 530,345 lignes avec les colonnes pertinentes pour l'analyse : date d'entrée (`CTREFFET`), date de sortie (`DATE_SORTIE`), date de naissance (`CLINAISS`), statut de sortie (`STATUT`), sexe (`SEXEREF`), et produit (`CDPROD`).\n- Assuré que les données sont complètes et bien formatées à partir de la confirmation du client.\n\n#### 3. SÉQUENCE D'ANALYSES\n1. `builder.exposure` — Calculer l'exposition centrale par âge.\n2. `builder.crude_rates` — Estimer les taux bruts de mortalité.\n3. `builder.diagnostics` — Évaluer la crédibilité et comparer les méthodes de lissage.\n4. `builder.smoothing` — Lisser les taux bruts de mortalité.\n5. `builder.validation` — Valider statistiquement la table lissée.\n6. `builder.benchmarking` — Comparer avec des tables de référence.\n7. `build_pdf.certification_report` — Générer le rapport de certification.\n\n#### 4. CRITÈRES DE QUALITÉ\n- Monotonie des taux lissés (n_non_monotone = 0).\n- Taux de mortalité crédibles dans la majorité des tranches d'âge.\n- Rapports AIC, BIC, MSE favorables pour le modèle de lissage retenu.\n\n#### 5. STRATÉGIE DE REPLI\n- Si l'exposition centrale échoue, revoir les configurations d'âge.\n- Si le lissage présente des violations de monotonie, tester différentes valeurs de lambda.\n- Si les validations échouent, investiguer les spécificités des données par segment.\n\n### Plan de communication au client\n\n> **Plan d'analyse :**\n>\n> **Séquence de calcul :**\n> - `builder.exposure` — Calcul de l'exposition centrale par âge\n> - `builder.crude_rates` — Estimation des taux bruts de mortalité\n> - `builder.diagnostics` — Crédibilité des données et comparaison des méthodes de lissage\n> - `builder.smoothing` — Application d'un lissage sur les taux de mortalité bruts\n> - `builder.validation` — Validation statistique de la table lissée\n> - `builder.benchmarking` — Comparaison avec une table de référence réglementaire\n> - `build_pdf.certification_report` — Génération du rapport final\n>\n> **Choix techniques :**\n> - *Lissage* : Whittaker-Henderson λ=100 — robuste sur petits effectifs\n> - *Plage d'âge* : 30-85 ans — ciblée pour des analyses crédibles\n> - *Table de référence* : TH0002 (hommes)\n>\n> **Livrables prévus :**\n> - Graphique : exposition par âge\n> - Graphique : taux bruts vs lissés\n> - Tableau : facteurs d'abattement par décennie\n>\n> Prêt à démarrer. Souhaitez-vous modifier un paramètre, ou dois-je commencer ?\n\nEn fonction de votre confirmation, je continuerai aux étapes de mise en oeuvre.",
+      "Le résultat de la première tentative de lissage avec la méthode Whittaker-Henderson et un lambda de 100 a produit 19 violations de monotonie. Cela signifie que la table actuelle n'est pas certifiable en l'état. Voici les étapes que je recommande :\n\n### Options de poursuite\n\n1. **Augmenter le paramètre lambda** : Essayons avec un lambda doublé (200) pour un lissage plus important, ce qui pourrait réduire les violations de monotonie.\n2. **Explorer une autre méthode de lissage** : Nous pourrions tester la méthode Gompertz pour les tranches d'âge où la crédibilité est faible.\n3. **Conserver la méthode actuelle avec mention** dans le rapport, bien que cette option soit moins courante.\n\n**Que souhaitez-vous faire ?**\n- A : Augmenter lambda (par exemple, lambda=200)\n- B : Tester le lisseur Gompertz\n- C : Accepter la table telle quelle avec note explicative.\n   \nRépondez par \"A\", \"B\", ou \"C\" pour me donner votre directive."
+    ],
+    "exposure_table": [
+      {
+        "age": 20,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 21,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 22,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 23,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 24,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 25,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 26,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 27,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 28,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 29,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 30,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 31,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 32,
+        "E_x": 0.3231,
+        "D_x": 0,
+        "mu_x": 0.0,
+        "q_x_brut": 0.0
+      },
+      {
+        "age": 33,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 34,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 35,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 36,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 37,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 38,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 39,
+        "E_x": 0.0,
+        "D_x": 0,
+        "mu_x": NaN,
+        "q_x_brut": NaN
+      },
+      {
+        "age": 40,
+        "E_x": 0.9719,
+        "D_x": 0,
+        "mu_x": 0.0,
+        "q_x_brut": 0.0
+      },
+      {
+        "age": 41,
+        "E_x": 1117.2402,
+        "D_x": 7,
+        "mu_x": 0.006265438452037875,
+        "q_x_brut": 0.006245851520793155
+      },
+      {
+        "age": 42,
+        "E_x": 2077.2895,
+        "D_x": 11,
+        "mu_x": 0.0052953619864774025,
+        "q_x_brut": 0.0052813662722155374
+      },
+      {
+        "age": 43,
+        "E_x": 3151.3648,
+        "D_x": 15,
+        "mu_x": 0.004759842437595349,
+        "q_x_brut": 0.004748532339457268
+      },
+      {
+        "age": 44,
+        "E_x": 4238.7926,
+        "D_x": 32,
+        "mu_x": 0.007549319573006142,
+        "q_x_brut": 0.007520895033619079
+      },
+      {
+        "age": 45,
+        "E_x": 5966.9979,
+        "D_x": 37,
+        "mu_x": 0.006200773040488271,
+        "q_x_brut": 0.006181587922008958
+      },
+      {
+        "age": 46,
+        "E_x": 7723.2361,
+        "D_x": 38,
+        "mu_x": 0.004920217291429156,
+        "q_x_brut": 0.004908132849814839
+      },
+      {
+        "age": 47,
+        "E_x": 9180.6078,
+        "D_x": 57,
+        "mu_x": 0.006208739249502792,
+        "q_x_brut": 0.006189504855668049
+      },
+      {
+        "age": 48,
+        "E_x": 10961.462,
+        "D_x": 64,
+        "mu_x": 0.005838637211721035,
+        "q_x_brut": 0.0058216254939947865
+      },
+      {
+        "age": 49,
+        "E_x": 12943.5099,
+        "D_x": 84,
+        "mu_x": 0.006489738910745097,
+        "q_x_brut": 0.006468726035776862
+      },
+      {
+        "age": 50,
+        "E_x": 20681.3333,
+        "D_x": 190,
+        "mu_x": 0.009187028560376509,
+        "q_x_brut": 0.009144956750374966
+      },
+      {
+        "age": 51,
+        "E_x": 32893.8344,
+        "D_x": 314,
+        "mu_x": 0.00954586189506606,
+        "q_x_brut": 0.009500444785445206
+      },
+      {
+        "age": 52,
+        "E_x": 42978.7899,
+        "D_x": 426,
+        "mu_x": 0.009911865859625587,
+        "q_x_brut": 0.00986290521452493
+      },
+      {
+        "age": 53,
+        "E_x": 54110.9651,
+        "D_x": 527,
+        "mu_x": 0.009739245993858541,
+        "q_x_brut": 0.009691973129419718
+      },
+      {
+        "age": 54,
+        "E_x": 65111.2882,
+        "D_x": 693,
+        "mu_x": 0.010643315768993713,
+        "q_x_brut": 0.010586876096271625
+      },
+      {
+        "age": 55,
+        "E_x": 76389.1773,
+        "D_x": 803,
+        "mu_x": 0.010511960314749788,
+        "q_x_brut": 0.010456902749779284
+      },
+      {
+        "age": 56,
+        "E_x": 89756.2053,
+        "D_x": 886,
+        "mu_x": 0.009871183798998118,
+        "q_x_brut": 0.009822623577840917
+      },
+      {
+        "age": 57,
+        "E_x": 99901.1526,
+        "D_x": 1050,
+        "mu_x": 0.010510389242798688,
+        "q_x_brut": 0.010455348105153583
+      },
+      {
+        "age": 58,
+        "E_x": 112449.4319,
+        "D_x": 1199,
+        "mu_x": 0.0106625705420132,
+        "q_x_brut": 0.010605926837985447
+      },
+      {
+        "age": 59,
+        "E_x": 124364.7775,
+        "D_x": 1394,
+        "mu_x": 0.011208961471778231,
+        "q_x_brut": 0.011146375124058139
+      },
+      {
+        "age": 60,
+        "E_x": 137515.7372,
+        "D_x": 1511,
+        "mu_x": 0.01098783332828631,
+        "q_x_brut": 0.010927687579709855
+      },
+      {
+        "age": 61,
+        "E_x": 150813.859,
+        "D_x": 1699,
+        "mu_x": 0.011265542910033816,
+        "q_x_brut": 0.011202324301520461
+      },
+      {
+        "age": 62,
+        "E_x": 162639.8275,
+        "D_x": 1877,
+        "mu_x": 0.011540838604383461,
+        "q_x_brut": 0.011474498578300962
+      },
+      {
+        "age": 63,
+        "E_x": 172879.3566,
+        "D_x": 2082,
+        "mu_x": 0.012043080451509511,
+        "q_x_brut": 0.011970852796702847
+      },
+      {
+        "age": 64,
+        "E_x": 182120.7118,
+        "D_x": 2178,
+        "mu_x": 0.011959101070827411,
+        "q_x_brut": 0.011887875236671563
+      },
+      {
+        "age": 65,
+        "E_x": 190818.4832,
+        "D_x": 2300,
+        "mu_x": 0.012053339703050305,
+        "q_x_brut": 0.011980989184257718
+      },
+      {
+        "age": 66,
+        "E_x": 199922.4285,
+        "D_x": 2576,
+        "mu_x": 0.012884997544632883,
+        "q_x_brut": 0.012802341352908364
+      },
+      {
+        "age": 67,
+        "E_x": 207480.4654,
+        "D_x": 2760,
+        "mu_x": 0.013302457145632015,
+        "q_x_brut": 0.01321437048485219
+      },
+      {
+        "age": 68,
+        "E_x": 213616.4216,
+        "D_x": 2903,
+        "mu_x": 0.013589779183931472,
+        "q_x_brut": 0.013497855015662252
+      },
+      {
+        "age": 69,
+        "E_x": 218144.6653,
+        "D_x": 3144,
+        "mu_x": 0.01441245421110261,
+        "q_x_brut": 0.014309091956651976
+      },
+      {
+        "age": 70,
+        "E_x": 222562.5927,
+        "D_x": 3303,
+        "mu_x": 0.014840768878842621,
+        "q_x_brut": 0.014731187429131043
+      },
+      {
+        "age": 71,
+        "E_x": 226266.5654,
+        "D_x": 3449,
+        "mu_x": 0.01524308284088802,
+        "q_x_brut": 0.015127495103395394
+      },
+      {
+        "age": 72,
+        "E_x": 227329.3607,
+        "D_x": 3646,
+        "mu_x": 0.016038403436244242,
+        "q_x_brut": 0.015910473089808863
+      },
+      {
+        "age": 73,
+        "E_x": 226946.7981,
+        "D_x": 3800,
+        "mu_x": 0.016744012394489922,
+        "q_x_brut": 0.016604610552106602
+      },
+      {
+        "age": 74,
+        "E_x": 224804.9035,
+        "D_x": 3978,
+        "mu_x": 0.017695343554476824,
+        "q_x_brut": 0.017539700368112476
+      },
+      {
+        "age": 75,
+        "E_x": 221749.306,
+        "D_x": 4184,
+        "mu_x": 0.018868153755810906,
+        "q_x_brut": 0.01869126441489921
+      },
+      {
+        "age": 76,
+        "E_x": 215951.3429,
+        "D_x": 4265,
+        "mu_x": 0.019749819299168317,
+        "q_x_brut": 0.019556069224138994
+      },
+      {
+        "age": 77,
+        "E_x": 207713.5606,
+        "D_x": 4315,
+        "mu_x": 0.02077380017008101,
+        "q_x_brut": 0.02055951121387578
+      },
+      {
+        "age": 78,
+        "E_x": 198805.5661,
+        "D_x": 4303,
+        "mu_x": 0.021644263213957064,
+        "q_x_brut": 0.02141170700675865
+      },
+      {
+        "age": 79,
+        "E_x": 190277.5469,
+        "D_x": 4126,
+        "mu_x": 0.021684113903773467,
+        "q_x_brut": 0.021450703648253966
+      },
+      {
+        "age": 80,
+        "E_x": 179503.2745,
+        "D_x": 3971,
+        "mu_x": 0.022122159117904057,
+        "q_x_brut": 0.02187925861423312
+      },
+      {
+        "age": 81,
+        "E_x": 165662.5681,
+        "D_x": 3686,
+        "mu_x": 0.02225004744394125,
+        "q_x_brut": 0.02200434084006242
+      },
+      {
+        "age": 82,
+        "E_x": 152452.2053,
+        "D_x": 3265,
+        "mu_x": 0.021416548174845233,
+        "q_x_brut": 0.021188842361492655
+      },
+      {
+        "age": 83,
+        "E_x": 140586.9076,
+        "D_x": 2870,
+        "mu_x": 0.02041441873247593,
+        "q_x_brut": 0.020207455225562776
+      },
+      {
+        "age": 84,
+        "E_x": 128389.6208,
+        "D_x": 2609,
+        "mu_x": 0.0203209572828976,
+        "q_x_brut": 0.020115878114643992
+      },
+      {
+        "age": 85,
+        "E_x": 115861.2676,
+        "D_x": 2142,
+        "mu_x": 0.018487627866583013,
+        "q_x_brut": 0.018317779979941884
+      },
+      {
+        "age": 86,
+        "E_x": 104418.0698,
+        "D_x": 1737,
+        "mu_x": 0.01663505179778021,
+        "q_x_brut": 0.016497453365821313
+      },
+      {
+        "age": 87,
+        "E_x": 94131.0335,
+        "D_x": 1428,
+        "mu_x": 0.015170342301758863,
+        "q_x_brut": 0.015055852340780773
+      },
+      {
+        "age": 88,
+        "E_x": 84593.9493,
+        "D_x": 1075,
+        "mu_x": 0.012707764660038826,
+        "q_x_brut": 0.012627361958608474
+      },
+      {
+        "age": 89,
+        "E_x": 75629.243,
+        "D_x": 770,
+        "mu_x": 0.010181246957083518,
+        "q_x_brut": 0.010129593509746515
+      },
+      {
+        "age": 90,
+        "E_x": 67128.115,
+        "D_x": 503,
+        "mu_x": 0.007493134584174331,
+        "q_x_brut": 0.007465131039655626
+      }
+    ],
+    "_call_log": [
+      {
+        "step": 1,
+        "tool": "builder",
+        "function_name": "exposure",
+        "params": {
+          "col_entry": "CTREFFET",
+          "col_exit": "DATE_SORTIE",
+          "col_birth": "CLINAISS",
+          "col_status": "STATUT",
+          "death_value": "D"
+        },
+        "result_summary": {
+          "exposure_table": "[71 lignes]",
+          "age_min": "20",
+          "age_max": "90",
+          "total_exposure": "6082714.5",
+          "total_deaths": "94282",
+          "lignes_exclues": "3",
+          "note": "3 ligne(s) avec dates non parsables exclues du calcul."
+        },
+        "has_error": false
+      },
+      {
+        "step": 2,
+        "tool": "builder",
+        "function_name": "crude_rates",
+        "params": {},
+        "result_summary": {
+          "qx_table": "[71 lignes]",
+          "method": "central"
+        },
+        "has_error": false
+      },
+      {
+        "step": 3,
+        "tool": "builder",
+        "function_name": "diagnostics",
+        "params": {},
+        "result_summary": {
+          "low_credibility_ages": "[2 lignes]",
+          "n_low": "2",
+          "pct_low": "29.577464788732396",
+          "zero_exposure_ages": "[19 lignes]",
+          "recommendation": "mixed",
+          "recommendation_reason": "30% of ages have low credibility (E_x < 10). Consider smooth_whittaker() with high lambda, or smooth_gompertz() for the sparse age range and smooth_whittaker() elsewhere."
+        },
+        "has_error": false
+      },
+      {
+        "step": 4,
+        "tool": "builder",
+        "function_name": "smoothing",
+        "params": {},
+        "result_summary": {
+          "smoothed_table": "[50 lignes]",
+          "method": "whittaker",
+          "n_non_monotone": "19"
+        },
+        "has_error": false
+      },
+      {
+        "step": 5,
+        "tool": "builder",
+        "function_name": "validation",
+        "params": {
+          "function_name": "confidence_intervals",
+          "qx_col": "q_x_lisse"
+        },
+        "result_summary": {
+          "ci_table": "[71 lignes]",
+          "alpha": "0.05"
+        },
+        "has_error": false
+      },
+      {
+        "step": 6,
+        "tool": "builder",
+        "function_name": "benchmarking",
+        "params": {
+          "function_name": "abatement_factors",
+          "reference_name": "TH0002",
+          "sexe": "H"
+        },
+        "result_summary": {
+          "abatement_table": "[50 lignes]",
+          "smr_global": "0.31910341260851804",
+          "reference_name": "TH0002",
+          "summary": "{'global_factor': 0.31910341260851804, 'min_factor': 0.0372391053186034, 'max_factor': 3.1238438327783347, 'age_min_factor': 90, 'age_max_factor': 41}"
+        },
+        "has_error": false
+      },
+      {
+        "step": 7,
+        "tool": "build_pdf",
+        "function_name": "certification_report",
+        "params": {},
+        "result_summary": {
+          "succes": "True",
+          "output_path": "/tmp/rapport_certification.pdf",
+          "nb_pages_estimees": "2"
+        },
+        "has_error": false
+      }
+    ],
+    "qx_table": [
+      {
+        "age": 20,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 21,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 22,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 23,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 24,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 25,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 26,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 27,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 28,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 29,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 30,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 31,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 32,
+        "E_x": 0.3231,
+        "D_x": 0,
+        "qx": 0.0,
+        "method_name": "central"
+      },
+      {
+        "age": 33,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 34,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 35,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 36,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 37,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 38,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 39,
+        "E_x": 0.0,
+        "D_x": 0,
+        "qx": NaN,
+        "method_name": "central"
+      },
+      {
+        "age": 40,
+        "E_x": 0.9719,
+        "D_x": 0,
+        "qx": 0.0,
+        "method_name": "central"
+      },
+      {
+        "age": 41,
+        "E_x": 1117.2402,
+        "D_x": 7,
+        "qx": 0.006245851779413947,
+        "method_name": "central"
+      },
+      {
+        "age": 42,
+        "E_x": 2077.2895,
+        "D_x": 11,
+        "qx": 0.005281366342507199,
+        "method_name": "central"
+      },
+      {
+        "age": 43,
+        "E_x": 3151.3648,
+        "D_x": 15,
+        "qx": 0.0047485323674435476,
+        "method_name": "central"
+      },
+      {
+        "age": 44,
+        "E_x": 4238.7926,
+        "D_x": 32,
+        "qx": 0.007520895047411491,
+        "method_name": "central"
+      },
+      {
+        "age": 45,
+        "E_x": 5966.9979,
+        "D_x": 37,
+        "qx": 0.006181587970147673,
+        "method_name": "central"
+      },
+      {
+        "age": 46,
+        "E_x": 7723.2361,
+        "D_x": 38,
+        "qx": 0.004908132874938187,
+        "method_name": "central"
+      },
+      {
+        "age": 47,
+        "E_x": 9180.6078,
+        "D_x": 57,
+        "qx": 0.00618950485760017,
+        "method_name": "central"
+      },
+      {
+        "age": 48,
+        "E_x": 10961.462,
+        "D_x": 64,
+        "qx": 0.005821625500519012,
+        "method_name": "central"
+      },
+      {
+        "age": 49,
+        "E_x": 12943.5099,
+        "D_x": 84,
+        "qx": 0.006468726048085571,
+        "method_name": "central"
+      },
+      {
+        "age": 50,
+        "E_x": 20681.3333,
+        "D_x": 190,
+        "qx": 0.009144956765046786,
+        "method_name": "central"
+      },
+      {
+        "age": 51,
+        "E_x": 32893.8344,
+        "D_x": 314,
+        "qx": 0.009500444773955286,
+        "method_name": "central"
+      },
+      {
+        "age": 52,
+        "E_x": 42978.7899,
+        "D_x": 426,
+        "qx": 0.00986290520766353,
+        "method_name": "central"
+      },
+      {
+        "age": 53,
+        "E_x": 54110.9651,
+        "D_x": 527,
+        "qx": 0.009691973128065468,
+        "method_name": "central"
+      },
+      {
+        "age": 54,
+        "E_x": 65111.2882,
+        "D_x": 693,
+        "qx": 0.010586876089607511,
+        "method_name": "central"
+      },
+      {
+        "age": 55,
+        "E_x": 76389.1773,
+        "D_x": 803,
+        "qx": 0.010456902746489138,
+        "method_name": "central"
+      },
+      {
+        "age": 56,
+        "E_x": 89756.2053,
+        "D_x": 886,
+        "qx": 0.009822623582067092,
+        "method_name": "central"
+      },
+      {
+        "age": 57,
+        "E_x": 99901.1526,
+        "D_x": 1050,
+        "qx": 0.01045534810881621,
+        "method_name": "central"
+      },
+      {
+        "age": 58,
+        "E_x": 112449.4319,
+        "D_x": 1199,
+        "qx": 0.010605926837606638,
+        "method_name": "central"
+      },
+      {
+        "age": 59,
+        "E_x": 124364.7775,
+        "D_x": 1394,
+        "qx": 0.011146375128480823,
+        "method_name": "central"
+      },
+      {
+        "age": 60,
+        "E_x": 137515.7372,
+        "D_x": 1511,
+        "qx": 0.010927687577048428,
+        "method_name": "central"
+      },
+      {
+        "age": 61,
+        "E_x": 150813.859,
+        "D_x": 1699,
+        "qx": 0.011202324301571087,
+        "method_name": "central"
+      },
+      {
+        "age": 62,
+        "E_x": 162639.8275,
+        "D_x": 1877,
+        "qx": 0.01147449857938121,
+        "method_name": "central"
+      },
+      {
+        "age": 63,
+        "E_x": 172879.3566,
+        "D_x": 2082,
+        "qx": 0.011970852797051457,
+        "method_name": "central"
+      },
+      {
+        "age": 64,
+        "E_x": 182120.7118,
+        "D_x": 2178,
+        "qx": 0.011887875239345091,
+        "method_name": "central"
+      },
+      {
+        "age": 65,
+        "E_x": 190818.4832,
+        "D_x": 2300,
+        "qx": 0.011980989186171409,
+        "method_name": "central"
+      },
+      {
+        "age": 66,
+        "E_x": 199922.4285,
+        "D_x": 2576,
+        "qx": 0.012802341351231705,
+        "method_name": "central"
+      },
+      {
+        "age": 67,
+        "E_x": 207480.4654,
+        "D_x": 2760,
+        "qx": 0.013214370487043325,
+        "method_name": "central"
+      },
+      {
+        "age": 68,
+        "E_x": 213616.4216,
+        "D_x": 2903,
+        "qx": 0.013497855017483573,
+        "method_name": "central"
+      },
+      {
+        "age": 69,
+        "E_x": 218144.6653,
+        "D_x": 3144,
+        "qx": 0.014309091956504871,
+        "method_name": "central"
+      },
+      {
+        "age": 70,
+        "E_x": 222562.5927,
+        "D_x": 3303,
+        "qx": 0.014731187432067472,
+        "method_name": "central"
+      },
+      {
+        "age": 71,
+        "E_x": 226266.5654,
+        "D_x": 3449,
+        "qx": 0.015127495101151966,
+        "method_name": "central"
+      },
+      {
+        "age": 72,
+        "E_x": 227329.3607,
+        "D_x": 3646,
+        "qx": 0.015910473090630983,
+        "method_name": "central"
+      },
+      {
+        "age": 73,
+        "E_x": 226946.7981,
+        "D_x": 3800,
+        "qx": 0.016604610550909782,
+        "method_name": "central"
+      },
+      {
+        "age": 74,
+        "E_x": 224804.9035,
+        "D_x": 3978,
+        "qx": 0.017539700367397826,
+        "method_name": "central"
+      },
+      {
+        "age": 75,
+        "E_x": 221749.306,
+        "D_x": 4184,
+        "qx": 0.01869126441112723,
+        "method_name": "central"
+      },
+      {
+        "age": 76,
+        "E_x": 215951.3429,
+        "D_x": 4265,
+        "qx": 0.01955606922555675,
+        "method_name": "central"
+      },
+      {
+        "age": 77,
+        "E_x": 207713.5606,
+        "D_x": 4315,
+        "qx": 0.020559511211421966,
+        "method_name": "central"
+      },
+      {
+        "age": 78,
+        "E_x": 198805.5661,
+        "D_x": 4303,
+        "qx": 0.021411707001500857,
+        "method_name": "central"
+      },
+      {
+        "age": 79,
+        "E_x": 190277.5469,
+        "D_x": 4126,
+        "qx": 0.021450703646658686,
+        "method_name": "central"
+      },
+      {
+        "age": 80,
+        "E_x": 179503.2745,
+        "D_x": 3971,
+        "qx": 0.021879258610561503,
+        "method_name": "central"
+      },
+      {
+        "age": 81,
+        "E_x": 165662.5681,
+        "D_x": 3686,
+        "qx": 0.022004340840592884,
+        "method_name": "central"
+      },
+      {
+        "age": 82,
+        "E_x": 152452.2053,
+        "D_x": 3265,
+        "qx": 0.021188842366829053,
+        "method_name": "central"
+      },
+      {
+        "age": 83,
+        "E_x": 140586.9076,
+        "D_x": 2870,
+        "qx": 0.02020745522521228,
+        "method_name": "central"
+      },
+      {
+        "age": 84,
+        "E_x": 128389.6208,
+        "D_x": 2609,
+        "qx": 0.02011587811583293,
+        "method_name": "central"
+      },
+      {
+        "age": 85,
+        "E_x": 115861.2676,
+        "D_x": 2142,
+        "qx": 0.01831777998384465,
+        "method_name": "central"
+      },
+      {
+        "age": 86,
+        "E_x": 104418.0698,
+        "D_x": 1737,
+        "qx": 0.016497453368202186,
+        "method_name": "central"
+      },
+      {
+        "age": 87,
+        "E_x": 94131.0335,
+        "D_x": 1428,
+        "qx": 0.015055852346919418,
+        "method_name": "central"
+      },
+      {
+        "age": 88,
+        "E_x": 84593.9493,
+        "D_x": 1075,
+        "qx": 0.012627361965989126,
+        "method_name": "central"
+      },
+      {
+        "age": 89,
+        "E_x": 75629.243,
+        "D_x": 770,
+        "qx": 0.010129593507648638,
+        "method_name": "central"
+      },
+      {
+        "age": 90,
+        "E_x": 67128.115,
+        "D_x": 503,
+        "qx": 0.007465131038518202,
+        "method_name": "central"
+      }
+    ],
+    "diagnostics": {
+      "low_credibility_ages": [
+        32,
+        40
+      ],
+      "n_low": 2,
+      "pct_low": 29.577464788732396,
+      "zero_exposure_ages": [
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39
+      ],
+      "recommendation": "mixed",
+      "recommendation_reason": "30% of ages have low credibility (E_x < 10). Consider smooth_whittaker() with high lambda, or smooth_gompertz() for the sparse age range and smooth_whittaker() elsewhere."
+    },
+    "smoothed_table": [
+      {
+        "age": 41,
+        "q_x_lisse": 0.0061829074779108616
+      },
+      {
+        "age": 42,
+        "q_x_lisse": 0.0052277638308013095
+      },
+      {
+        "age": 43,
+        "q_x_lisse": 0.004949778239286343
+      },
+      {
+        "age": 44,
+        "q_x_lisse": 0.007264061668180958
+      },
+      {
+        "age": 45,
+        "q_x_lisse": 0.006182996687233158
+      },
+      {
+        "age": 46,
+        "q_x_lisse": 0.0049817275966342065
+      },
+      {
+        "age": 47,
+        "q_x_lisse": 0.006117207957805677
+      },
+      {
+        "age": 48,
+        "q_x_lisse": 0.005839095257865898
+      },
+      {
+        "age": 49,
+        "q_x_lisse": 0.00649888972666428
+      },
+      {
+        "age": 50,
+        "q_x_lisse": 0.00910909520958407
+      },
+      {
+        "age": 51,
+        "q_x_lisse": 0.009510057352520074
+      },
+      {
+        "age": 52,
+        "q_x_lisse": 0.009858290640936497
+      },
+      {
+        "age": 53,
+        "q_x_lisse": 0.009698404386839839
+      },
+      {
+        "age": 54,
+        "q_x_lisse": 0.010582771245042782
+      },
+      {
+        "age": 55,
+        "q_x_lisse": 0.010455202408147998
+      },
+      {
+        "age": 56,
+        "q_x_lisse": 0.009826395535500661
+      },
+      {
+        "age": 57,
+        "q_x_lisse": 0.010452704757982519
+      },
+      {
+        "age": 58,
+        "q_x_lisse": 0.010607674216750674
+      },
+      {
+        "age": 59,
+        "q_x_lisse": 0.011144433879251849
+      },
+      {
+        "age": 60,
+        "q_x_lisse": 0.01092894186926327
+      },
+      {
+        "age": 61,
+        "q_x_lisse": 0.01120185310655638
+      },
+      {
+        "age": 62,
+        "q_x_lisse": 0.011475104555728057
+      },
+      {
+        "age": 63,
+        "q_x_lisse": 0.011969945556967706
+      },
+      {
+        "age": 64,
+        "q_x_lisse": 0.011888007331224209
+      },
+      {
+        "age": 65,
+        "q_x_lisse": 0.011981845327130399
+      },
+      {
+        "age": 66,
+        "q_x_lisse": 0.012801593509639362
+      },
+      {
+        "age": 67,
+        "q_x_lisse": 0.013214221500634702
+      },
+      {
+        "age": 68,
+        "q_x_lisse": 0.013498572495995238
+      },
+      {
+        "age": 69,
+        "q_x_lisse": 0.014308483610664306
+      },
+      {
+        "age": 70,
+        "q_x_lisse": 0.014731188941502242
+      },
+      {
+        "age": 71,
+        "q_x_lisse": 0.015127882257683335
+      },
+      {
+        "age": 72,
+        "q_x_lisse": 0.015910114373140348
+      },
+      {
+        "age": 73,
+        "q_x_lisse": 0.016604778931025032
+      },
+      {
+        "age": 74,
+        "q_x_lisse": 0.0175398858577731
+      },
+      {
+        "age": 75,
+        "q_x_lisse": 0.01869084210756753
+      },
+      {
+        "age": 76,
+        "q_x_lisse": 0.019556406722096097
+      },
+      {
+        "age": 77,
+        "q_x_lisse": 0.020559659364477408
+      },
+      {
+        "age": 78,
+        "q_x_lisse": 0.021410784340925165
+      },
+      {
+        "age": 79,
+        "q_x_lisse": 0.02145169994059841
+      },
+      {
+        "age": 80,
+        "q_x_lisse": 0.02187922738771055
+      },
+      {
+        "age": 81,
+        "q_x_lisse": 0.022003501484536416
+      },
+      {
+        "age": 82,
+        "q_x_lisse": 0.02118859040940252
+      },
+      {
+        "age": 83,
+        "q_x_lisse": 0.02021008619138683
+      },
+      {
+        "age": 84,
+        "q_x_lisse": 0.02011261215192007
+      },
+      {
+        "age": 85,
+        "q_x_lisse": 0.018318623662617804
+      },
+      {
+        "age": 86,
+        "q_x_lisse": 0.016499364042815174
+      },
+      {
+        "age": 87,
+        "q_x_lisse": 0.015053679970187082
+      },
+      {
+        "age": 88,
+        "q_x_lisse": 0.01262852990640347
+      },
+      {
+        "age": 89,
+        "q_x_lisse": 0.010127938971812925
+      },
+      {
+        "age": 90,
+        "q_x_lisse": 0.007466068225326796
+      }
+    ],
+    "validation": {
+      "ci_table": [
+        {
+          "age": 20,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 21,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 22,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 23,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 24,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 25,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 26,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 27,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 28,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 29,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 30,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 31,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 32,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 33,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 34,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 35,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 36,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 37,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 38,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 39,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 40,
+          "qx": NaN,
+          "ci_lower": NaN,
+          "ci_upper": NaN,
+          "width": NaN
+        },
+        {
+          "age": 41,
+          "qx": 0.0061829074779108616,
+          "ci_lower": 0.00251586121923264,
+          "ci_upper": 0.012826232055742515,
+          "width": 0.010310370836509875
+        },
+        {
+          "age": 42,
+          "qx": 0.0052277638308013095,
+          "ci_lower": 0.0026399348867841566,
+          "ci_upper": 0.00943012034187185,
+          "width": 0.006790185455087694
+        },
+        {
+          "age": 43,
+          "qx": 0.004949778239286343,
+          "ci_lower": 0.002660502269425047,
+          "ci_upper": 0.007819900532288426,
+          "width": 0.0051593982628633794
+        },
+        {
+          "age": 44,
+          "qx": 0.007264061668180958,
+          "ci_lower": 0.00515041987835263,
+          "ci_upper": 0.010600798008839396,
+          "width": 0.005450378130486766
+        },
+        {
+          "age": 45,
+          "qx": 0.006182996687233158,
+          "ci_lower": 0.004356399738054018,
+          "ci_upper": 0.008510527570564475,
+          "width": 0.004154127832510457
+        },
+        {
+          "age": 46,
+          "qx": 0.0049817275966342065,
+          "ci_lower": 0.0034757840387494854,
+          "ci_upper": 0.006730629840572266,
+          "width": 0.003254845801822781
+        },
+        {
+          "age": 47,
+          "qx": 0.006117207957805677,
+          "ci_lower": 0.004691399323822565,
+          "ci_upper": 0.008011874319423518,
+          "width": 0.0033204749956009527
+        },
+        {
+          "age": 48,
+          "qx": 0.005839095257865898,
+          "ci_lower": 0.004486368158303722,
+          "ci_upper": 0.007428083782602957,
+          "width": 0.002941715624299235
+        },
+        {
+          "age": 49,
+          "qx": 0.00649888972666428,
+          "ci_lower": 0.0051630950940704246,
+          "ci_upper": 0.008002546146347211,
+          "width": 0.002839451052276787
+        },
+        {
+          "age": 50,
+          "qx": 0.00910909520958407,
+          "ci_lower": 0.007895764348695211,
+          "ci_upper": 0.010534424189517222,
+          "width": 0.0026386598408220108
+        },
+        {
+          "age": 51,
+          "qx": 0.009510057352520074,
+          "ci_lower": 0.008482918882933732,
+          "ci_upper": 0.010605636098500182,
+          "width": 0.0021227172155664498
+        },
+        {
+          "age": 52,
+          "qx": 0.009858290640936497,
+          "ci_lower": 0.008952542388785067,
+          "ci_upper": 0.010840131739320302,
+          "width": 0.0018875893505352348
+        },
+        {
+          "age": 53,
+          "qx": 0.009698404386839839,
+          "ci_lower": 0.008885661736891759,
+          "ci_upper": 0.010551329601139359,
+          "width": 0.0016656678642475997
+        },
+        {
+          "age": 54,
+          "qx": 0.010582771245042782,
+          "ci_lower": 0.009817031007875343,
+          "ci_upper": 0.011400630636292042,
+          "width": 0.0015835996284166987
+        },
+        {
+          "age": 55,
+          "qx": 0.010455202408147998,
+          "ci_lower": 0.009749533454975201,
+          "ci_upper": 0.011201677361272977,
+          "width": 0.001452143906297776
+        },
+        {
+          "age": 56,
+          "qx": 0.009826395535500661,
+          "ci_lower": 0.009189336681128313,
+          "ci_upper": 0.010487775547657563,
+          "width": 0.0012984388665292501
+        },
+        {
+          "age": 57,
+          "qx": 0.010452704757982519,
+          "ci_lower": 0.009835505196772343,
+          "ci_upper": 0.011103751461734368,
+          "width": 0.0012682462649620252
+        },
+        {
+          "age": 58,
+          "qx": 0.010607674216750674,
+          "ci_lower": 0.010016997265732575,
+          "ci_upper": 0.011220204160052316,
+          "width": 0.0012032068943197416
+        },
+        {
+          "age": 59,
+          "qx": 0.011144433879251849,
+          "ci_lower": 0.010571921509530235,
+          "ci_upper": 0.011743702675800716,
+          "width": 0.0011717811662704802
+        },
+        {
+          "age": 60,
+          "qx": 0.01092894186926327,
+          "ci_lower": 0.010386414374963682,
+          "ci_upper": 0.0114896507712553,
+          "width": 0.001103236396291618
+        },
+        {
+          "age": 61,
+          "qx": 0.01120185310655638,
+          "ci_lower": 0.01067874592491036,
+          "ci_upper": 0.01174474687298721,
+          "width": 0.0010660009480768506
+        },
+        {
+          "age": 62,
+          "qx": 0.011475104555728057,
+          "ci_lower": 0.010964038805058252,
+          "ci_upper": 0.012002414218804991,
+          "width": 0.0010383754137467394
+        },
+        {
+          "age": 63,
+          "qx": 0.011969945556967706,
+          "ci_lower": 0.011465047012337415,
+          "ci_upper": 0.01249305482359564,
+          "width": 0.0010280078112582247
+        },
+        {
+          "age": 64,
+          "qx": 0.011888007331224209,
+          "ci_lower": 0.011396635115500264,
+          "ci_upper": 0.012394680174199868,
+          "width": 0.0009980450586996037
+        },
+        {
+          "age": 65,
+          "qx": 0.011981845327130399,
+          "ci_lower": 0.011499099297682336,
+          "ci_upper": 0.012477728295196444,
+          "width": 0.0009786289975141083
+        },
+        {
+          "age": 66,
+          "qx": 0.012801593509639362,
+          "ci_lower": 0.012315709048219547,
+          "ci_upper": 0.013303113576009884,
+          "width": 0.0009874045277903365
+        },
+        {
+          "age": 67,
+          "qx": 0.013214221500634702,
+          "ci_lower": 0.01272905088475762,
+          "ci_upper": 0.013713298525364626,
+          "width": 0.0009842476406070055
+        },
+        {
+          "age": 68,
+          "qx": 0.013498572495995238,
+          "ci_lower": 0.013014445222967352,
+          "ci_upper": 0.013994471336887804,
+          "width": 0.0009800261139204514
+        },
+        {
+          "age": 69,
+          "qx": 0.014308483610664306,
+          "ci_lower": 0.013816686736635608,
+          "ci_upper": 0.014814401409035116,
+          "width": 0.0009977146723995078
+        },
+        {
+          "age": 70,
+          "qx": 0.014731188941502242,
+          "ci_lower": 0.014236609003850487,
+          "ci_upper": 0.015238399355856358,
+          "width": 0.0010017903520058713
+        },
+        {
+          "age": 71,
+          "qx": 0.015127882257683335,
+          "ci_lower": 0.014630485937055404,
+          "ci_upper": 0.015636917635495906,
+          "width": 0.001006431698440502
+        },
+        {
+          "age": 72,
+          "qx": 0.015910114373140348,
+          "ci_lower": 0.01540214108891147,
+          "ci_upper": 0.016431135360098104,
+          "width": 0.001028994271186634
+        },
+        {
+          "age": 73,
+          "qx": 0.016604778931025032,
+          "ci_lower": 0.01608505659881221,
+          "ci_upper": 0.017136493614485104,
+          "width": 0.0010514370156728958
+        },
+        {
+          "age": 74,
+          "qx": 0.0175398858577731,
+          "ci_lower": 0.017003461541859388,
+          "ci_upper": 0.018088356325206,
+          "width": 0.0010848947833466127
+        },
+        {
+          "age": 75,
+          "qx": 0.01869084210756753,
+          "ci_lower": 0.018134277932516873,
+          "ci_upper": 0.019260802627955154,
+          "width": 0.0011265246954382802
+        },
+        {
+          "age": 76,
+          "qx": 0.019556406722096097,
+          "ci_lower": 0.018979080017938688,
+          "ci_upper": 0.02014591968037427,
+          "width": 0.0011668396624355815
+        },
+        {
+          "age": 77,
+          "qx": 0.020559659364477408,
+          "ci_lower": 0.019956716148526676,
+          "ci_upper": 0.0211756448168422,
+          "width": 0.001218928668315522
+        },
+        {
+          "age": 78,
+          "qx": 0.021410784340925165,
+          "ci_lower": 0.02078332387459947,
+          "ci_upper": 0.02205399771939609,
+          "width": 0.0012706738447966215
+        },
+        {
+          "age": 79,
+          "qx": 0.02145169994059841,
+          "ci_lower": 0.020807924844200354,
+          "ci_upper": 0.02210801353845715,
+          "width": 0.0013000886942567957
+        },
+        {
+          "age": 80,
+          "qx": 0.02187922738771055,
+          "ci_lower": 0.021211201676654245,
+          "ci_upper": 0.022562704363825903,
+          "width": 0.0013515026871716573
+        },
+        {
+          "age": 81,
+          "qx": 0.022003501484536416,
+          "ci_lower": 0.021307213661188817,
+          "ci_upper": 0.022718140784336982,
+          "width": 0.0014109271231481646
+        },
+        {
+          "age": 82,
+          "qx": 0.02118859040940252,
+          "ci_lower": 0.0204756399545456,
+          "ci_upper": 0.02192020427522534,
+          "width": 0.001444564320679742
+        },
+        {
+          "age": 83,
+          "qx": 0.02021008619138683,
+          "ci_lower": 0.01948203379213642,
+          "ci_upper": 0.020952623178086438,
+          "width": 0.0014705893859500163
+        },
+        {
+          "age": 84,
+          "qx": 0.02011261215192007,
+          "ci_lower": 0.019358775705846765,
+          "ci_upper": 0.020894614278295864,
+          "width": 0.0015358385724490997
+        },
+        {
+          "age": 85,
+          "qx": 0.018318623662617804,
+          "ci_lower": 0.017556959194807154,
+          "ci_upper": 0.01910269419171917,
+          "width": 0.0015457349969120182
+        },
+        {
+          "age": 86,
+          "qx": 0.016499364042815174,
+          "ci_lower": 0.015736726647074706,
+          "ci_upper": 0.017285052375143883,
+          "width": 0.0015483257280691776
+        },
+        {
+          "age": 87,
+          "qx": 0.015053679970187082,
+          "ci_lower": 0.014290532000740042,
+          "ci_upper": 0.015851109307478017,
+          "width": 0.0015605773067379758
+        },
+        {
+          "age": 88,
+          "qx": 0.01262852990640347,
+          "ci_lower": 0.01188814420725215,
+          "ci_upper": 0.013400129984458942,
+          "width": 0.0015119857772067924
+        },
+        {
+          "age": 89,
+          "qx": 0.010127938971812925,
+          "ci_lower": 0.009429983667873731,
+          "ci_upper": 0.010867023243586793,
+          "width": 0.0014370395757130616
+        },
+        {
+          "age": 90,
+          "qx": 0.007466068225326796,
+          "ci_lower": 0.0068291027513621705,
+          "ci_upper": 0.008144159381055838,
+          "width": 0.0013150566296936672
+        }
+      ],
+      "alpha": 0.05
+    },
+    "benchmarking": {
+      "abatement_table": [
+        {
+          "age": 41,
+          "qx_exp": 0.0061829074779108616,
+          "qx_ref": 0.0019792626676896994,
+          "abatement_factor": 3.1238438327783347
+        },
+        {
+          "age": 42,
+          "qx_exp": 0.0052277638308013095,
+          "qx_ref": 0.002129065602016385,
+          "abatement_factor": 2.455426373828136
+        },
+        {
+          "age": 43,
+          "qx_exp": 0.004949778239286343,
+          "qx_ref": 0.00229020655605072,
+          "abatement_factor": 2.1612802680216947
+        },
+        {
+          "age": 44,
+          "qx_exp": 0.007264061668180958,
+          "qx_ref": 0.0024635436617877126,
+          "abatement_factor": 2.9486230671916194
+        },
+        {
+          "age": 45,
+          "qx_exp": 0.006182996687233158,
+          "qx_ref": 0.002649999999999999,
+          "abatement_factor": 2.333206297069117
+        },
+        {
+          "age": 46,
+          "qx_exp": 0.0049817275966342065,
+          "qx_ref": 0.002871677968822272,
+          "abatement_factor": 1.7347793348420975
+        },
+        {
+          "age": 47,
+          "qx_exp": 0.006117207957805677,
+          "qx_ref": 0.003111899757214797,
+          "abatement_factor": 1.9657471111089653
+        },
+        {
+          "age": 48,
+          "qx_exp": 0.005839095257865898,
+          "qx_ref": 0.0033722165939536245,
+          "abatement_factor": 1.7315303140181981
+        },
+        {
+          "age": 49,
+          "qx_exp": 0.00649888972666428,
+          "qx_ref": 0.0036543094713032106,
+          "abatement_factor": 1.77841799598506
+        },
+        {
+          "age": 50,
+          "qx_exp": 0.00910909520958407,
+          "qx_ref": 0.003959999999999999,
+          "abatement_factor": 2.300276568076786
+        },
+        {
+          "age": 51,
+          "qx_exp": 0.009510057352520074,
+          "qx_ref": 0.004328663675943616,
+          "abatement_factor": 2.1969961319406397
+        },
+        {
+          "age": 52,
+          "qx_exp": 0.009858290640936497,
+          "qx_ref": 0.004731648792786289,
+          "abatement_factor": 2.0834789462747345
+        },
+        {
+          "age": 53,
+          "qx_exp": 0.009698404386839839,
+          "qx_ref": 0.005172150569862751,
+          "abatement_factor": 1.8751202726677767
+        },
+        {
+          "age": 54,
+          "qx_exp": 0.010582771245042782,
+          "qx_ref": 0.005653661691483831,
+          "abatement_factor": 1.8718437399577197
+        },
+        {
+          "age": 55,
+          "qx_exp": 0.010455202408147998,
+          "qx_ref": 0.0061800000000000015,
+          "abatement_factor": 1.6917803249430414
+        },
+        {
+          "age": 56,
+          "qx_exp": 0.009826395535500661,
+          "qx_ref": 0.0067321292832459865,
+          "abatement_factor": 1.4596266830399807
+        },
+        {
+          "age": 57,
+          "qx_exp": 0.010452704757982519,
+          "qx_ref": 0.007333586518824943,
+          "abatement_factor": 1.4253196210545767
+        },
+        {
+          "age": 58,
+          "qx_exp": 0.010607674216750674,
+          "qx_ref": 0.007988778730517699,
+          "abatement_factor": 1.3278217578149474
+        },
+        {
+          "age": 59,
+          "qx_exp": 0.011144433879251849,
+          "qx_ref": 0.008702506671373936,
+          "abatement_factor": 1.280600440779942
+        },
+        {
+          "age": 60,
+          "qx_exp": 0.01092894186926327,
+          "qx_ref": 0.009480000000000002,
+          "abatement_factor": 1.1528419693315684
+        },
+        {
+          "age": 61,
+          "qx_exp": 0.01120185310655638,
+          "qx_ref": 0.0103731071397255,
+          "abatement_factor": 1.0798937054893671
+        },
+        {
+          "age": 62,
+          "qx_exp": 0.011475104555728057,
+          "qx_ref": 0.011350353558251489,
+          "abatement_factor": 1.0109909349375181
+        },
+        {
+          "age": 63,
+          "qx_exp": 0.011969945556967706,
+          "qx_ref": 0.012419665984547175,
+          "abatement_factor": 0.963789651981058
+        },
+        {
+          "age": 64,
+          "qx_exp": 0.011888007331224209,
+          "qx_ref": 0.013589717921657404,
+          "abatement_factor": 0.8747795502273638
+        },
+        {
+          "age": 65,
+          "qx_exp": 0.011981845327130399,
+          "qx_ref": 0.014869999999999996,
+          "abatement_factor": 0.8057730549516074
+        },
+        {
+          "age": 66,
+          "qx_exp": 0.012801593509639362,
+          "qx_ref": 0.016365421935579442,
+          "abatement_factor": 0.7822342473069945
+        },
+        {
+          "age": 67,
+          "qx_exp": 0.013214221500634702,
+          "qx_ref": 0.018011233028214176,
+          "abatement_factor": 0.7336655674786359
+        },
+        {
+          "age": 68,
+          "qx_exp": 0.013498572495995238,
+          "qx_ref": 0.01982255736965496,
+          "abatement_factor": 0.6809702827072812
+        },
+        {
+          "age": 69,
+          "qx_exp": 0.014308483610664306,
+          "qx_ref": 0.021816040026673398,
+          "abatement_factor": 0.6558698825804329
+        },
+        {
+          "age": 70,
+          "qx_exp": 0.014731188941502242,
+          "qx_ref": 0.02401,
+          "abatement_factor": 0.6135438959392854
+        },
+        {
+          "age": 71,
+          "qx_exp": 0.015127882257683335,
+          "qx_ref": 0.02656914591996366,
+          "abatement_factor": 0.5693778152769476
+        },
+        {
+          "age": 72,
+          "qx_exp": 0.015910114373140348,
+          "qx_ref": 0.029401062678730598,
+          "abatement_factor": 0.5411407930044001
+        },
+        {
+          "age": 73,
+          "qx_exp": 0.016604778931025032,
+          "qx_ref": 0.0325348240113782,
+          "abatement_factor": 0.5103694098734927
+        },
+        {
+          "age": 74,
+          "qx_exp": 0.0175398858577731,
+          "qx_ref": 0.03600260252555789,
+          "abatement_factor": 0.4871838319277533
+        },
+        {
+          "age": 75,
+          "qx_exp": 0.01869084210756753,
+          "qx_ref": 0.039839999999999993,
+          "abatement_factor": 0.4691476432622373
+        },
+        {
+          "age": 76,
+          "qx_exp": 0.019556406722096097,
+          "qx_ref": 0.04460022932057468,
+          "abatement_factor": 0.4384822011010258
+        },
+        {
+          "age": 77,
+          "qx_exp": 0.020559659364477408,
+          "qx_ref": 0.04992922829939384,
+          "abatement_factor": 0.4117760290864942
+        },
+        {
+          "age": 78,
+          "qx_exp": 0.021410784340925165,
+          "qx_ref": 0.055894955621292486,
+          "abatement_factor": 0.3830539644040614
+        },
+        {
+          "age": 79,
+          "qx_exp": 0.02145169994059841,
+          "qx_ref": 0.06257348992402086,
+          "abatement_factor": 0.34282409318460405
+        },
+        {
+          "age": 80,
+          "qx_exp": 0.02187922738771055,
+          "qx_ref": 0.07005,
+          "abatement_factor": 0.3123372931864461
+        },
+        {
+          "age": 81,
+          "qx_exp": 0.022003501484536416,
+          "qx_ref": 0.07805120946132953,
+          "abatement_factor": 0.2819110893526647
+        },
+        {
+          "age": 82,
+          "qx_exp": 0.02118859040940252,
+          "qx_ref": 0.08696632831372358,
+          "abatement_factor": 0.24364131291097507
+        },
+        {
+          "age": 83,
+          "qx_exp": 0.02021008619138683,
+          "qx_ref": 0.09689974457240817,
+          "abatement_factor": 0.20856697074453973
+        },
+        {
+          "age": 84,
+          "qx_exp": 0.02011261215192007,
+          "qx_ref": 0.10796776959843478,
+          "abatement_factor": 0.18628348280903678
+        },
+        {
+          "age": 85,
+          "qx_exp": 0.018318623662617804,
+          "qx_ref": 0.1203,
+          "abatement_factor": 0.15227451091120367
+        },
+        {
+          "age": 86,
+          "qx_exp": 0.016499364042815174,
+          "qx_ref": 0.13323890198664126,
+          "abatement_factor": 0.12383293315093084
+        },
+        {
+          "age": 87,
+          "qx_exp": 0.015053679970187082,
+          "qx_ref": 0.14756945139323194,
+          "abatement_factor": 0.10201081475916836
+        },
+        {
+          "age": 88,
+          "qx_exp": 0.01262852990640347,
+          "qx_ref": 0.16344132726853913,
+          "abatement_factor": 0.07726644244423203
+        },
+        {
+          "age": 89,
+          "qx_exp": 0.010127938971812925,
+          "qx_ref": 0.18102030743557312,
+          "abatement_factor": 0.05594918667021685
+        },
+        {
+          "age": 90,
+          "qx_exp": 0.007466068225326796,
+          "qx_ref": 0.20049,
+          "abatement_factor": 0.0372391053186034
+        }
+      ],
+      "smr_global": 0.31910341260851804,
+      "reference_name": "TH0002",
+      "summary": {
+        "global_factor": 0.31910341260851804,
+        "min_factor": 0.0372391053186034,
+        "max_factor": 3.1238438327783347,
+        "age_min_factor": 90,
+        "age_max_factor": 41
+      }
+    },
+    "certification_report": {
+      "succes": true,
+      "output_path": "/tmp/rapport_certification.pdf",
+      "nb_pages_estimees": 2
+    }
+  }
+}

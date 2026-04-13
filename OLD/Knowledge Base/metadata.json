@@ -1,0 +1,33 @@
+{
+  "date": "2012-05-15",
+  "type_rapport": "certification",
+  "produit": "temporaire_deces",
+  "sexe": "unisexe",
+  "methode_lissage": "makeham",
+  "plage_ages_construction": "45-64",
+  "raccordement": "THF00-02 avant 45 ans et apres 64 ans",
+  "reference_table": "THF00-02",
+  "smr_global": 0.873,
+  "periode_observation": "2007-2011",
+  "n_lignes_brut": 305881,
+  "n_lignes_retraitees": 253067,
+  "n_deces": 2193,
+  "n_deces_modelises": 2512,
+  "ecart_deces_pct": -12.7,
+  "age_moyen_portefeuille": 44.0,
+  "age_moyen_deces": 54.8,
+  "sex_ratio_h": 0.63,
+  "certifie_pour": "provisionnement contrats temporaire deces",
+  "duree_validite_ans": 5,
+  "qualite_exemplaire": "high",
+  "langue": "fr",
+  "avertissement": "Rapport de CERTIFICATION (tiers verificateur). Utile pour : structure generale, ton professionnel, statistiques descriptives, commentaires prudence, conclusions. NON representatif pour la section methode detaillee — privilegier un rapport de construction pour ce chunk.",
+  "figures": [
+    {"id": "fig5", "type": "exposition_deces_par_age", "section": "donnees"},
+    {"id": "fig8", "type": "deces_obs_vs_modelises_ic95", "section": "commentaires"},
+    {"id": "fig9", "type": "rapport_deces_3d_age_annee", "section": "commentaires"},
+    {"id": "fig10", "type": "comparaison_taux_2012_2008", "section": "commentaires"},
+    {"id": "fig11", "type": "abattements_reglementaires", "section": "commentaires"},
+    {"id": "fig12", "type": "regression_logits", "section": "commentaires"}
+  ]
+}
