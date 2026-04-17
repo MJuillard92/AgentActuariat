@@ -1,0 +1,110 @@
+{
+  "report_title": "Certification de la table de mortalité d’expérience (Contrats temporaire décès)",
+  "sections": [
+    {
+      "id": "S1",
+      "title": "Les contrats",
+      "description": "Présentation des contrats temporaire décès commercialisés par Allianz."
+    },
+    {
+      "id": "S2",
+      "title": "Les données transmises",
+      "description": "Détails sur les données initiales et les statistiques descriptives."
+    },
+    {
+      "id": "S3",
+      "title": "La construction de la table",
+      "description": "Méthodologie de construction de la table de mortalité."
+    },
+    {
+      "id": "S4",
+      "title": "Commentaires",
+      "description": "Analyse des décès observés et modélisés."
+    },
+    {
+      "id": "S5",
+      "title": "Conclusion et recommandations",
+      "description": "Résumé des conclusions et recommandations pour l'utilisation de la table."
+    }
+  ],
+  "tables": [
+    {
+      "id": "T1",
+      "name": "Construction de la table de données",
+      "columns": [
+        "Année",
+        "Exposition",
+        "Décès observés",
+        "Décès prédits"
+      ],
+      "description": "Ce tableau présente les statistiques descriptives sur l'effectif sous risque et les décès observés sur la période d'observation."
+    },
+    {
+      "id": "T2",
+      "name": "Statistiques descriptives de la base retraitée",
+      "columns": [
+        "Année",
+        "Exposition",
+        "Taux de décès",
+        "Âge moyen"
+      ],
+      "description": "Ce tableau résume les statistiques de base sur l'exposition et les décès pour chaque année."
+    },
+    {
+      "id": "T3",
+      "name": "Positionnement de la mortalité masculine par rapport à la mortalité féminine",
+      "columns": [
+        "Âge",
+        "Taux de décès masculin",
+        "Taux de décès féminin"
+      ],
+      "description": "Ce tableau compare les taux de décès entre les sexes pour valider la cohérence des données."
+    },
+    {
+      "id": "T4",
+      "name": "Table de mortalité d’expérience unisexe",
+      "columns": [
+        "Âge",
+        "Taux de mortalité"
+      ],
+      "description": "Ce tableau présente les taux de mortalité par âge pour la table d'expérience unisexe."
+    }
+  ],
+  "figures": [
+    {
+      "id": "F1",
+      "type": "line",
+      "title": "Exposition au risque et nombre de décès",
+      "x_axis": "Années",
+      "y_axis": "Nombre",
+      "description": "Ce graphique montre l'évolution de l'exposition au risque et du nombre de décès sur la période d'observation."
+    },
+    {
+      "id": "F2",
+      "type": "bar",
+      "title": "Comparaison des décès observés et des décès modélisés (par âges)",
+      "x_axis": "Tranches d'âge",
+      "y_axis": "Nombre de décès",
+      "description": "Ce graphique compare les décès observés et les décès prédits par la table d'expérience pour différentes tranches d'âge."
+    },
+    {
+      "id": "F3",
+      "type": "scatter",
+      "title": "Comparaison des taux de décès 2012 / 2008",
+      "x_axis": "Âge",
+      "y_axis": "Taux de décès",
+      "description": "Ce graphique illustre la comparaison des taux de décès entre les tables de 2012 et 2008."
+    }
+  ],
+  "key_metrics": [
+    "Taux de décès",
+    "Exposition",
+    "Décès observés",
+    "Décès prédits",
+    "Âge moyen"
+  ],
+  "agent_system_prompt": "En tant qu'agent IA, votre rôle est de construire un rapport actuariel détaillé sur une table de mortalité d'expérience. Vous devez produire les éléments suivants : 1. Tableaux : - Construction de la table de données : colonnes - Année, Exposition, Décès observés, Décès prédits. - Statistiques descriptives de la base retraitée : colonnes - Année, Exposition, Taux de décès, Âge moyen. - Positionnement de la mortalité masculine par rapport à la mortalité féminine : colonnes - Âge, Taux de décès masculin, Taux de décès féminin. - Table de mortalité d’expérience unisexe : colonnes - Âge, Taux de mortalité. 2. Graphiques : - Exposition au risque et nombre de décès : axes - Années (x), Nombre (y). - Comparaison des décès observés et des décès modélisés (par âges) : axes - Tranches d'âge (x), Nombre de décès (y). - Comparaison des taux de décès 2012 / 2008 : axes - Âge (x), Taux de décès (y). 3. Critères de validation : la table doit respecter les normes de prudence et de cohérence avec les données historiques. 4. Instructions techniques : utilisez les modules de traitement de données pour préparer les données, calculer les taux de mortalité et effectuer des comparaisons. 5. Format de sortie : le rapport doit être structuré en français avec des valeurs numériques précises. Réponds en français avec des valeurs numériques précises.",
+  "rag_summary": "Ce rapport présente la certification d'une table de mortalité d'expérience pour les contrats temporaire décès d'Allianz. Il détaille la méthodologie de construction de la table, les données utilisées, ainsi que les comparaisons entre les décès observés et modélisés. Les résultats montrent une prudence significative dans les prévisions de décès, avec des recommandations pour le suivi de la table dans le temps. La table est jugée conforme aux exigences réglementaires et peut être utilisée pour les calculs de provisions.",
+  "analysis_notes": "La méthodologie de construction de la table est rigoureuse, avec des contrôles sur les données et des comparaisons avec les tables précédentes. Les résultats indiquent une bonne stabilité des taux de décès et une cohérence avec les données historiques. Il est important de suivre l'évolution de la table dans le temps pour s'assurer de sa pertinence.",
+  "source_pdf": "AF8796-TD3_v1.0.pdf"
+}

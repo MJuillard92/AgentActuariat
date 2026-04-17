@@ -15,7 +15,6 @@ build/
 
 # Données sensibles / uploads
 uploads/
-Portefeuille/
 
 # Sessions runtime (données utilisateur, artefacts Parquet, états, audits)
 session/data/
