@@ -156,7 +156,7 @@ def render_table_from_spec(spec: dict, data: dict) -> tuple[Any, str, list]:
     spec keys: id, name, columns, rows, highlight_rule, format
     """
     if not spec:
-        return None, ""
+        return None, "", []
 
     table_id   = spec.get("id", "table")
     table_name = spec.get("name", table_id)

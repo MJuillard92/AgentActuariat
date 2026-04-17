@@ -3,12 +3,12 @@ tool_registry.py
 Registre central des tools actuariels.
 
 Fait le lien entre :
-  - builder_capabilities.json  (catalogue)
+  - tools/catalogue.py  (source de vérité dynamique — parsée depuis les docstrings)
   - format OpenAI function-calling
   - exécution réelle des modules Python
 
 Expose :
-  get_capabilities() -> dict         — charge builder_capabilities.json
+  get_capabilities() -> dict         — construit le catalogue depuis catalogue.py
   get_openai_tools() -> list[dict]   — format OpenAI function-calling
   call_tool(tool_name, function_name, params, df, data) -> dict
 
@@ -22,11 +22,11 @@ Routing par tool_name :
 from __future__ import annotations
 
 import importlib
-import json
+import importlib.util as _ilu
 from pathlib import Path
 import pandas as pd
 
-_CAPABILITIES_PATH = Path(__file__).parent / "builder_capabilities.json"
+_CAT_PATH = Path(__file__).parent / "catalogue.py"
 
 # Tools qui reçoivent un DataFrame comme premier argument
 _DF_TOOLS = {"statistical_analysis"}
@@ -37,12 +37,84 @@ _BUILDER_DF_FUNCTIONS = {"exposure"}
 # Fonctions builder qui nécessitent data ET df (signature run(data, params, df=None))
 _BUILDER_DATA_DF_FUNCTIONS = {"cox_regression"}
 
+# Tools hors périmètre (non implémentés)
+_HORS_PERIMETRE = {
+    "chain_ladder":       {"disponible": False, "raison": "Module non-vie — hors périmètre actuariel vie."},
+    "bornhuetter_ferguson": {"disponible": False, "raison": "Module non-vie — hors périmètre actuariel vie."},
+    "tarification_auto":  {"disponible": False, "raison": "Tarification dommages — hors périmètre."},
+    "ibnr":               {"disponible": False, "raison": "Module IBNR non implémenté."},
+}
+
+
+def _load_catalogue_module():
+    """Charge catalogue.py dynamiquement et retourne le module."""
+    spec = _ilu.spec_from_file_location("catalogue", _CAT_PATH)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _build_capabilities_from_catalogue() -> dict:
+    """
+    Transforme le catalogue plat (builder.exposure → {...}) en structure imbriquée
+    compatible avec l'ancien format builder_capabilities.json :
+      {tools: {tool_name: {description, functions: {fn_name: {description, params, outputs}}}}}
+    """
+    try:
+        cat_mod = _load_catalogue_module()
+        raw = cat_mod.get_catalogue()
+    except Exception:
+        return {"version": "2.0", "tools": {}}
+
+    tools_flat = raw.get("tools", {})
+    nested: dict = {}
+
+    for qualified_name, info in tools_flat.items():
+        # "builder.exposure" → tool="builder", fn="exposure"
+        # "build_pdf.load_yaml_template" → tool="build_pdf", fn="load_yaml_template"
+        if "." not in qualified_name:
+            continue
+        tool_name, fn_name = qualified_name.split(".", 1)
+
+        if tool_name not in nested:
+            nested[tool_name] = {
+                "description": info.get("description", ""),
+                "functions": {},
+            }
+        # Description au niveau tool = première description rencontrée
+        if not nested[tool_name]["description"] and info.get("description"):
+            nested[tool_name]["description"] = info["description"]
+
+        fn_entry = {
+            "description":  info.get("short_description") or info.get("description", ""),
+            "params":       info.get("params", {}),
+            "outputs":      info.get("outputs", {}),
+            "disponible":   info.get("disponible", True),
+        }
+        if "raison" in info:
+            fn_entry["raison"] = info["raison"]
+
+        nested[tool_name]["functions"][fn_name] = fn_entry
+
+    return {"version": "2.0", "tools": nested, "hors_perimetre": _HORS_PERIMETRE}
+
+
+# Cache en mémoire pour éviter de reparser à chaque appel dans la même session
+_capabilities_cache: dict | None = None
+
 
 def get_capabilities() -> dict:
-    """Charge et retourne builder_capabilities.json."""
-    if _CAPABILITIES_PATH.exists():
-        return json.loads(_CAPABILITIES_PATH.read_text(encoding="utf-8"))
-    return {"version": "2.0", "tools": {}}
+    """Retourne le catalogue des tools (construit depuis catalogue.py, mis en cache)."""
+    global _capabilities_cache
+    if _capabilities_cache is None:
+        _capabilities_cache = _build_capabilities_from_catalogue()
+    return _capabilities_cache
+
+
+def invalidate_capabilities_cache() -> None:
+    """Force la régénération du catalogue au prochain appel (après modification d'un tool)."""
+    global _capabilities_cache
+    _capabilities_cache = None
 
 
 def _build_params_schema(tool_name: str, catalogue: dict) -> dict:
@@ -51,21 +123,18 @@ def _build_params_schema(tool_name: str, catalogue: dict) -> dict:
     using the enriched catalogue (params section from tool contracts).
     """
     tools_cat = catalogue.get("tools", {})
+    tool_info = tools_cat.get(tool_name, {})
     properties: dict = {}
 
-    # Collect params from all functions of this tool in the catalogue
-    for cat_name, cat_info in tools_cat.items():
-        if not cat_name.startswith(tool_name + "."):
-            continue
-        fn_suffix = cat_name[len(tool_name) + 1:]
-        fn_params = cat_info.get("params", {})
+    # Collect params from all functions of this tool
+    for fn_info in tool_info.get("functions", {}).values():
+        fn_params = fn_info.get("params", {})
         for param_name, param_info in fn_params.items():
             if param_name in properties:
                 continue  # already added from another function
             prop: dict = {"type": "string"}
             if isinstance(param_info, dict):
                 raw_type = param_info.get("type", "string")
-                # Map contract types to JSON Schema types
                 type_map = {"int": "integer", "float": "number", "bool": "boolean",
                             "string": "string", "str": "string"}
                 prop["type"] = type_map.get(str(raw_type).lower(), "string")
@@ -103,17 +172,8 @@ def get_openai_tools() -> list[dict]:
     Enrichit le schéma params avec les paramètres documentés dans le catalogue.
     """
     caps = get_capabilities()
-
-    # Load enriched catalogue for params schema
-    try:
-        import importlib.util as _ilu
-        _cat_path = Path(__file__).parent / "catalogue.py"
-        spec = _ilu.spec_from_file_location("catalogue", _cat_path)
-        _cat_mod = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(_cat_mod)
-        catalogue = _cat_mod.get_catalogue()
-    except Exception:
-        catalogue = {}
+    # Le catalogue enrichi est déjà dans caps (construit depuis catalogue.py)
+    catalogue = caps
 
     tools = []
     for tool_name, tool_info in caps.get("tools", {}).items():
@@ -154,6 +214,35 @@ def get_openai_tools() -> list[dict]:
             },
         })
     return tools
+
+
+_STUDY_PLAN_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
+    # (tool_name, function_name) → {param_key: study_plan_key}
+    ("builder", "smoothing"):    {"method": "smoothing_algorithm",
+                                  "lambda_": "smoothing_parameters"},
+    ("builder", "benchmarking"): {"reference_table": "baseline_regulatory_table"},
+    ("builder", "exposure"):     {"start_date": "observation_start_date",
+                                  "end_date":   "observation_end_date"},
+    ("builder", "crude_rates"):  {"method": "crude_rate_method"},
+}
+
+
+def _accumulate_study_plan(tool_name: str, function_name: str, params: dict, data: dict) -> None:
+    """
+    Intercepte les params d'un appel Builder et persiste les valeurs métier
+    dans data["study_plan"] pour que load_yaml_template puisse les résoudre.
+    Non bloquant — erreurs ignorées silencieusement.
+    """
+    if data is None or not params:
+        return
+    mapping = _STUDY_PLAN_MAPPINGS.get((tool_name, function_name))
+    if not mapping:
+        return
+    sp = data.setdefault("study_plan", {})
+    for param_key, plan_key in mapping.items():
+        val = params.get(param_key)
+        if val is not None and plan_key not in sp:
+            sp[plan_key] = val
 
 
 def call_tool(
@@ -232,6 +321,9 @@ def call_tool(
 
     if not hasattr(mod, "run"):
         return {"erreur": f"{module_path} n'expose pas de fonction run()"}
+
+    # Persister les paramètres métier dans data["study_plan"] au fil des appels
+    _accumulate_study_plan(tool_name, function_name, params, data)
 
     try:
         if tool_name in _DF_TOOLS:

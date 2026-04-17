@@ -64,7 +64,12 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - validation : dict — résultat selon function_name
+  - validation.ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)
+  - validation.alpha         : float — niveau de risque utilisé (confidence_intervals)
+  - validation.p_value       : float — p-value du test chi² (chi_square)
+  - validation.chi2_stat     : float — statistique chi² observée (chi_square)
+  - validation.df            : int   — degrés de liberté (chi_square)
+  - validation.interpretation: str   — interprétation textuelle (chi_square)
 return_payload:
   confidence_intervals → ci_table (list), alpha
   chi_square → chi2_stat, p_value, df, interpretation

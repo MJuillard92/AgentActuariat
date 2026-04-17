@@ -885,7 +885,11 @@ tools:
         note: Valeur qui identifie un décès dans col_status.
     outputs:
       data_store_keys_written:
-      - cox_regression
+      - 'cox_regression.hazard_ratio  : float — Hazard Ratio H/F (attendu 1.5–3.0)'
+      - 'cox_regression.cox_pvalue    : float — p-value du test d''égalité H/F'
+      - 'cox_regression.ci_lower_95   : float — borne inférieure IC 95% du HR'
+      - 'cox_regression.ci_upper_95   : float — borne supérieure IC 95% du HR'
+      - 'cox_regression.interpretation: str   — interprétation textuelle du HR'
       return_payload:
         hazard_ratio: 'float  # HR sexe masculin vs féminin'
         cox_pvalue: float
@@ -1002,7 +1006,15 @@ tools:
         note: Sexe pour la table de référence SMR.
     outputs:
       data_store_keys_written:
-      - 'diagnostics : dict — résultat complet selon function_name'
+      - 'diagnostics.regime              : str   — niveau crédibilité global : high|medium|low (credibility)'
+      - 'diagnostics.pct_low_credibility : float — % d''âges sous le seuil de crédibilité (credibility)'
+      - 'diagnostics.n_low               : int   — nombre d''âges avec E_x < threshold (credibility)'
+      - 'diagnostics.recommendation      : str   — action recommandée selon la crédibilité (credibility)'
+      - 'diagnostics.comparison          : list[dict] — AIC, BIC, MSE, n_non_monotone par méthode (compare_smoothers)'
+      - 'diagnostics.best_method         : str   — méthode avec le meilleur AIC (compare_smoothers)'
+      - 'diagnostics.smr_global          : float — SMR global préliminaire (smr)'
+      - 'diagnostics.smr_by_decade       : dict  — SMR par décennie d''âge (smr)'
+      - 'diagnostics.interpretation      : str   — interprétation du SMR (smr)'
       return_payload: {}
     quality_gates:
       blocking:
@@ -1169,7 +1181,11 @@ tools:
         note: Colonne q_x expérience. Utiliser q_x_lisse si smoothed_table disponible.
     outputs:
       data_store_keys_written:
-      - 'benchmarking : dict — résultat complet avec abatement_table, smr_global, etc.'
+      - 'benchmarking.abatement_table: list[dict] — {age, q_x_brut, q_x_reference, abattement} (abatement_factors)'
+      - 'benchmarking.smr_global     : float — SMR global = Σ(D_x observés) / Σ(D_x attendus) (abatement_factors)'
+      - 'benchmarking.reference_name : str   — nom de la table utilisée ex: TH0002 (abatement_factors)'
+      - 'benchmarking.summary        : dict  — résumé avec smr_global, n_ages, reference_name (abatement_factors)'
+      - 'benchmarking.reference_table: list[dict] — table de référence brute {age, qx} (load_reference_table)'
       return_payload: {}
     quality_gates:
       blocking:
@@ -1236,7 +1252,11 @@ tools:
         note: Âge maximum pour la régression.
     outputs:
       data_store_keys_written:
-      - logit_regression
+      - 'logit_regression.slope_alpha   : float — pente α (attendu 0.9–1.1)'
+      - 'logit_regression.intercept_beta: float — intercept β'
+      - 'logit_regression.r_squared     : float — R² (seuil réglementaire > 0.99)'
+      - 'logit_regression.formula       : str   — équation : logit(q_exp) = α × logit(q_ref) + β'
+      - 'logit_regression.interpretation: str   — interprétation de la cohérence structurelle'
       return_payload:
         slope_alpha: 'float  # pente — attendu ~0.9–1.1'
         intercept_beta: float
@@ -1310,7 +1330,12 @@ tools:
         note: Sexe pour la table de référence (chi_square uniquement).
     outputs:
       data_store_keys_written:
-      - 'validation : dict — résultat selon function_name'
+      - 'validation.ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)'
+      - 'validation.alpha         : float — niveau de risque utilisé (confidence_intervals)'
+      - 'validation.p_value       : float — p-value du test chi² (chi_square)'
+      - 'validation.chi2_stat     : float — statistique chi² observée (chi_square)'
+      - 'validation.df            : int   — degrés de liberté (chi_square)'
+      - 'validation.interpretation: str   — interprétation textuelle (chi_square)'
       return_payload: {}
     quality_gates:
       blocking:
@@ -1596,95 +1621,3 @@ tools:
       smoothing → chart="crude_smoothed", benchmarking → chart="abatement_chart". Les graphiques enrichissent le rapport PDF
       et aident le client à comprendre les résultats.'
     exemplar_query: Quels graphiques inclure dans un rapport de certification de table de mortalité ?
-  build_pdf.certification_report:
-    display_name: Rapport PDF de certification
-    short_description: Génère le rapport de certification de la table de mortalité d'expérience.
-    description: 'Génère un rapport PDF de certification actuarielle complet de la table de mortalité d''expérience. Contient
-      : pipeline utilisé, table complète avec taux bruts et lissés, diagnostics de crédibilité, intervalles de confiance,
-      facteurs d''abattement vs référence, SMR global, graphiques intégrés, et conclusion.'
-    domain: mortality_experience
-    capability_group: reporting
-    depends_on:
-    - builder.exposure
-    - builder.crude_rates
-    - builder.smoothing
-    - builder.diagnostics
-    - builder.validation
-    - builder.benchmarking
-    required_by: []
-    client_visible: true
-    when_to_use: Appeler après validation du plan du rapport avec le client. Exige au minimum exposure_table. Les autres sections
-      (smoothing, diagnostics, validation, benchmarking) sont optionnelles mais fortement recommandées pour un rapport complet.
-    when_not_to_use: Ne pas appeler si exposure_table est absent (retourne erreur). Ne pas appeler avant que le client ait
-      validé le plan du rapport (voir step4). Ne pas appeler si n_non_monotone > 0 (résoudre la monotonie d'abord).
-    prerequisites:
-      required_tools:
-      - builder.exposure → provides exposure_table (REQUIS)
-      - builder.crude_rates → provides qx_table (recommandé)
-      - builder.smoothing → provides smoothed_table (recommandé)
-      - builder.diagnostics → provides diagnostics (recommandé)
-      - builder.validation → provides validation (recommandé)
-      - builder.benchmarking → provides benchmarking (recommandé)
-      required_data_store_keys:
-      - exposure_table (REQUIS)
-      - smoothed_table (optionnel — section taux lissés)
-      - diagnostics (optionnel — section crédibilité)
-      - validation (optionnel — section validation)
-      - benchmarking (optionnel — section abattement)
-    params:
-      output_path:
-        type: string
-        values: chemin de fichier
-        default: /tmp/rapport_certification.pdf
-        note: L'interface gère le téléchargement. Ne pas exposer au client.
-      title:
-        type: string
-        values: texte libre
-        default: '"Table de mortalité d''expérience — Certification"'
-        note: 'Personnaliser avec le nom du portefeuille (ex: "Portefeuille Retraite 2024").'
-      portfolio_info:
-        type: string
-        values: texte court
-        default: '""'
-        note: 'Description courte (ex: "45 231 lignes, 2010-2023, produit prévoyance").'
-      sexe:
-        type: string
-        values: H | F
-        default: H
-        note: Doit correspondre au portefeuille analysé.
-      commentary:
-        type: string
-        default: '""'
-        note: '>'
-    outputs:
-      data_store_keys_written: []
-      return_payload:
-        succes: bool
-        output_path: str
-        nb_pages_estimees: int
-    quality_gates:
-      blocking:
-      - exposure_table absent → retourne erreur. Appeler builder.exposure d'abord.
-      - n_non_monotone > 0 dans smoothed_table → bloquer la génération.
-      - commentary absent ou vide → l'agent doit rédiger l'analyse
-      non_blocking:
-      - Sections optionnelles absentes → le rapport est généré sans ces sections
-    errors:
-    - error: exposure_table manquant dans data_store.
-      cause: exposure_table absent. Pipeline builder incomplet.
-      action: Appeler builder.exposure → crude_rates → smoothing avant de générer.
-    - error: 'ReportLab non disponible : ...'
-      cause: Bibliothèque reportlab non installée.
-      action: Signaler l'erreur technique. Ne pas relancer sans résoudre.
-    reasoning_hint: 'Étape obligatoire avant d''appeler ce tool : 1. Lire dans le data_store : smr_global (benchmarking),
-      n_non_monotone (smoothed_table), ages peu crédibles (diagnostics), intervalles de confiance (validation). 2. Croiser
-      ces signaux : - SMR global hors [0.85, 1.15] → anomalie à expliquer en §3 - n_non_monotone > 0 → BLOQUER (voir quality
-      gates) - Plus de 20% des âges peu crédibles → renforcer §4 limites - IC larges sur âges extrêmes → mentionner en §4
-      3. Rédiger le commentary (§1 à §5) en s''appuyant sur ces signaux. 4. Choisir les graphiques à inclure : - smr_by_decile    :
-      TOUJOURS si smr_global hors [0.85, 1.15] - confidence_bands : TOUJOURS si âges peu crédibles présents - credibility_heatmap
-      : si plus de 20% des âges peu crédibles - abatement_curve  : si benchmarking disponible Chaque graphique inclus doit
-      être référencé dans le commentary. 5. Seulement après ces étapes : appeler ce tool.'
-    exemplar_query: 'Utiliser ces queries contre le corpus RAG exemplaires avant de rédiger chaque paragraphe du commentary
-      : - §2 méthode : "justification choix lissage whittaker portefeuille [taille]" - §3 résultats : "interprétation SMR
-      [valeur] rapport certification mortalité" - §4 limites : "formulation limites âges peu crédibles rapport actuariel"
-      - §5 conclusion : "recommandation usage table mortalité expérience tarification"'

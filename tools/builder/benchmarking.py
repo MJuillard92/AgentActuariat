@@ -66,7 +66,11 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - benchmarking : dict — résultat complet avec abatement_table, smr_global, etc.
+  - benchmarking.abatement_table: list[dict] — {age, q_x_brut, q_x_reference, abattement} (abatement_factors)
+  - benchmarking.smr_global     : float — SMR global = Σ(D_x observés) / Σ(D_x attendus) (abatement_factors)
+  - benchmarking.reference_name : str   — nom de la table utilisée ex: TH0002 (abatement_factors)
+  - benchmarking.summary        : dict  — résumé avec smr_global, n_ages, reference_name (abatement_factors)
+  - benchmarking.reference_table: list[dict] — table de référence brute {age, qx} (load_reference_table)
 return_payload:
   abatement_factors → abatement_table (list), smr_global (float), reference_name, summary
   load_reference_table → reference_table (list), reference_name

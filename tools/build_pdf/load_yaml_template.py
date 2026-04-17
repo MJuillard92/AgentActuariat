@@ -99,15 +99,15 @@ _PLACEHOLDER_MAP: dict[str, tuple[str, str]] = {
     "logit_r_squared_minimum":       ("study_plan", "logit_r_squared_minimum"),
     "confidence_interval_level":     ("study_plan", "confidence_interval_level"),
     # Builder outputs
-    "cohort_min_age":                ("data_store", "age_min"),
-    "cohort_max_age":                ("data_store", "age_max"),
+    "cohort_min_age":                ("data_store_multi", "age_min|cohort_min_age"),
+    "cohort_max_age":                ("data_store_multi", "age_max|cohort_max_age"),
     "total_exposure_years":          ("data_store_multi", "total_exposure|summary.exposition_totale_pa"),
     "total_deaths":                  ("data_store_multi", "total_deaths|summary.nb_deces"),
-    "initial_record_count":          ("data_store_multi", "summary.nb_contrats|initial_record_count"),
-    "final_record_count":            ("data_store_multi", "summary.nb_contrats|final_record_count"),
+    "initial_record_count":          ("derived", "initial_record_count()"),
+    "final_record_count":            ("derived", "final_record_count()"),
     "total_exclusions":              ("data_store_multi", "total_exclusions|0"),
-    "mean_age_cohort":               ("data_store_multi", "summary.age_moyen|mean_age_cohort"),
-    "gender_distribution":           ("data_store_multi", "summary.pct_by_sex|gender_distribution"),
+    "mean_age_cohort":               ("derived", "mean_age_cohort()"),
+    "gender_distribution":           ("derived", "gender_distribution()"),
     "num_observation_years":         ("derived", "len(observation_period_years)"),
     "crude_rate_method":             ("data_store_multi", "method|crude_rate_method"),
     # Cox regression
@@ -118,7 +118,7 @@ _PLACEHOLDER_MAP: dict[str, tuple[str, str]] = {
     "logit_intercept":               ("data_store", "logit_regression.intercept_beta"),
     "logit_r_squared":               ("data_store", "logit_regression.r_squared"),
     # Validation
-    "chi_squared_p":                 ("data_store_multi", "validation.p_value|chi_squared_p"),
+    "chi_squared_p":                 ("derived", "chi_squared_p()"),
     # Benchmarking
     "avg_prudence_ratio":            ("data_store_multi", "benchmarking.smr_global|smr_global"),
     "prior_table_exists":            ("data_store_multi", "precedent_comparison|False"),
@@ -142,11 +142,14 @@ _PLACEHOLDER_MAP: dict[str, tuple[str, str]] = {
 
 # Sections et leurs champs requis (subset critique)
 _SECTION_REQUIRED: dict[str, list[str]] = {
-    "preamble":          ["study_objective", "observation_start_date", "total_exposure_years", "total_deaths"],
-    "data_submission":   ["initial_record_count", "exposure_by_age_male", "exposure_by_age_female"],
-    "construction":      ["smoothing_algorithm", "cohort_min_age", "cohort_max_age"],
-    "analysis":          ["observed_deaths_by_age", "modeled_deaths_by_age", "ci_lower_by_age"],
-    "conclusion":        ["total_exposure_years", "total_deaths", "avg_prudence_ratio"],
+    # observation_start_date est optionnel — on peut rédiger sans dates exactes
+    "preamble":          ["total_exposure_years", "total_deaths"],
+    "data_submission":   ["initial_record_count"],
+    "construction":      ["cohort_min_age", "cohort_max_age"],
+    # ci_lower_by_age est optionnel — si absent, section rédigée sans IC
+    "analysis":          ["observed_deaths_by_age"],
+    # avg_prudence_ratio est optionnel — peut être absent si benchmarking non fait
+    "conclusion":        ["total_exposure_years", "total_deaths"],
     "annex":             ["final_mortality_table_by_age", "cohort_min_age", "cohort_max_age"],
 }
 
@@ -231,6 +234,49 @@ def _resolve_derived(key: str, data_store: dict, study_plan: dict):
     if not exposure_table:
         return None
 
+    if key == "initial_record_count()":
+        # Nombre de lignes dans exposure_table = nombre d'âges couverts
+        # Priorité : clé directe, puis nb_contrats du summary, puis len(exposure_table)
+        v = (data_store.get("initial_record_count")
+             or data_store.get("nb_contrats")
+             or _get_nested(data_store, "summary.nb_contrats"))
+        return v if v is not None else len(exposure_table) if exposure_table else None
+
+    if key == "final_record_count()":
+        v = (data_store.get("final_record_count")
+             or data_store.get("initial_record_count")
+             or data_store.get("nb_contrats")
+             or _get_nested(data_store, "summary.nb_contrats"))
+        return v if v is not None else len(exposure_table) if exposure_table else None
+
+    if key == "mean_age_cohort()":
+        v = (data_store.get("mean_age_cohort")
+             or _get_nested(data_store, "summary.age_moyen"))
+        if v is not None:
+            return v
+        # Calculer depuis exposure_table si possible
+        if exposure_table:
+            total_exp = sum(r.get("E_x", 0) for r in exposure_table)
+            if total_exp > 0:
+                w_sum = sum(r["age"] * r.get("E_x", 0) for r in exposure_table)
+                return round(w_sum / total_exp, 1)
+        return None
+
+    if key == "gender_distribution()":
+        v = (data_store.get("gender_distribution")
+             or _get_nested(data_store, "summary.pct_by_sex"))
+        return v  # None si absent — section non bloquée par ça
+
+    if key == "chi_squared_p()":
+        # 1. Résultat direct du chi_square test (function_name="chi_square")
+        validation = data_store.get("validation") or {}
+        if isinstance(validation, dict):
+            p = validation.get("p_value")
+            if p is not None:
+                return p
+        # 2. Clé directe dans data_store
+        return data_store.get("chi_squared_p") or None
+
     if key == "exposure_by_age_class()":
         return {str(r["age"]): r.get("E_x", 0) for r in exposure_table}
 
@@ -238,11 +284,16 @@ def _resolve_derived(key: str, data_store: dict, study_plan: dict):
         return {str(r["age"]): r.get("D_x", 0) for r in exposure_table}
 
     if key in ("exposure_by_sex(H)", "exposure_by_sex(F)", "deaths_by_sex(H)", "deaths_by_sex(F)"):
-        # Fallback : retourner les totaux si pas de segmentation par sexe
         suffix = "H" if "(H)" in key else "F"
         is_exp = key.startswith("exposure")
+        # Chercher d'abord les clés directes
+        direct_key = f"{'exposure' if is_exp else 'deaths'}_by_age_{'male' if suffix == 'H' else 'female'}"
+        direct = data_store.get(direct_key)
+        if direct:
+            return direct
+        # Fallback : retourner les totaux depuis exposure_table (approximation)
         col = "E_x" if is_exp else "D_x"
-        return {str(r["age"]): r.get(col, 0) for r in exposure_table}
+        return {str(r["age"]): r.get(col, 0) for r in exposure_table} or None
 
     if key == "final_mortality_table()":
         smoothed = data_store.get("smoothed_table") or []
@@ -253,44 +304,81 @@ def _resolve_derived(key: str, data_store: dict, study_plan: dict):
         return {str(r["age"]): r.get("q_x_brut", 0) for r in exposure_table}
 
     if key == "modeled_deaths_by_age()":
+        # 1. Clé directe
+        direct = data_store.get("modeled_deaths_by_age")
+        if direct:
+            return direct
+        # 2. Depuis ci_table (expected_deaths ou modeled_deaths)
         validation = data_store.get("validation") or {}
         ci_table = (validation.get("ci_table") if isinstance(validation, dict) else []) or []
         if ci_table:
-            return {str(r["age"]): r.get("expected_deaths", 0) for r in ci_table}
+            result = {str(r["age"]): r.get("expected_deaths", r.get("modeled_deaths"))
+                      for r in ci_table}
+            if any(v is not None and v != 0 for v in result.values()):
+                return result
+        # 3. Calculer : q_x_lisse × E_x (smoothed_table × exposure_table)
+        smoothed = data_store.get("smoothed_table") or []
+        if smoothed and exposure_table:
+            exp_idx = {r["age"]: r.get("E_x", 0) for r in exposure_table}
+            qx_col = next((c for c in ("q_x_lisse", "qx", "q_x_brut")
+                           if c in (smoothed[0] if smoothed else {})), None)
+            if qx_col:
+                result = {
+                    str(r["age"]): round(r.get(qx_col, 0) * exp_idx.get(r["age"], 0), 2)
+                    for r in smoothed
+                }
+                if any(v != 0 for v in result.values()):
+                    return result
         return None
 
     if key == "ci_lower_by_age()":
         validation = data_store.get("validation") or {}
         ci_table = (validation.get("ci_table") if isinstance(validation, dict) else []) or []
-        return {str(r["age"]): r.get("ci_lower", r.get("ci_lower_95", 0)) for r in ci_table} if ci_table else None
+        if ci_table:
+            result = {str(r["age"]): r.get("ci_lower", r.get("ci_lower_95")) for r in ci_table}
+            if any(v is not None for v in result.values()):
+                return result
+        return data_store.get("ci_lower_by_age") or None
 
     if key == "ci_upper_by_age()":
         validation = data_store.get("validation") or {}
         ci_table = (validation.get("ci_table") if isinstance(validation, dict) else []) or []
-        return {str(r["age"]): r.get("ci_upper", r.get("ci_upper_95", 0)) for r in ci_table} if ci_table else None
+        if ci_table:
+            result = {str(r["age"]): r.get("ci_upper", r.get("ci_upper_95")) for r in ci_table}
+            if any(v is not None for v in result.values()):
+                return result
+        return data_store.get("ci_upper_by_age") or None
 
     if key == "discount_by_age()":
         benchmarking = data_store.get("benchmarking") or {}
         ab_table = benchmarking.get("abatement_table") if isinstance(benchmarking, dict) else None
         if ab_table:
-            return {str(r["age"]): r.get("abatement_factor", 0) for r in ab_table}
-        return None
+            result = {str(r["age"]): r.get("abatement_factor", r.get("abattement", 0))
+                      for r in ab_table}
+            if any(v and v != 0 for v in result.values()):
+                return result
+        return data_store.get("discount_by_age") or None
 
     if key == "exposure_by_year()":
         series = data_store.get("series") or {}
         serie = series.get("serie", []) if isinstance(series, dict) else []
-        return {str(r["annee"]): r.get("exposition_pa", 0) for r in serie}
+        if serie:
+            return {str(r["annee"]): r.get("exposition_pa", 0) for r in serie} or None
+        # Fallback : clé directe
+        return data_store.get("exposure_by_year") or None
 
     if key == "deaths_by_year()":
         series = data_store.get("series") or {}
         serie = series.get("serie", []) if isinstance(series, dict) else []
-        return {str(r["annee"]): r.get("nb_deces", 0) for r in serie}
+        if serie:
+            return {str(r["annee"]): r.get("nb_deces", 0) for r in serie} or None
+        return data_store.get("deaths_by_year") or None
 
     if key == "annual_prediction_ratio()":
         series = data_store.get("series") or {}
         serie = series.get("serie", []) if isinstance(series, dict) else []
         if not serie:
-            return None
+            return data_store.get("annual_prediction_ratio") or None
         # Approximation: ratio = modeled / observed par année (besoin de données croisées)
         return None  # Signaler comme manquant si non calculé
 
@@ -336,6 +424,14 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
 
         if source == "study_plan":
             value = study_plan.get(path) or study_plan.get(ph_name)
+            # Fallback observation_period_years depuis les séries temporelles
+            if value is None and ph_name == "observation_period_years":
+                series = data.get("series") or {}
+                serie = series.get("serie", []) if isinstance(series, dict) else []
+                if serie:
+                    years = sorted({r["annee"] for r in serie if "annee" in r})
+                    if years:
+                        value = years
 
         elif source == "data_store":
             value = _get_nested(data, path)

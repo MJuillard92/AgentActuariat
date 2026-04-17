@@ -44,7 +44,7 @@ def report_node(state: "AgentState") -> dict:
     Retourne la mise à jour de l'état LangGraph.
     """
     import openai
-    from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response
+    from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
 
     system_prompt = _build_system_prompt(state)
 
@@ -52,14 +52,22 @@ def report_node(state: "AgentState") -> dict:
     from tools.tool_registry import get_openai_tools
     tools = get_openai_tools()
 
+    MAX_HISTORY = 20
+    raw_msgs = state["messages"]
+    if len(raw_msgs) > MAX_HISTORY:
+        raw_msgs = raw_msgs[-MAX_HISTORY:]
+
     # Construire les messages
     messages = [{"role": "system", "content": system_prompt}]
-    for msg in state["messages"]:
+    for msg in raw_msgs:
         messages.append(_to_openai_dict(msg))
+    messages = sanitize_openai_messages(messages)
 
+    from agents.mortality.agents._utils import call_with_retry
     client = openai.OpenAI()
     try:
-        response = client.chat.completions.create(
+        response = call_with_retry(
+            client,
             model="gpt-4o",
             messages=messages,
             tools=tools if tools else None,

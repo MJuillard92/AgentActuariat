@@ -114,6 +114,7 @@ def mortality_node(state: "AgentState") -> dict:
     messages = [{"role": "system", "content": system_prompt}]
     for msg in raw_msgs:
         messages.append(_to_openai_dict(msg))
+    messages = sanitize_openai_messages(messages)
 
     from agents.mortality.agents._utils import call_with_retry
     client = openai.OpenAI()
@@ -180,6 +181,51 @@ def mortality_node(state: "AgentState") -> dict:
 
 
 # ── Helpers format OpenAI ↔ LangChain ────────────────────────────────────────
+
+def sanitize_openai_messages(messages: list[dict]) -> list[dict]:
+    """
+    Supprime les messages OpenAI invalides qui causent l'erreur 400 :
+    - ToolMessage sans AIMessage précédent ayant tool_calls  (orphan tool)
+    - AIMessage avec tool_calls sans ToolMessage suivant     (unanswered tool_call)
+    Appelé après truncation MAX_HISTORY pour éviter les groupes coupés.
+    """
+    # Pass 1 : collecter les tool_call_ids qui ont une réponse tool
+    answered_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "tool":
+            tc_id = msg.get("tool_call_id")
+            if tc_id:
+                answered_ids.add(tc_id)
+
+    result: list[dict] = []
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            # Filtrer les tool_calls sans réponse
+            answered_tcs = [tc for tc in msg["tool_calls"] if tc.get("id") in answered_ids]
+            if not answered_tcs:
+                # Aucun tool_call avec réponse — garder uniquement si contenu textuel
+                if msg.get("content"):
+                    clean = dict(msg)
+                    del clean["tool_calls"]
+                    result.append(clean)
+                # Sinon message entièrement orphelin — on saute
+            else:
+                clean = dict(msg)
+                clean["tool_calls"] = answered_tcs
+                result.append(clean)
+        elif msg.get("role") == "tool":
+            # Orphan tool — vérifier qu'un assistant précédent a ce tool_call_id
+            prev = next(
+                (m for m in reversed(result) if m.get("role") != "system"),
+                None,
+            )
+            if prev and prev.get("role") == "assistant" and prev.get("tool_calls"):
+                result.append(msg)
+            # Sinon : orphelin — on saute silencieusement
+        else:
+            result.append(msg)
+    return result
+
 
 def _to_openai_dict(msg) -> dict:
     """Convertit un message LangChain en dict OpenAI."""

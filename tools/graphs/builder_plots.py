@@ -105,12 +105,67 @@ client_visible    : true
 from __future__ import annotations
 
 import base64
+import io
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pandas as pd
 from tools.builder._nb_loader import load_nb
+
+# ── Palette standardisée (cohérente avec le YAML generation_rules) ────────────
+_BG     = "#FBF8F1"   # fond uniforme
+_GRID   = "#E8E3D8"   # grille légère
+_BLUE   = "#2C5F8A"   # males / ligne principale
+_RED    = "#C0392B"   # females / modélisé / anomalie
+_ORANGE = "#E67E22"   # accentuation secondaire
+_GREEN  = "#27AE60"   # SMR global / ligne référence positive
+_CI     = "#AED6F1"   # bande IC (light blue)
+_CRUDE  = "#888888"   # taux bruts (gris)
+_MALE   = _BLUE
+_FEMALE = _RED
 
 
 def _to_b64(png_bytes: bytes) -> str:
     return base64.b64encode(png_bytes).decode()
+
+
+def _std_fig(figsize=(13, 5)):
+    """Crée une figure matplotlib avec le style standard du projet."""
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+    ax.grid(True, color=_GRID, linewidth=0.8, alpha=0.8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    return fig, ax
+
+
+def _std_save(fig) -> str:
+    """Sauvegarde la figure et retourne le base64 PNG."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+def _ages_vals(d: dict) -> tuple:
+    """Convertit un dict {age_str: val} en (ages_sorted, vals_sorted)."""
+    if not d:
+        return [], []
+    pairs = []
+    for k, v in d.items():
+        try:
+            pairs.append((int(k), float(v) if v is not None else 0.0))
+        except (ValueError, TypeError):
+            pass
+    pairs.sort()
+    return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def _ctx(data: dict) -> dict:
+    """Retourne template_context si disponible, sinon data directement."""
+    return data.get("template_context") or data
 
 
 def run(data: dict | None, params: dict | None = None) -> dict:
@@ -366,5 +421,173 @@ def run(data: dict | None, params: dict | None = None) -> dict:
         import base64
         return {"chart": "abatement_chart", "image_b64": base64.b64encode(buf.read()).decode()}
 
+    # ── deaths_by_age : décès observés par âge, séries H/F ───────────────────
+    elif chart == "deaths_by_age":
+        c = _ctx(data)
+        male_d   = c.get("deaths_by_age_male")   or {}
+        female_d = c.get("deaths_by_age_female") or {}
+
+        # Fallback : colonne D_x de l'exposure_table (sans segmentation sexe)
+        if not male_d and not female_d:
+            records = data.get("exposure_table")
+            if not records:
+                return {"erreur": "exposure_table manquant. Appeler builder.exposure d'abord."}
+            exp_df = pd.DataFrame(records)
+            if "D_x" in exp_df.columns:
+                male_d = {str(int(r["age"])): r["D_x"] for _, r in exp_df.iterrows()}
+
+        if not male_d and not female_d:
+            return {"erreur": "deaths_by_age_male / deaths_by_age_female manquants."}
+
+        fig, ax = _std_fig()
+        if male_d:
+            ages, vals = _ages_vals(male_d)
+            ax.plot(ages, vals, color=_MALE, linewidth=1.8, label="Hommes")
+        if female_d:
+            ages, vals = _ages_vals(female_d)
+            ax.plot(ages, vals, color=_FEMALE, linewidth=1.8, label="Femmes")
+
+        ax.set_xlabel("Âge", fontsize=10)
+        ax.set_ylabel("Nombre de décès", fontsize=10)
+        ax.set_title(
+            f"Décès par âge{' — ' + title_suffix if title_suffix else ''}",
+            fontsize=11, loc="left",
+        )
+        ax.legend(facecolor=_BG, edgecolor=_GRID, fontsize=9)
+        return {"chart": "deaths_by_age", "image_b64": _std_save(fig)}
+
+    # ── obs_vs_modeled : décès observés vs modélisés + bande IC + anomalies ──
+    elif chart == "obs_vs_modeled":
+        c = _ctx(data)
+        obs     = c.get("observed_deaths_by_age")  or {}
+        mod     = c.get("modeled_deaths_by_age")   or {}
+        ci_low  = c.get("ci_lower_by_age")         or {}
+        ci_high = c.get("ci_upper_by_age")         or {}
+
+        # Fallback depuis validation.ci_table
+        if not obs or not mod:
+            val = data.get("validation") or {}
+            ci_table = val.get("ci_table") if isinstance(val, dict) else []
+            if ci_table:
+                obs     = obs  or {str(r["age"]): r.get("D_x", 0)             for r in ci_table}
+                mod     = mod  or {str(r["age"]): r.get("expected_deaths", 0)  for r in ci_table}
+                ci_low  = ci_low  or {str(r["age"]): r.get("ci_lower", 0)     for r in ci_table}
+                ci_high = ci_high or {str(r["age"]): r.get("ci_upper", 0)     for r in ci_table}
+
+        if not obs or not mod:
+            return {"erreur": "observed_deaths_by_age / modeled_deaths_by_age manquants. Appeler builder.validation d'abord."}
+
+        ages_obs, vals_obs = _ages_vals(obs)
+        ages_mod, vals_mod = _ages_vals(mod)
+
+        fig, ax = _std_fig(figsize=(13, 6))
+
+        # Bande IC
+        if ci_low and ci_high:
+            ages_ci, low_vals  = _ages_vals(ci_low)
+            _,       high_vals = _ages_vals(ci_high)
+            ax.fill_between(ages_ci, low_vals, high_vals,
+                            alpha=0.25, color=_CI, label=f"IC {c.get('confidence_interval_level', 95)}%")
+
+        ax.plot(ages_mod, vals_mod, color=_RED,    linewidth=2.0, label="Décès modélisés")
+        ax.plot(ages_obs, vals_obs, color="#2C3E50", linewidth=1.5,
+                linestyle="--", label="Décès observés")
+
+        # Anomalies : points où observé > IC supérieur
+        if ci_high:
+            ages_ci_h, high_vals = _ages_vals(ci_high)
+            ci_h_map = dict(zip(ages_ci_h, high_vals))
+            anom_x = [a for a, v in zip(ages_obs, vals_obs) if v > ci_h_map.get(a, float("inf"))]
+            anom_y = [obs[str(a)] for a in anom_x if str(a) in obs]
+            if anom_x:
+                ax.scatter(anom_x, anom_y, color=_RED, s=40, zorder=5,
+                           marker="o", label="Anomalie (hors IC)")
+
+        ax.set_xlabel("Âge", fontsize=10)
+        ax.set_ylabel("Nombre de décès", fontsize=10)
+        ax.set_title(
+            f"Décès observés vs modélisés{' — ' + title_suffix if title_suffix else ''}",
+            fontsize=11, loc="left",
+        )
+        ax.legend(facecolor=_BG, edgecolor=_GRID, fontsize=9)
+        return {"chart": "obs_vs_modeled", "image_b64": _std_save(fig)}
+
+    # ── rate_ratio : ratio taux courant / taux précédent par âge ─────────────
+    elif chart == "rate_ratio":
+        c = _ctx(data)
+        ratios = c.get("rate_ratio_current_vs_prior") or {}
+
+        # Fallback depuis precedent_comparison
+        if not ratios:
+            prec = data.get("precedent_comparison") or {}
+            if isinstance(prec, dict):
+                ct = prec.get("comparison_table") or []
+                ratios = {str(r.get("age", "")): r.get("ratio", 1.0) for r in ct if r.get("age")}
+
+        if not ratios:
+            return {"erreur": "rate_ratio_current_vs_prior manquant. Appeler builder.precedent_comparison d'abord."}
+
+        ages, vals = _ages_vals(ratios)
+        fig, ax = _std_fig()
+        ax.plot(ages, vals, color=_BLUE, linewidth=2.0, label="Ratio courant / précédent")
+        ax.axhline(y=1.0, color=_CRUDE, linewidth=1.4, linestyle="--", label="Pas de changement (= 1.0)")
+
+        # Signaler les déviations > 10%
+        anom_x = [a for a, v in zip(ages, vals) if abs(v - 1.0) > 0.10]
+        anom_y = [ratios[str(a)] for a in anom_x if str(a) in ratios]
+        if anom_x:
+            ax.scatter(anom_x, anom_y, color=_ORANGE, s=40, zorder=5,
+                       marker="^", label="Écart > 10%")
+
+        ax.set_xlabel("Âge", fontsize=10)
+        ax.set_ylabel("Ratio taux d'expérience (courant / précédent)", fontsize=10)
+        ax.set_title(
+            f"Comparaison avec la table précédente{' — ' + title_suffix if title_suffix else ''}",
+            fontsize=11, loc="left",
+        )
+        ax.legend(facecolor=_BG, edgecolor=_GRID, fontsize=9)
+        return {"chart": "rate_ratio", "image_b64": _std_save(fig)}
+
+    # ── discount_line : facteurs d'abattement en courbe (vs barres) ──────────
+    elif chart == "discount_line":
+        c = _ctx(data)
+        discounts = c.get("discount_by_age") or {}
+
+        # Fallback depuis benchmarking.abatement_table
+        if not discounts:
+            bm = data.get("benchmarking") or {}
+            ab_table = bm.get("abatement_table") if isinstance(bm, dict) else None
+            if ab_table:
+                discounts = {str(r["age"]): r.get("abatement_factor", 0) for r in ab_table}
+
+        if not discounts:
+            return {"erreur": "discount_by_age manquant. Appeler builder.benchmarking d'abord."}
+
+        ages, vals = _ages_vals(discounts)
+        ref  = (data.get("benchmarking") or {}).get("reference_name") or \
+               (data.get("template_context") or {}).get("baseline_regulatory_table") or "TH0002"
+        smr_global = data.get("smr_global") or (data.get("benchmarking") or {}).get("smr_global")
+
+        fig, ax = _std_fig()
+        ax.plot(ages, vals, color=_BLUE, linewidth=2.0, label="Facteur d'abattement")
+        ax.axhline(y=1.0, color=_CRUDE, linewidth=1.4, linestyle="--",
+                   label=f"Référence (= {ref})")
+        if smr_global is not None:
+            ax.axhline(y=smr_global, color=_GREEN, linewidth=1.4, linestyle=":",
+                       label=f"SMR global = {smr_global:.3f}")
+
+        ax.set_xlabel("Âge", fontsize=10)
+        ax.set_ylabel("Facteur d'abattement (α)", fontsize=10)
+        ax.set_title(
+            f"Abattements vs {ref}{' — ' + title_suffix if title_suffix else ''}",
+            fontsize=11, loc="left",
+        )
+        ax.legend(facecolor=_BG, edgecolor=_GRID, fontsize=9)
+        return {"chart": "discount_line", "image_b64": _std_save(fig)}
+
     else:
-        return {"erreur": f"chart inconnu : '{chart}'. Valeurs : exposure, crude_smoothed, smr, ci_bands, survival_curve, abatement_chart"}
+        return {"erreur": (
+            f"chart inconnu : '{chart}'. Valeurs : "
+            "exposure, crude_smoothed, smr, ci_bands, survival_curve, abatement_chart, "
+            "deaths_by_age, obs_vs_modeled, rate_ratio, discount_line"
+        )}

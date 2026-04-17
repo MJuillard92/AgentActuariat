@@ -39,12 +39,12 @@ server = app.server
 # Thread state (WriterAgent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SESSIONS_DIR = Path(__file__).parent / "sessions"
+_SESSIONS_DIR = Path(__file__).parent / "session" / "data"
 
 _writer_state: dict = {
     "events": [], "running": False, "data_store": {}, "context_docs": [],
     "step_by_step": False, "pending_tool_call": None,
-    "session_id": None,    # yymmddhhmm — set on CSV upload or first tool call
+    "session_id": None,       # yymmddhhmm — set on first tool call
     "csv_filename": None,
 }
 _writer_lock = threading.Lock()
@@ -54,180 +54,72 @@ def _new_session_id() -> str:
     return datetime.datetime.now().strftime("%y%m%d%H%M")
 
 
-def _save_session(session_id: str, data_store: dict, csv_filename: str | None) -> None:
-    """Persiste le data_store sur disque après chaque tool call."""
-    if not session_id or not data_store:
-        return
-    _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "session_id":   session_id,
-        "timestamp":    datetime.datetime.now().isoformat(),
-        "csv_filename": csv_filename,
-        "n_tool_calls": len(data_store.get("_call_log", [])),
-        "data_store":   data_store,
-    }
-    path = _SESSIONS_DIR / f"{session_id}.json"
-    try:
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, default=str, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def load_session(session_id: str) -> dict | None:
-    """
-    Charge un data_store depuis une session persistée.
-
-    Usage (REPL ou script) :
-        from canvas_app import load_session
-        ds = load_session("2604021530")
-        print(ds["data_store"].keys())
-    """
-    path = _SESSIONS_DIR / f"{session_id}.json"
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _build_session_context(session_id: str, payload: dict, data_store: dict) -> str:
-    """Génère un message de contexte synthétique lisible par l'agent après restauration."""
-    import math
-
-    csv_filename = payload.get("csv_filename", "—")
-    n_calls      = payload.get("n_tool_calls", 0)
-
-    key_labels = {
-        "exposure_table": "Table d'exposition (builder.exposure)",
-        "qx_table":       "Taux bruts (builder.crude_rates)",
-        "smoothed_table": "Table lissée (builder.smoothing)",
-        "diagnostics":    "Diagnostics de crédibilité (builder.diagnostics)",
-        "validation":     "Validation statistique (builder.validation)",
-        "benchmarking":   "Benchmarking (builder.benchmarking)",
-        "certification_report": "Rapport PDF généré (build_pdf.certification_report)",
-    }
-    computed = [label for key, label in key_labels.items() if data_store.get(key)]
-
-    lines = [
-        f"[Session restaurée : {session_id}]",
-        f"Fichier analysé : {csv_filename}",
-        f"Nombre d'appels de tools : {n_calls}",
-        "",
-        "Calculs disponibles dans le data_store :",
-    ]
-    for label in computed:
-        lines.append(f"  ✓ {label}")
-
-    # Détails clés
-    exposure_table = data_store.get("exposure_table") or []
-    if exposure_table:
-        ages_with_exp = [r.get("age") for r in exposure_table
-                         if isinstance(r, dict) and (r.get("E_x") or 0) > 0]
-        if ages_with_exp:
-            e_total = sum((r.get("E_x") or 0) for r in exposure_table)
-            d_total = sum((r.get("D_x") or 0) for r in exposure_table)
-            lines.append(
-                f"\nExposition : {min(ages_with_exp)}-{max(ages_with_exp)} ans, "
-                f"{len(ages_with_exp)} âges, {e_total:,.0f} P-A, {int(d_total)} décès"
-            )
-
-    # Méthode de lissage
-    for key in ("smoothing_method", "method"):
-        method = data_store.get(key)
-        if method:
-            lam = data_store.get("lambda_wh") or data_store.get("lambda")
-            n_nm = data_store.get("n_non_monotone", 0) or 0
-            lines.append(
-                f"Lissage : {method}"
-                + (f", λ={lam}" if lam else "")
-                + f", violations monotonie : {n_nm}"
-            )
-            break
-
-    # SMR global
-    benchmarking = data_store.get("benchmarking") or {}
-    if isinstance(benchmarking, dict):
-        smr = benchmarking.get("smr_global")
-        if smr is not None and not (isinstance(smr, float) and math.isnan(smr)):
-            pct = abs(1.0 - smr) * 100
-            direction = "sous-mortalité" if smr < 1.0 else "sur-mortalité"
-            ref = benchmarking.get("reference_name", "TH0002")
-            lines.append(f"SMR global : {smr:.3f} ({direction} de {pct:.1f}% vs {ref})")
-
-    # Dernier message de raisonnement (résumé)
-    reasoning_log = data_store.get("_reasoning_log") or []
-    if reasoning_log:
-        last = reasoning_log[-1]
-        snippet = last[:400].rstrip() + ("…" if len(last) > 400 else "")
-        lines += ["", "Dernier état de la session :", snippet]
-
-    lines += [
-        "",
-        "Vous pouvez maintenant poser des questions sur ces résultats ou "
-        "demander la génération du rapport de certification.",
-    ]
-    return "\n".join(lines)
-
-
 def restore_session(session_id: str) -> tuple[str, list[dict]]:
     """
-    Réinjecte le data_store d'une session passée dans _writer_state.
+    Restaure une session depuis le SessionState persisté (MemoryManager).
     Retourne (message_statut, historique_chat_initial).
-
-    L'historique initial contient un message de contexte synthétique pour que
-    l'agent sache ce qui a été calculé dans cette session.
     """
-    payload = load_session(session_id)
-    if payload is None:
-        return f"Session introuvable : {session_id}", []
+    from session.memory_manager import MemoryManager
+    mm = MemoryManager(session_id)
+    mm.load()
 
-    data_store = payload.get("data_store", {})
-    if not data_store:
-        return f"Session {session_id} vide ou corrompue.", []
+    if not mm.state.tool_results and not mm.state.study_plan.is_complete():
+        return f"Session introuvable ou vide : {session_id}", []
 
-    # Nettoyer les valeurs NaN sérialisées en JSON (non standard)
-    import math
-    def _clean(obj):
-        if isinstance(obj, float) and math.isnan(obj):
-            return None
-        if isinstance(obj, dict):
-            return {k: _clean(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_clean(v) for v in obj]
-        return obj
-    data_store = _clean(data_store)
+    data_store = mm.to_data_store()
 
     with _writer_lock:
         _writer_state["data_store"]   = data_store
         _writer_state["session_id"]   = session_id
-        _writer_state["csv_filename"] = payload.get("csv_filename")
+        _writer_state["csv_filename"] = mm.state.csv_filename
 
-    keys = [k for k in data_store if not k.startswith("_")]
+    # Message de contexte pour l'agent
+    key_labels = {
+        "exposure_table":       "Table d'exposition",
+        "qx_table":             "Taux bruts",
+        "smoothed_table":       "Table lissée",
+        "diagnostics":          "Diagnostics de crédibilité",
+        "validation":           "Validation statistique",
+        "benchmarking":         "Benchmarking",
+        "certification_report": "Rapport PDF",
+    }
+    computed = [label for key, label in key_labels.items()
+                if mm.state.tool_results.get(key)]
     n_calls = len(data_store.get("_call_log", []))
-    status = (
-        f"Session {session_id} restaurée — "
-        f"{n_calls} appels, clés : {', '.join(keys)}"
+
+    lines = [
+        f"[Session restaurée : {session_id}]",
+        f"Calculs disponibles : {', '.join(computed) or 'aucun'}",
+        f"Appels tools : {n_calls}",
+    ]
+    if mm.state.context_summary:
+        lines.append(mm.state.context_summary.to_system_block())
+    lines.append(
+        "\nVous pouvez poser des questions sur ces résultats ou "
+        "demander la génération du rapport de certification."
     )
 
-    context_msg = _build_session_context(session_id, payload, data_store)
-    restored_history = [{"role": "assistant", "content": context_msg}]
-    return status, restored_history
+    status = (
+        f"Session {session_id} restaurée — "
+        f"{len(computed)} calculs, {n_calls} appels"
+    )
+    return status, [{"role": "assistant", "content": "\n".join(lines)}]
 
 
 def list_sessions() -> list[dict]:
     """Retourne la liste des sessions disponibles, triée par date décroissante."""
+    from session.session_state import SessionState
     if not _SESSIONS_DIR.exists():
         return []
     sessions = []
-    for p in sorted(_SESSIONS_DIR.glob("*.json"), reverse=True):
+    for p in sorted(_SESSIONS_DIR.glob("*_state.json"), reverse=True):
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            state = SessionState.model_validate_json(p.read_text(encoding="utf-8"))
             sessions.append({
-                "session_id":   raw.get("session_id", p.stem),
-                "timestamp":    raw.get("timestamp", "")[:16].replace("T", " "),
-                "csv_filename": raw.get("csv_filename", "—"),
-                "n_tool_calls": raw.get("n_tool_calls", 0),
+                "session_id":   state.session_id,
+                "timestamp":    state.updated_at[:16].replace("T", " "),
+                "csv_filename": state.csv_filename or "—",
+                "n_tool_calls": len(state.tool_results),
             })
         except Exception:
             continue
@@ -240,23 +132,29 @@ _step_cancel_flag: list[bool] = [False]
 
 def _run_writer_in_thread(history: list[dict], df_json: str | None) -> None:
     from agents.mortality.agents.graph import stream_agent
-    df = None
-    if df_json:
-        try:
-            df = pd.read_json(StringIO(df_json), orient="split")
-        except Exception:
-            pass
 
     # Récupérer le data_store et context_docs persistés de la session
     with _writer_lock:
         data_store   = _writer_state["data_store"]
         context_docs = _writer_state["context_docs"]
         step_by_step = _writer_state["step_by_step"]
-        # Générer un session_id si ce n'est pas encore fait (premier run sans upload CSV)
+        # Générer un session_id si ce n'est pas encore fait
         if not _writer_state["session_id"]:
             _writer_state["session_id"] = _new_session_id()
-        session_id   = _writer_state["session_id"]
-        csv_filename = _writer_state["csv_filename"]
+        session_id    = _writer_state["session_id"]
+        csv_filename  = _writer_state["csv_filename"]
+
+    # Le DataFrame est chargé par MemoryManager depuis Parquet si besoin.
+    # On passe df=None sauf si c'est le premier tour après upload (dataset pas encore enregistré).
+    df = None
+    if df_json:
+        from session.dataset_store import DatasetStore
+        if not DatasetStore.exists(session_id):
+            # Premier tour après upload — enregistrement via stream_agent → mm.register_dataset
+            try:
+                df = pd.read_json(StringIO(df_json), orient="split")
+            except Exception:
+                pass
 
     if step_by_step:
         _step_approval_event.clear()
@@ -270,13 +168,38 @@ def _run_writer_in_thread(history: list[dict], df_json: str | None) -> None:
             "user_msg": last_msg,
         })
 
+    # Activer le hub MasterAgent seulement si pas d'agent déjà défini
+    # (submit_disambiguation peut avoir injecté "builder" directement)
+    if "_initial_active_agent" not in data_store:
+        data_store["_initial_active_agent"] = "master"
+
+    # ── Audit JSON (piste humaine — jamais lu par l'agent) ───────────────────
+    _audit_path = _SESSIONS_DIR / f"{session_id}_audit.json"
+    _audit_entries: list[dict] = []
+
+    def _append_audit(ev: dict) -> None:
+        _audit_entries.append({
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            **{k: v for k, v in ev.items() if k not in ("image_b64",)},
+        })
+        try:
+            _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            _audit_path.write_text(
+                json.dumps(_audit_entries, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
     try:
         for event in stream_agent(
             history, df=df, data_store=data_store, context_docs=context_docs,
             step_by_step=step_by_step,
             approval_event=_step_approval_event if step_by_step else None,
             cancel_flag=_step_cancel_flag if step_by_step else None,
+            thread_id=session_id,
         ):
+            _append_audit(event)
             with _writer_lock:
                 _writer_state["events"].append(event)
                 if event["type"] == "awaiting_approval":
@@ -287,16 +210,17 @@ def _run_writer_in_thread(history: list[dict], df_json: str | None) -> None:
                     }
                 elif event["type"] in ("tool_result", "done", "error"):
                     _writer_state["pending_tool_call"] = None
-                # Persister le data_store après chaque tool call complété
-                if event["type"] == "tool_result":
-                    _save_session(session_id, data_store, csv_filename)
+                # La persistance est gérée par MemoryManager.after_turn() dans stream_agent()
     except Exception as exc:
+        _append_audit({"type": "error", "message": str(exc)})
         with _writer_lock:
             _writer_state["events"].append({"type": "error", "message": str(exc)})
     finally:
         with _writer_lock:
             _writer_state["running"] = False
             _writer_state["pending_tool_call"] = None
+            # Effacer le bypass MasterAgent pour que le tour suivant repasse par master
+            _writer_state["data_store"].pop("_initial_active_agent", None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,6 +366,26 @@ def _chat_bubble(role: str, content: str, extra: dict | None = None) -> html.Div
                 className="mb-1",
             )
         ]
+
+    # Bulle spéciale : désambiguation en attente
+    if role == "_disambiguation":
+        return html.Div(
+            dbc.Alert([
+                html.I(className="fa fa-clipboard-check me-2 text-primary"),
+                html.Strong("Informations requises"),
+                html.Span(" — remplissez le formulaire ci-dessous pour lancer l'analyse.",
+                          className="ms-1 text-muted"),
+                dbc.Button(
+                    [html.I(className="fa fa-edit me-1"), "Ouvrir le formulaire"],
+                    id="btn-open-disambiguation",
+                    color="primary",
+                    size="sm",
+                    n_clicks=0,
+                    className="ms-3",
+                ),
+            ], color="info", className="mb-0 py-2"),
+            className="d-flex mb-3 justify-content-start",
+        )
 
     bubble = html.Div(
         extra_children + ([dcc.Markdown(content, className="mb-0")] if content else []),
@@ -657,7 +601,7 @@ def _writer_tab() -> html.Div:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_capability_cards() -> list:
-    """Construit les cards de capacités depuis builder_capabilities.json."""
+    """Construit les cards de capacités depuis le catalogue dynamique (catalogue.py)."""
     caps = get_capabilities()
     cards = []
     for tool_name, tool_info in caps.get("tools", {}).items():
@@ -847,11 +791,182 @@ def _dev_tab() -> html.Div:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Modal désambiguation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _disambiguation_modal() -> dbc.Modal:
+    """
+    Modal de désambiguation : tableau interactif de mapping colonnes +
+    formulaire pour les prérequis manquants (table de référence, sexe, dates…).
+    Contenu dynamique rendu par le callback render_disambiguation_modal().
+    """
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle([
+            html.I(className="fa fa-clipboard-check me-2 text-primary"),
+            "Informations requises avant de lancer l'analyse",
+        ]), close_button=True),
+        dbc.ModalBody(html.Div(id="modal-disambiguation-body")),
+        dbc.ModalFooter([
+            dbc.Button(
+                [html.I(className="fa fa-check me-1"), "Confirmer et lancer"],
+                id="btn-disambiguation-confirm",
+                color="primary",
+                n_clicks=0,
+            ),
+            dbc.Button(
+                "Annuler",
+                id="btn-disambiguation-cancel",
+                color="secondary",
+                outline=True,
+                n_clicks=0,
+                className="ms-2",
+            ),
+        ]),
+    ], id="modal-disambiguation", size="xl", is_open=False, scrollable=True)
+
+
+def _render_column_mapping_table(
+    df_columns: list[str],
+    suggestion: dict[str, str | None],
+) -> html.Div:
+    """Tableau interactif mapping colonnes CSV ↔ champs actuariels."""
+    from agents.master.disambiguation import EXPECTED_COLUMNS
+
+    field_descriptions = {
+        "date_naissance": "Date de naissance",
+        "date_entree":    "Date d'entrée en observation",
+        "date_sortie":    "Date de sortie d'observation",
+        "cause_sortie":   "Cause de sortie (décès / autre)",
+        "sexe":           "Sexe (optionnel)",
+    }
+    field_required = {
+        "date_naissance": True,
+        "date_entree":    True,
+        "date_sortie":    True,
+        "cause_sortie":   True,
+        "sexe":           False,
+    }
+
+    options = [{"label": col, "value": col} for col in df_columns]
+    options_with_none = [{"label": "— non disponible —", "value": ""}] + options
+
+    rows = []
+    for canonical, description in field_descriptions.items():
+        suggested = suggestion.get(canonical) or ""
+        required = field_required.get(canonical, True)
+        badge = dbc.Badge("requis", color="danger", className="ms-1") if required \
+                else dbc.Badge("optionnel", color="secondary", className="ms-1")
+        confidence_color = "success" if suggested else "warning"
+        confidence_icon = "fa-check-circle" if suggested else "fa-question-circle"
+        rows.append(html.Tr([
+            html.Td([
+                html.Strong(description),
+                badge,
+                html.Br(),
+                html.Small(canonical, className="text-muted font-monospace"),
+            ], style={"verticalAlign": "middle", "width": "35%"}),
+            html.Td(
+                dbc.Select(
+                    id={"type": "col-mapping-select", "field": canonical},
+                    options=options if required else options_with_none,
+                    value=suggested,
+                    size="sm",
+                ),
+                style={"verticalAlign": "middle"},
+            ),
+            html.Td(
+                html.I(
+                    className=f"fa {confidence_icon} text-{confidence_color}",
+                    title="Détecté automatiquement" if suggested else "Non détecté — à sélectionner",
+                ),
+                style={"verticalAlign": "middle", "textAlign": "center", "width": "5%"},
+            ),
+        ]))
+
+    table = dbc.Table([
+        html.Thead(html.Tr([
+            html.Th("Champ actuariel"),
+            html.Th(f"Colonne dans votre CSV ({len(df_columns)} colonnes)"),
+            html.Th(""),
+        ]), className="table-primary"),
+        html.Tbody(rows),
+    ], bordered=True, hover=True, size="sm", responsive=True)
+
+    return html.Div([
+        dbc.Alert([
+            html.I(className="fa fa-info-circle me-2"),
+            "Vérifiez la correspondance entre les colonnes de votre fichier et les champs actuariels.",
+            html.Span(" Les colonnes en vert ont été détectées automatiquement.",
+                      className="text-success"),
+        ], color="info", className="mb-3 py-2"),
+        table,
+    ])
+
+
+def _render_prerequisites_form(form_fields: list[dict]) -> html.Div:
+    """Formulaire pour les prérequis non-mapping (dates, choix, entiers)."""
+    if not form_fields:
+        return html.Div()
+
+    controls = []
+    for field in form_fields:
+        key         = field.get("key", "")
+        label       = field.get("label", key)
+        ftype       = field.get("type", "text")
+        options     = field.get("options", [])
+        placeholder = field.get("placeholder", "")
+        description = field.get("description", "")
+        default     = field.get("default", "")
+
+        if ftype == "choice":
+            control = dbc.Select(
+                id={"type": "prereq-input", "key": key},
+                options=[{"label": o, "value": o} for o in options],
+                value=str(default) if default else options[0] if options else "",
+                size="sm",
+            )
+        elif ftype in ("int", "float"):
+            control = dbc.Input(
+                id={"type": "prereq-input", "key": key},
+                type="number",
+                value=default if default else "",
+                placeholder=placeholder or str(default),
+                size="sm",
+            )
+        else:
+            control = dbc.Input(
+                id={"type": "prereq-input", "key": key},
+                type="text",
+                value=str(default) if default else "",
+                placeholder=placeholder or label,
+                size="sm",
+            )
+
+        controls.append(dbc.Row([
+            dbc.Label(label, width=4, className="fw-bold small"),
+            dbc.Col(control, width=8),
+            dbc.Col(
+                html.Small(description, className="text-muted"),
+                width={"size": 8, "offset": 4},
+            ) if description else None,
+        ], className="mb-2 align-items-center"))
+
+    return html.Div([
+        html.Hr(className="my-3"),
+        html.H6([html.I(className="fa fa-sliders-h me-2"), "Paramètres de l'étude"],
+                className="text-secondary mb-3"),
+        *controls,
+    ])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Layout
 # ─────────────────────────────────────────────────────────────────────────────
 
 app.layout = dbc.Container([
     # Stores
+    dcc.Store(id="store-page-load", data=True),   # détection rechargement page
+    dcc.Store(id="_page-load-sink"),               # output fictif pour callback page-load
     dcc.Store(id="store-df-json"),
     dcc.Store(id="store-chat-history", data=[]),
     dcc.Store(id="store-last-event-idx", data=0),
@@ -861,6 +976,10 @@ app.layout = dbc.Container([
     dcc.Store(id="store-context-docs", data=[]),
     dcc.Store(id="store-step-mode", data=False),
     dcc.Store(id="store-agent-internals", data=[]),
+    dcc.Store(id="store-disambiguation", data=None),  # données en attente de désambiguation
+    # Bouton fantôme pour le callback toggle_disambiguation_modal
+    # (rendu visible dans _chat_bubble, mais doit exister dans le layout statique)
+    html.Button(id="btn-open-disambiguation", n_clicks=0, style={"display": "none"}),
 
     # Téléchargements
     dcc.Download(id="download-pdf"),
@@ -872,6 +991,9 @@ app.layout = dbc.Container([
 
     # Interval one-shot pour attacher l'écouteur Enter sur chat-input
     dcc.Interval(id="init-listeners", interval=600, n_intervals=0, max_intervals=1, disabled=False),
+
+    # Modal désambiguation (mapping colonnes + formulaire prérequis)
+    _disambiguation_modal(),
 
     # Header
     dbc.Navbar(
@@ -922,8 +1044,31 @@ def cb_restore_session(n_clicks, session_id):
 
 
 @app.callback(
+    Output("_page-load-sink", "data"),
+    Input("store-page-load", "data"),
+    prevent_initial_call=False,
+)
+def _on_page_load(_):
+    """
+    Réinitialise le _writer_state à chaque chargement/rechargement de page.
+    store-page-load est un dcc.Store(storage_type='memory') — il est remis à True
+    par le navigateur à chaque refresh, ce qui déclenche ce callback.
+    """
+    with _writer_lock:
+        _writer_state["session_id"]        = None
+        _writer_state["data_store"]        = {}
+        _writer_state["events"]            = []
+        _writer_state["running"]           = False
+        _writer_state["pending_tool_call"] = None
+        _writer_state["context_docs"]      = []
+    return dash.no_update
+
+
+@app.callback(
     Output("store-df-json", "data"),
     Output("csv-info", "children"),
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Output("store-last-event-idx", "data", allow_duplicate=True),
     Input("upload-csv", "contents"),
     State("upload-csv", "filename"),
     prevent_initial_call=True,
@@ -938,17 +1083,40 @@ def upload_csv(contents, filename):
 
     df_json = df.to_json(orient="split")
 
-    # Réinitialiser le data_store et ouvrir une nouvelle session horodatée
+    # Réinitialiser complètement le state pour la nouvelle session
+    session_id = _new_session_id()
     with _writer_lock:
-        _writer_state["data_store"]   = {}
-        _writer_state["session_id"]   = _new_session_id()
-        _writer_state["csv_filename"] = filename
+        _writer_state["data_store"]        = {}
+        _writer_state["session_id"]        = session_id
+        _writer_state["csv_filename"]      = filename
+        _writer_state["events"]            = []
+        _writer_state["running"]           = False
+        _writer_state["pending_tool_call"] = None
+        _writer_state["context_docs"]      = []
 
     caps = get_capabilities()
     report = build_mapping_report(df, caps)
 
     ready_fns = sum(1 for s in report["fn_readiness"].values() if s["ready"])
     total_fns = len(report["fn_readiness"])
+
+    # ── Enregistrer le dataset (écriture unique) via MemoryManager ───────────
+    from session.memory_manager import MemoryManager
+    mm = MemoryManager(session_id)
+    mm.load()
+    mm.register_dataset(df, csv_filename=filename)
+    # Propager le column_mapping dans le SessionState
+    mm.state.column_mapping           = report["matched"]
+    mm.state.column_mapping_confirmed = len(report["unmatched"]) == 0
+    mm.state.column_mapping_unmatched = list(report["unmatched"].keys())
+    mm.save()
+
+    # Persister le mapping dans data_store (pour compatibilité agents)
+    with _writer_lock:
+        ds = _writer_state["data_store"]
+        ds["column_mapping"] = report["matched"]
+        ds["column_mapping_confirmed"] = len(report["unmatched"]) == 0
+        ds["column_mapping_unmatched"] = list(report["unmatched"].keys())
 
     info = html.Div([
         dbc.Alert(
@@ -961,7 +1129,7 @@ def upload_csv(contents, filename):
         ),
         _mapping_badge(df),
     ])
-    return df_json, info
+    return df_json, info, [], 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1299,6 +1467,7 @@ def _internals_entry(ev: dict) -> html.Div:
     Output("step-approval-banner", "children", allow_duplicate=True),
     Output("agent-internals-log", "children", allow_duplicate=True),
     Output("internals-agent-badge", "children", allow_duplicate=True),
+    Output("store-disambiguation", "data", allow_duplicate=True),
     Input("interval-poll", "n_intervals"),
     State("store-chat-history", "data"),
     State("store-last-event-idx", "data"),
@@ -1313,6 +1482,7 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
     history = list(history or [])
     new_events = events[last_idx:]
     pdf_path = txt_path = notebook_path = None
+    disambiguation_data = dash.no_update
 
     # Badge agent courant (dernier agent_switch vu)
     current_agent = None
@@ -1330,7 +1500,13 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
             current_agent = ev.get("agent")
 
         elif ev_type == "message":
-            history.append({"role": "assistant", "content": ev.get("content", "")})
+            content = ev.get("content", "")
+            history.append({"role": "assistant", "content": content})
+            # Extraire le chemin PDF depuis <WRITE_DONE: /path/to/file.pdf>
+            import re as _re
+            _wd = _re.search(r'<WRITE_DONE[:\s]+([^\s>]+\.pdf)', content)
+            if _wd:
+                pdf_path = _wd.group(1)
 
         elif ev_type == "tool_call":
             history.append({
@@ -1370,6 +1546,21 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
                     txt_path = out_path
                 elif out_path.endswith(".ipynb"):
                     notebook_path = out_path
+
+        elif ev_type == "report_ready":
+            # Rapport PDF généré par le WriterAgent pipeline
+            out_path = str(ev.get("output_path", ""))
+            if out_path and out_path.endswith(".pdf"):
+                pdf_path = out_path
+
+        elif ev_type == "disambiguation_required":
+            # Ouvrir le modal de désambiguation
+            disambiguation_data = ev
+            # Ne pas stocker ev dans history (non sérialisable proprement)
+            history.append({
+                "role":    "_disambiguation",
+                "content": "Informations requises avant de lancer l'analyse.",
+            })
 
         elif ev_type == "error":
             history.append({"role": "assistant", "content": f"⚠️ Erreur : {ev.get('message', '')}"})
@@ -1421,6 +1612,8 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
                     "function_name": h.get("function_name", ""),
                     "result_keys":   h.get("result_keys", []),
                 }))
+        elif role == "_disambiguation":
+            bubbles.append(_chat_bubble("_disambiguation", content))
 
     done = not running
     poll_disabled = done
@@ -1446,7 +1639,7 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
 
     return (bubbles, poll_disabled, status_text, status_color,
             history, new_idx, pdf_path, txt_path, notebook_path,
-            banner, new_internals, internals_badge)
+            banner, new_internals, internals_badge, disambiguation_data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1688,24 +1881,13 @@ def handle_new_fn_modal(add_clicks, cancel_clicks, create_clicks,
         py_path = target_dir / f"{fn_name}.py"
         py_path.write_text(code, encoding="utf-8")
 
-        # Mettre à jour builder_capabilities.json
-        caps_path = Path(__file__).parent / "tools" / "builder_capabilities.json"
-        caps = json.loads(caps_path.read_text(encoding="utf-8"))
-        if tool_name not in caps["tools"]:
-            caps["tools"][tool_name] = {"description": "", "functions": {}}
-
+        # Le catalogue est maintenant dynamique (catalogue.py) — invalider le cache
+        # pour que get_capabilities() reparse le nouveau fichier au prochain appel
         try:
-            parsed_params = json.loads(params_json) if params_json and params_json.strip() else {}
+            from tools.tool_registry import invalidate_capabilities_cache
+            invalidate_capabilities_cache()
         except Exception:
-            parsed_params = {}
-
-        caps["tools"][tool_name]["functions"][fn_name] = {
-            "description": fn_desc or "",
-            "required_columns": req_cols or [],
-            "optional_columns": opt_cols or [],
-            "params": parsed_params,
-        }
-        caps_path.write_text(json.dumps(caps, ensure_ascii=False, indent=2), encoding="utf-8")
+            pass
 
         return False, dash.no_update, "", ""
 
@@ -1761,6 +1943,164 @@ def _generate_fn_template(fn_name: str, description: str,
         + ("\n" + missing_check if missing_check else "")
         + "\n    # TODO : implémenter la logique\n    result = {}\n\n    return result\n"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Désambiguation (modal)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("modal-disambiguation", "is_open"),
+    Output("modal-disambiguation-body", "children"),
+    Input("store-disambiguation", "data"),
+    Input("btn-open-disambiguation", "n_clicks"),
+    Input("btn-disambiguation-cancel", "n_clicks"),
+    State("modal-disambiguation", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_disambiguation_modal(disam_data, open_clicks, cancel_clicks, is_open):
+    """Ouvre / ferme le modal et en rend le contenu."""
+    ctx = callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if trigger_id == "btn-disambiguation-cancel":
+        return False, dash.no_update
+
+    if trigger_id in ("store-disambiguation", "btn-open-disambiguation"):
+        # Chercher les données dans le store si ouvert par bouton
+        if not disam_data:
+            raise PreventUpdate
+        body_parts = []
+
+        # ── Section mapping colonnes ─────────────────────────────────────────
+        if disam_data.get("needs_column_mapping"):
+            df_columns = disam_data.get("df_columns") or []
+            suggestion = disam_data.get("column_mapping_suggestion") or {}
+            if df_columns:
+                body_parts.append(html.Div([
+                    html.H6([html.I(className="fa fa-table me-2"), "Correspondance des colonnes CSV"],
+                            className="text-secondary mb-3"),
+                    _render_column_mapping_table(df_columns, suggestion),
+                ]))
+
+        # ── Section formulaire prérequis ─────────────────────────────────────
+        if disam_data.get("needs_form"):
+            form_fields = disam_data.get("form_fields") or []
+            if form_fields:
+                body_parts.append(_render_prerequisites_form(form_fields))
+
+        if not body_parts:
+            raise PreventUpdate
+
+        return True, html.Div(body_parts)
+
+    raise PreventUpdate
+
+
+@app.callback(
+    Output("modal-disambiguation", "is_open", allow_duplicate=True),
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Output("interval-poll", "disabled", allow_duplicate=True),
+    Output("agent-status-badge", "children", allow_duplicate=True),
+    Output("agent-status-badge", "color", allow_duplicate=True),
+    Output("store-last-event-idx", "data", allow_duplicate=True),
+    Input("btn-disambiguation-confirm", "n_clicks"),
+    State("store-disambiguation", "data"),
+    State({"type": "col-mapping-select", "field": ALL}, "value"),
+    State({"type": "col-mapping-select", "field": ALL}, "id"),
+    State({"type": "prereq-input", "key": ALL}, "value"),
+    State({"type": "prereq-input", "key": ALL}, "id"),
+    State("store-chat-history", "data"),
+    State("switch-step-mode", "value"),
+    State("store-df-json", "data"),
+    prevent_initial_call=True,
+)
+def submit_disambiguation(
+    n_clicks, disam_data,
+    col_values, col_ids,
+    prereq_values, prereq_ids,
+    history, step_mode, df_json,
+):
+    """
+    Sauvegarde le mapping confirmé + les prérequis dans data_store,
+    puis relance le thread agent pour continuer.
+    """
+    if not n_clicks:
+        raise PreventUpdate
+
+    # ── 1. Construire le column_mapping confirmé ─────────────────────────────
+    col_mapping: dict[str, str] = {}
+    for id_dict, value in zip(col_ids or [], col_values or []):
+        field = id_dict.get("field", "")
+        if field and value:
+            col_mapping[field] = value
+
+    # ── 2. Construire les prérequis du formulaire ────────────────────────────
+    prereqs: dict[str, str] = {}
+    for id_dict, value in zip(prereq_ids or [], prereq_values or []):
+        key = id_dict.get("key", "")
+        if key and value is not None and str(value).strip():
+            prereqs[key] = str(value).strip()
+
+    # ── 3. Mettre à jour le data_store ──────────────────────────────────────
+    task_type = (disam_data or {}).get("task_type", "mortality_table")
+    target_agent = "writer" if task_type == "report" else "builder"
+
+    with _writer_lock:
+        ds = _writer_state["data_store"]
+        # Mettre à jour le column_mapping uniquement si le formulaire a affiché
+        # les dropdowns de mapping (needs_column_mapping=True). Sinon, conserver
+        # le mapping confirmé lors de l'upload pour éviter une boucle.
+        needs_col_mapping = (disam_data or {}).get("needs_column_mapping", False)
+        if needs_col_mapping and col_mapping:
+            ds["column_mapping"]           = col_mapping
+            ds["column_mapping_confirmed"] = True
+            for canonical, csv_col in col_mapping.items():
+                ds[f"col_{canonical}"] = csv_col
+        elif not ds.get("column_mapping_confirmed"):
+            # Aucun mapping UI, mais pas encore confirmé — ne pas bloquer
+            ds["column_mapping_confirmed"] = True
+
+        ds["_disambiguation_done"]     = True
+        # Injecter l'agent cible directement — _run_writer_in_thread ne l'écrasera pas
+        ds["_initial_active_agent"]    = target_agent
+
+        # Injecter dans study_plan
+        sp = ds.setdefault("study_plan", {})
+        for key, value in prereqs.items():
+            sp[key] = value
+
+        _writer_state["events"]  = []
+        _writer_state["running"] = True
+        _writer_state["step_by_step"] = bool(step_mode)
+
+    # ── 4. Message de confirmation dans l'historique ─────────────────────────
+    history = list(history or [])
+    summary_parts = []
+    if col_mapping:
+        summary_parts.append(
+            "Mapping colonnes confirmé : " +
+            ", ".join(f"{k}={v}" for k, v in col_mapping.items() if v)
+        )
+    if prereqs:
+        summary_parts.append(
+            "Paramètres : " + ", ".join(f"{k}={v}" for k, v in prereqs.items())
+        )
+    summary = " | ".join(summary_parts)
+    history.append({"role": "user", "content": f"[Formulaire confirmé] {summary}"})
+
+    # ── 5. Relancer le thread agent ──────────────────────────────────────────
+    t = threading.Thread(
+        target=_run_writer_in_thread,
+        args=(history, df_json),
+        daemon=True,
+    )
+    t.start()
+
+    return False, history, False, "En cours…", "warning", 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

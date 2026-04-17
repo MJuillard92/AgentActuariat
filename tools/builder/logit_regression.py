@@ -61,7 +61,11 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - logit_regression
+  - logit_regression.slope_alpha   : float — pente α (attendu 0.9–1.1)
+  - logit_regression.intercept_beta: float — intercept β
+  - logit_regression.r_squared     : float — R² (seuil réglementaire > 0.99)
+  - logit_regression.formula       : str   — équation : logit(q_exp) = α × logit(q_ref) + β
+  - logit_regression.interpretation: str   — interprétation de la cohérence structurelle
 return_payload:
   slope_alpha    : float  # pente — attendu ~0.9–1.1
   intercept_beta : float

@@ -67,7 +67,11 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - cox_regression
+  - cox_regression.hazard_ratio  : float — Hazard Ratio H/F (attendu 1.5–3.0)
+  - cox_regression.cox_pvalue    : float — p-value du test d'égalité H/F
+  - cox_regression.ci_lower_95   : float — borne inférieure IC 95% du HR
+  - cox_regression.ci_upper_95   : float — borne supérieure IC 95% du HR
+  - cox_regression.interpretation: str   — interprétation textuelle du HR
 return_payload:
   hazard_ratio          : float  # HR sexe masculin vs féminin
   ci_lower_95           : float

@@ -124,24 +124,220 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
         return {"succes": False, "output_path": "", "nb_sections": 0,
                 "warning": f"ReportLab non disponible : {exc}"}
 
-    # ── Styles ────────────────────────────────────────────────────────────────
-    styles = getSampleStyleSheet()
-    BLUE   = colors.HexColor("#1A3668")
-    LBLUE  = colors.HexColor("#2C5F8A")
-    LIGHT  = colors.HexColor("#EAF0F7")
-    GREY   = colors.HexColor("#6B6B6B")
+    # ── Styles — depuis report_styles.py (source unique) ─────────────────────
+    from tools.build_pdf.report_styles import get_styles, COLORS, make_table
+    S   = get_styles()
+    C   = COLORS
+    BLUE  = C["BLUE"]
+    LBLUE = C["LBLUE"]
+    GREY  = C["GREY"]
+    LIGHT = C["LIGHT"]
 
-    title_s = ParagraphStyle("WT",  parent=styles["Title"],   fontSize=16, textColor=BLUE,
-                              alignment=TA_CENTER, spaceAfter=6)
-    sub_s   = ParagraphStyle("WSu", parent=styles["Normal"],  fontSize=10, textColor=GREY,
-                              alignment=TA_CENTER, spaceAfter=12)
-    h1_s    = ParagraphStyle("WH1", parent=styles["Heading1"], fontSize=12, textColor=BLUE,
-                              spaceBefore=14, spaceAfter=6)
-    h2_s    = ParagraphStyle("WH2", parent=styles["Heading2"], fontSize=10, textColor=LBLUE,
-                              spaceBefore=8,  spaceAfter=4)
-    body_s  = ParagraphStyle("WB",  parent=styles["Normal"],  fontSize=9, leading=13,
-                              spaceAfter=4, alignment=TA_JUSTIFY)
-    small_s = ParagraphStyle("WS",  parent=styles["Normal"],  fontSize=7.5, textColor=GREY, leading=10)
+    title_s = S.title
+    sub_s   = S.subtitle
+    h1_s    = S.h1
+    h2_s    = S.h2
+    body_s  = S.body
+    small_s = S.small
+    caption_s = S.caption
+
+    # ── Rendu de texte avec formules LaTeX + markup structuré ────────────────
+    from tools.build_pdf.math_renderer import split_math, has_math, render_formula
+    import re as _re
+
+    def _md_inline(text: str) -> str:
+        """
+        Convertit le markup inline en XML ReportLab :
+          **gras**  → <b>gras</b>
+          __gras__  → <b>gras</b>  (alternative)
+        N'applique PAS _italic_ pour éviter les conflits avec les indices q_x, D_x.
+        """
+        text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        text = _re.sub(r'__(.+?)__',     r'<b>\1</b>', text)
+        return text
+
+    def _para_with_math(raw: str, style) -> list:
+        """
+        Transforme un fragment de texte en flowables ReportLab.
+        Pipeline : échapper & → appliquer _md_inline → splitter les formules
+          - $...$ inline  → PNG inline via <img> tag
+          - $$...$$ block → RLImage centrée
+        """
+        raw = raw.strip()
+        if not raw:
+            return []
+
+        if not has_math(raw):
+            # Chemin rapide : escape & seulement, puis markup inline
+            safe = raw.replace("&", "&amp;")
+            safe = _md_inline(safe)
+            try:
+                return [Paragraph(safe, style)]
+            except Exception:
+                return [Paragraph(raw.replace("&", "&amp;"), style)]
+
+        segments = split_math(raw)
+        flowables = []
+        inline_parts: list[str] = []
+
+        def _flush_inline():
+            if inline_parts:
+                xml = "".join(inline_parts)
+                try:
+                    flowables.append(Paragraph(xml, style))
+                except Exception:
+                    # Fallback : retirer les tags <img> et réessayer
+                    stripped = _re.sub(r'<img[^/]*/>', '', xml)
+                    flowables.append(Paragraph(stripped, style))
+                inline_parts.clear()
+
+        for content, is_formula, is_display in segments:
+            if not is_formula:
+                safe = content.replace("&", "&amp;")
+                safe = _md_inline(safe)
+                inline_parts.append(safe)
+
+            elif is_display:
+                _flush_inline()
+                png = render_formula(content, display=True, fontsize=11)
+                if png:
+                    img = RLImage(png)
+                    img.hAlign = "CENTER"
+                    flowables.append(Spacer(1, 0.2 * cm))
+                    flowables.append(img)
+                    flowables.append(Spacer(1, 0.2 * cm))
+                else:
+                    flowables.append(Paragraph(f"[{content}]", style))
+
+            else:
+                png = render_formula(content, display=False, fontsize=9.5)
+                if png:
+                    try:
+                        import PIL.Image as _PIL
+                        with _PIL.open(png) as im:
+                            w_px, h_px = im.size
+                        dpi   = 200
+                        w_pt  = w_px / dpi * 72
+                        h_pt  = h_px / dpi * 72
+                        if h_pt > 14:
+                            scale = 14 / h_pt
+                            w_pt *= scale
+                            h_pt  = 14
+                        inline_parts.append(
+                            f'<img src="{png}" width="{w_pt:.1f}" height="{h_pt:.1f}" valign="middle"/>'
+                        )
+                    except Exception:
+                        inline_parts.append(f"[{content}]")
+                else:
+                    inline_parts.append(f"[{content}]")
+
+        _flush_inline()
+        return flowables
+
+    # ── Parser de texte structuré (markup LLM → flowables) ────────────────────
+    #
+    # Convention de markup reconnue :
+    #   ## Titre           → h2  (sous-section dans une section)
+    #   ### Titre          → h3  (paragraphe titré)
+    #   - item / * item    → liste à puces (• indenté)
+    #   > note             → texte de note (petit, gris, indenté)
+    #   **gras**           → gras inline
+    #   $formule$          → formule inline LaTeX
+    #   $$formule$$        → formule en bloc LaTeX
+    #   Texte normal       → paragraphe body justifié
+    #   Ligne vide         → séparation de paragraphes
+
+    def _parse_structured_text(text: str) -> list:
+        """
+        Parse le texte structuré produit par le LLM et retourne une liste de flowables.
+        Gère : titres ##/###, listes, notes >, gras inline, formules LaTeX.
+        """
+        if not text:
+            return []
+
+        flowables = []
+        lines     = text.splitlines()
+        i         = 0
+        pending_bullets: list[str] = []
+
+        def _flush_bullets():
+            if not pending_bullets:
+                return
+            # Style liste : body avec retrait + puce
+            bullet_style = ParagraphStyle(
+                "RT_bullet", parent=S.body,
+                leftIndent=14, firstLineIndent=-10,
+                spaceBefore=1, spaceAfter=1,
+            )
+            for b in pending_bullets:
+                flowables.extend(_para_with_math("• " + b, bullet_style))
+            flowables.append(Spacer(1, 0.15 * cm))
+            pending_bullets.clear()
+
+        while i < len(lines):
+            line    = lines[i]
+            stripped = line.strip()
+
+            # Ligne vide → flush bullets + petit espace
+            if not stripped:
+                _flush_bullets()
+                i += 1
+                continue
+
+            # Titres ##
+            if stripped.startswith("### "):
+                _flush_bullets()
+                flowables.append(Spacer(1, 0.1 * cm))
+                flowables.append(Paragraph(stripped[4:].strip(), S.h3))
+                i += 1
+                continue
+
+            if stripped.startswith("## "):
+                _flush_bullets()
+                flowables.append(Spacer(1, 0.2 * cm))
+                flowables.append(Paragraph(stripped[3:].strip(), S.h2))
+                flowables.append(HRFlowable(width="80%", thickness=0.4,
+                                            color=C["HRULE"], spaceAfter=4))
+                i += 1
+                continue
+
+            # Liste à puces
+            if stripped.startswith(("- ", "* ", "• ")):
+                pending_bullets.append(stripped[2:].strip())
+                i += 1
+                continue
+
+            # Note / avertissement
+            if stripped.startswith("> "):
+                _flush_bullets()
+                note_style = ParagraphStyle(
+                    "RT_note", parent=S.small,
+                    leftIndent=12,
+                    borderPadding=(3, 6, 3, 6),
+                    backColor=C["LIGHT2"],
+                )
+                flowables.extend(_para_with_math(stripped[2:].strip(), note_style))
+                i += 1
+                continue
+
+            # Paragraphe normal — agrège les lignes consécutives non-spéciales
+            _flush_bullets()
+            para_lines = [stripped]
+            while i + 1 < len(lines):
+                nxt = lines[i + 1].strip()
+                if (not nxt or
+                        nxt.startswith(("## ", "### ", "- ", "* ", "• ", "> "))):
+                    break
+                i += 1
+                para_lines.append(nxt)
+
+            para = " ".join(para_lines)
+            flowables.extend(_para_with_math(para, S.body))
+            flowables.append(Spacer(1, 0.05 * cm))
+            i += 1
+
+        _flush_bullets()
+        return flowables
 
     def _embed_image(path: str, width_cm: float = 16.0, height_cm: float = 7.0):
         if not path or not os.path.exists(path):
@@ -204,27 +400,18 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
         story.append(Paragraph(label, h1_s))
         story.append(HRFlowable(width="100%", thickness=0.5, color=LBLUE, spaceAfter=8))
 
-        # Narrative text
+        # Narrative text — parser structuré (## h2, ### h3, - listes, > notes, **gras**, $math$)
         text = sec.get("text") or ""
         if text:
-            for para in text.split("\n\n"):
-                para = para.strip()
-                if para:
-                    # Escape ampersands and angle brackets for ReportLab
-                    para_safe = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    story.append(Paragraph(para_safe, body_s))
-            story.append(Spacer(1, 0.3 * cm))
+            story.extend(_parse_structured_text(text))
+            story.append(Spacer(1, 0.25 * cm))
 
-        # Subsection texts
+        # Subsection texts (legacy — si le rapport vient d'un ancien pipeline)
         subsection_texts = sec.get("subsection_texts") or {}
         for sub_label, sub_text in subsection_texts.items():
             if sub_text:
-                story.append(Paragraph(sub_label, h2_s))
-                for para in sub_text.split("\n\n"):
-                    para = para.strip()
-                    if para:
-                        para_safe = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                        story.append(Paragraph(para_safe, body_s))
+                story.append(Paragraph(sub_label, S.h2))
+                story.extend(_parse_structured_text(sub_text))
                 story.append(Spacer(1, 0.2 * cm))
 
         # Tables (list of reportlab Table objects OR raw 2D list)
@@ -232,7 +419,7 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
         table_captions = sec.get("table_captions") or []
         for i, tbl in enumerate(tables):
             caption = table_captions[i] if i < len(table_captions) else f"Tableau {i+1}"
-            story.append(Paragraph(caption, small_s))
+            story.append(Paragraph(caption, caption_s))
             if tbl is None:
                 story.append(Paragraph("(Tableau non disponible — données manquantes)", small_s))
                 continue
@@ -265,7 +452,7 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
             img = _embed_image(graph_path)
             if img:
                 story.append(img)
-                story.append(Paragraph(caption, small_s))
+                story.append(Paragraph(caption, caption_s))
                 story.append(Spacer(1, 0.3 * cm))
             else:
                 story.append(Paragraph(f"({caption} — non disponible)", small_s))

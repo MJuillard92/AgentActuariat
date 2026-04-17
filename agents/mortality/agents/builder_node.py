@@ -56,24 +56,51 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
         fallback = _PROJECT_ROOT / "agents" / "mortality" / "agent_instructions" / "behavioral_contract.md"
         base = fallback.read_text(encoding="utf-8") if fallback.exists() else ""
 
-    # Ajouter le mapping colonnes si df disponible
-    df_json = state.get("df_json")
-    if df_json:
+    # Ajouter le mapping colonnes — chargement depuis MemoryManager (Parquet)
+    dataset_ref = state.get("dataset_ref")
+    if dataset_ref:
         try:
-            df = pd.read_json(StringIO(df_json), orient="split")
-            from tools.tool_registry import get_capabilities
-            from agents.mortality.dictionary.column_schema import build_mapping_report, COLUMN_SCHEMA
-            caps = get_capabilities()
-            report = build_mapping_report(df, caps)
-            base += f"\n\n## Données : {len(df):,} lignes, {len(df.columns)} colonnes\n\n"
-            base += "| Rôle | Colonne | Statut |\n|---|---|---|\n"
-            for role, info in COLUMN_SCHEMA.items():
-                if role in report["matched"]:
-                    base += f"| {info['label']} | `{report['matched'][role]}` | ✓ |\n"
-                else:
-                    base += f"| {info['label']} | — | ❌ |\n"
+            from session.memory_manager import MemoryManager
+            mm = MemoryManager(dataset_ref)
+            mm.load()
+            df = mm.load_dataframe()
+            if df is not None:
+                from tools.tool_registry import get_capabilities
+                from agents.mortality.dictionary.column_schema import build_mapping_report, COLUMN_SCHEMA
+                caps = get_capabilities()
+                report = build_mapping_report(df, caps)
+                base += f"\n\n## Données : {len(df):,} lignes, {len(df.columns)} colonnes\n\n"
+                base += "| Rôle | Colonne | Statut |\n|---|---|---|\n"
+                for role, info in COLUMN_SCHEMA.items():
+                    if role in report["matched"]:
+                        base += f"| {info['label']} | `{report['matched'][role]}` | ✓ |\n"
+                    else:
+                        base += f"| {info['label']} | — | ❌ |\n"
+            # Injecter le contexte antérieur (résumé compacté)
+            ctx_block = mm.get_context_block()
+            if ctx_block:
+                base += f"\n\n{ctx_block}"
         except Exception:
             pass
+
+    # Paramètres d'étude confirmés (collectés via le formulaire de désambiguation)
+    data_store = state.get("data_store") or {}
+    study_plan = data_store.get("study_plan") or {}
+    if study_plan:
+        base += "\n\n## Paramètres d'étude confirmés par l'utilisateur\n\n"
+        base += "Utilise ces paramètres directement dans les tool calls — ne les demande pas à l'utilisateur :\n\n"
+        param_labels = {
+            "observation_end_date":       "Date de fin d'observation",
+            "observation_start_date":     "Date de début d'observation",
+            "baseline_regulatory_table":  "Table de référence réglementaire",
+            "sexe":                       "Sexe du portefeuille (pour benchmarking)",
+            "age_min":                    "Âge minimum",
+            "age_max":                    "Âge maximum",
+            "smoothing_algorithm":        "Algorithme de lissage",
+        }
+        for k, v in study_plan.items():
+            label = param_labels.get(k, k)
+            base += f"- **{label}** : `{v}`\n"
 
     # Instructions sur <BUILD_DONE>
     base += (
@@ -100,7 +127,7 @@ def builder_node(state: "AgentState") -> dict:
     Retourne la mise à jour de l'état LangGraph.
     """
     import openai
-    from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response
+    from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
 
     level = _get_catalogue_level(state)
     system_prompt = _build_system_prompt(state, level)
@@ -117,6 +144,7 @@ def builder_node(state: "AgentState") -> dict:
     messages = [{"role": "system", "content": system_prompt}]
     for msg in raw_msgs:
         messages.append(_to_openai_dict(msg))
+    messages = sanitize_openai_messages(messages)
 
     from agents.mortality.agents._utils import call_with_retry
     client = openai.OpenAI()

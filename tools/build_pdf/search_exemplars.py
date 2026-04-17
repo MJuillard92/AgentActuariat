@@ -136,21 +136,27 @@ def run(data: dict, params: dict | None = None) -> dict:
         import chromadb
         from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
+        # Vérifier l'existence du corpus AVANT d'initialiser l'embedding function
+        # (évite de bloquer sur le téléchargement du modèle si le corpus est vide)
         _CHROMA_PATH.mkdir(parents=True, exist_ok=True)
-        client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
-        ef     = DefaultEmbeddingFunction()
+        _probe_client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
+        existing_collections = [c.name for c in _probe_client.list_collections()]
+        if _COLLECTION not in existing_collections:
+            return {
+                "chunks":     [],
+                "n_returned": 0,
+                "query_used": query,
+                "warning": (
+                    "Corpus exemplaires vide. Aucun rapport n'a encore été ingéré. "
+                    "Utiliser base_de_connaissance/chunk_report.py pour ajouter des exemplaires."
+                ),
+            }
 
-        # Obtenir ou créer la collection
-        try:
-            collection = client.get_collection(
-                name=_COLLECTION,
-                embedding_function=ef,
-            )
-        except Exception:
-            collection = client.get_or_create_collection(
-                name=_COLLECTION,
-                embedding_function=ef,
-            )
+        # Corpus existe — initialiser l'embedding function et interroger
+        ef     = DefaultEmbeddingFunction()
+        client = _probe_client
+
+        collection = client.get_collection(name=_COLLECTION, embedding_function=ef)
 
         # Vérifier si la collection est vide
         count = collection.count()

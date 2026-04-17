@@ -1,5 +1,5 @@
 """
-report_writer/errors.py
+agents/report/errors.py
 Erreurs structurées du WriterAgent — conçues pour être parsées par le MasterAgent.
 """
 from __future__ import annotations

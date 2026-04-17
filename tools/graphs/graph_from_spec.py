@@ -57,17 +57,29 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# ── Dispatch table : YAML graph id → (module, function_hint) ──────────────────
-# Maps known graph IDs to builder_plots chart names
+# ── Dispatch table : YAML graph id → builder_plots chart name ─────────────────
 _DISPATCH: dict[str, str] = {
+    # Exposition
+    "graph_exposure_by_age":         "exposure",
     "graph_exposure_distribution":   "exposure",
-    "graph_deaths_distribution":     "exposure",          # reuse exposure chart for deaths
-    "graph_obs_vs_modeled_by_age":   "ci_bands",
-    "graph_discount_factors":        "abatement_chart",
+    # Décès
+    "graph_deaths_by_age":           "deaths_by_age",
+    "graph_deaths_distribution":     "deaths_by_age",
+    # Observé vs modélisé + IC
+    "graph_comparison":              "obs_vs_modeled",
+    "graph_obs_vs_modeled_by_age":   "obs_vs_modeled",
+    # Comparaison avec table antérieure
+    "graph_prior_comparison":        "rate_ratio",
+    "graph_rate_ratio":              "rate_ratio",
+    # Abattements / remises
+    "graph_discounts":               "discount_line",
+    "graph_discount_factors":        "discount_line",
+    # Taux bruts + lissés
     "graph_crude_smoothed":          "crude_smoothed",
+    # SMR
     "graph_smr":                     "smr",
+    # Courbe de survie
     "graph_survival_curve":          "survival_curve",
-    "graph_rate_ratio":              "crude_smoothed",    # fallback generic
 }
 
 

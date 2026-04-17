@@ -1,0 +1,224 @@
+"""
+agents/report/pipeline/03_completion_plan.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ÉTAPE 3 — RAG (parallèle)
+
+Reçoit le ReportPlan validé (étape 02).
+Pour chaque section prioritaire, interroge le corpus RAG (search_exemplars)
+en parallèle (ThreadPoolExecutor, max 4 workers — I/O bound).
+
+Le résultat est un ReportPlan enrichi : chaque SectionPlan reçoit un
+bloc ## Exemples de rédaction injecté dans son prompt.
+
+Si le corpus est vide ou sans résultat pertinent : section inchangée — non bloquant.
+
+Interface publique :
+    complete_plan(plan, data_store) -> ReportPlan   (plan enrichi)
+"""
+from __future__ import annotations
+
+import concurrent.futures
+import logging
+from copy import deepcopy
+from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
+
+# Nombre de chunks RAG demandés par section
+_N_RESULTS = 3
+
+# Score de distance max acceptable (ChromaDB — plus petit = plus proche)
+# Au-dessus de ce seuil, l'extrait est ignoré (pas assez pertinent)
+_MAX_DISTANCE = 1.2
+
+# Sections pour lesquelles le RAG apporte le plus de valeur
+# (les sections purement chiffrées comme annex n'en ont pas besoin)
+_RAG_PRIORITY_SECTIONS = {
+    "preamble", "data_submission", "construction",
+    "obs_vs_modeled", "regulatory_positioning", "conclusion",
+}
+
+
+# ── Query RAG par section ─────────────────────────────────────────────────────
+
+_SECTION_QUERIES: dict[str, str] = {
+    "preamble": (
+        "comment rédiger l'introduction d'un rapport de certification "
+        "de table de mortalité d'expérience"
+    ),
+    "data_submission": (
+        "comment présenter les données transmises, les statistiques descriptives "
+        "et la distribution de l'exposition par âge et sexe"
+    ),
+    "construction": (
+        "justification du choix de la méthode de lissage whittaker henderson "
+        "pour la construction d'une table de mortalité"
+    ),
+    "obs_vs_modeled": (
+        "comment interpréter et commenter la comparaison entre décès observés "
+        "et décès modélisés avec intervalles de confiance"
+    ),
+    "prior_comparison": (
+        "comment présenter la comparaison entre une table d'expérience courante "
+        "et une table précédente, évolution de la prudence"
+    ),
+    "regulatory_positioning": (
+        "comment commenter le positionnement d'une table d'expérience par rapport "
+        "aux tables réglementaires TH TF, abattements et régression logit"
+    ),
+    "conclusion": (
+        "formulation de la conclusion d'un rapport de certification de table "
+        "de mortalité, recommandations d'usage et prudence actuarielle"
+    ),
+    "annex": (
+        "présentation de la table de mortalité finale en annexe d'un rapport actuariel"
+    ),
+}
+
+
+def _query_for_section(section_id: str, label: str) -> str:
+    """Retourne la query RAG pour une section donnée."""
+    return _SECTION_QUERIES.get(section_id) or (
+        f"rédaction professionnelle de la section '{label}' "
+        "d'un rapport de certification de table de mortalité"
+    )
+
+
+# ── Appel search_exemplars ────────────────────────────────────────────────────
+
+def _search_rag(query: str, n_results: int = _N_RESULTS) -> list[dict]:
+    """
+    Appelle search_exemplars et retourne les chunks pertinents.
+    Retourne [] si le corpus est vide ou si search_exemplars est indisponible.
+    """
+    try:
+        from tools.build_pdf.search_exemplars import run as _search_run
+        result = _search_run(data={}, params={"query": query, "n_results": n_results})
+
+        if result.get("warning") or not result.get("chunks"):
+            return []
+
+        # Filtrer par distance (pertinence)
+        chunks = result["chunks"]
+        filtered = [
+            c for c in chunks
+            if c.get("distance") is None or c.get("distance", 999) <= _MAX_DISTANCE
+        ]
+        return filtered
+
+    except Exception as exc:
+        log.debug("[03_completion_plan] search_exemplars indisponible : %s", exc)
+        return []
+
+
+# ── Formatage des extraits bruts ──────────────────────────────────────────────
+
+def _format_chunks(chunks: list[dict]) -> str:
+    """
+    Formate les extraits RAG bruts pour injection dans le prompt de rédaction.
+    L'agent de rédaction voit le texte réel des rapports de référence :
+    wording, niveau de détail, longueur — sans transformation.
+    """
+    if not chunks:
+        return ""
+
+    lines = [
+        "## Exemples de rédaction issus du corpus de référence",
+        "Ces extraits sont tirés de rapports actuariels réels.",
+        "Ils te donnent le ton, le niveau de détail et la longueur attendus.",
+        "Ne les copie pas — inspire-toi du style.",
+        "",
+    ]
+    for i, chunk in enumerate(chunks):
+        source   = chunk.get("rapport_id") or chunk.get("source") or f"rapport_{i+1}"
+        content  = (chunk.get("content") or chunk.get("document") or "").strip()
+        if not content:
+            continue
+        lines += [
+            f"### Extrait {i+1} — {source}",
+            content[:600],   # tronqué à 600 chars pour ne pas saturer le prompt
+            "",
+        ]
+
+    return "\n".join(lines)
+
+
+# ── Point d'entrée public ─────────────────────────────────────────────────────
+
+def _fetch_rag_for_section(sec) -> tuple[str, str, int]:
+    """
+    Interroge le corpus RAG pour une section donnée.
+    Thread-safe — pas d'état partagé.
+    Retourne (section_id, rag_block, n_chunks).
+    """
+    query  = _query_for_section(sec.section_id, sec.label)
+    chunks = _search_rag(query)
+    if not chunks:
+        return sec.section_id, "", 0
+    block = _format_chunks(chunks)
+    return sec.section_id, block, len(chunks)
+
+
+def complete_plan(plan, data_store: dict):
+    """
+    Enrichit chaque SectionPlan du ReportPlan avec des exemples RAG.
+
+    Les recherches RAG sont I/O-bound (ChromaDB) → parallélisées via
+    ThreadPoolExecutor (max 4 workers).
+
+    Args:
+        plan       : ReportPlan produit par 01_load_plan (validé par 02)
+        data_store : non utilisé ici, conservé pour interface homogène
+
+    Returns:
+        ReportPlan enrichi (copie profonde — le plan original n'est pas modifié)
+    """
+    enriched_plan = deepcopy(plan)
+
+    # Sections éligibles au RAG
+    eligible = [
+        sec for sec in enriched_plan.sections
+        if sec.section_id in _RAG_PRIORITY_SECTIONS and sec.ready
+    ]
+
+    if not eligible:
+        log.info("[03_completion_plan] aucune section éligible au RAG")
+        return enriched_plan
+
+    log.info("[03_completion_plan] %d sections à enrichir (parallèle)", len(eligible))
+
+    # Recherches RAG en parallèle (I/O bound — pas de conflit)
+    # Timeout par section : 20s max (ChromaDB + embedding model init peut être lent)
+    _RAG_TIMEOUT = 20
+
+    rag_results: dict[str, tuple[str, int]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_fetch_rag_for_section, sec): sec.section_id for sec in eligible}
+        for future in concurrent.futures.as_completed(futures, timeout=_RAG_TIMEOUT * len(eligible)):
+            sid = futures[future]
+            try:
+                section_id, rag_block, n_chunks = future.result(timeout=_RAG_TIMEOUT)
+                rag_results[section_id] = (rag_block, n_chunks)
+            except concurrent.futures.TimeoutError:
+                log.warning("[03_completion_plan] '%s' — RAG timeout (%ds), section ignorée", sid, _RAG_TIMEOUT)
+                rag_results[sid] = ("", 0)
+            except Exception as exc:
+                log.debug("[03_completion_plan] '%s' — RAG échoué : %s", sid, exc)
+                rag_results[sid] = ("", 0)
+
+    # Injection dans le plan (séquentiel — ordre préservé)
+    n_enriched = 0
+    for sec in enriched_plan.sections:
+        rag_block, n_chunks = rag_results.get(sec.section_id, ("", 0))
+        if rag_block:
+            sec.prompt += "\n\n" + rag_block
+            n_enriched += 1
+            log.info("[03_completion_plan] '%s' — %d extrait(s) injecté(s)",
+                     sec.section_id, n_chunks)
+        elif sec.section_id in _RAG_PRIORITY_SECTIONS and sec.ready:
+            log.info("[03_completion_plan] '%s' — aucun extrait (corpus vide ou hors seuil)",
+                     sec.section_id)
+
+    log.info("[03_completion_plan] terminé — %d sections enrichies sur %d éligibles",
+             n_enriched, len(eligible))
+    return enriched_plan

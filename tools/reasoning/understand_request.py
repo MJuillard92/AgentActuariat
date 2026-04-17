@@ -147,8 +147,10 @@ def run(context: dict | None, params: dict | None = None) -> dict:
     user_prompt = "\n".join(context_lines + [f"\nDemande : {user_message}"])
 
     try:
+        from agents.mortality.agents._utils import call_with_retry
         client = openai.OpenAI()
-        response = client.chat.completions.create(
+        response = call_with_retry(
+            client,
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": _SYSTEM},

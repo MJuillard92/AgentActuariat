@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import threading
-from io import StringIO
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -54,12 +53,13 @@ def execute_tools(
     last_msg = state["messages"][-1]
     tool_calls = getattr(last_msg, "tool_calls", None) or []
 
-    # Désérialiser le DataFrame
+    # Charger le DataFrame depuis MemoryManager (Parquet) — jamais depuis l'état LangGraph
     df: pd.DataFrame | None = None
-    df_json = state.get("df_json")
-    if df_json:
+    dataset_ref = state.get("dataset_ref")
+    if dataset_ref:
         try:
-            df = pd.read_json(StringIO(df_json), orient="split")
+            from session.memory_manager import MemoryManager
+            df = MemoryManager(dataset_ref).load().load_dataframe()
         except Exception:
             pass
 
@@ -140,11 +140,30 @@ def execute_tools(
         # Stocker dans data_store
         if "erreur" not in result:
             if fn_name == "builder" and function_name == "exposure":
-                data_store["exposure_table"] = result.get("exposure_table", [])
+                # Stocker toutes les clés scalaires + exposure_table
+                for k, v in result.items():
+                    if k not in ("note", "lignes_exclues"):
+                        data_store[k] = v
+                # Alias pour load_yaml_template
+                data_store.setdefault("cohort_min_age", result.get("age_min"))
+                data_store.setdefault("cohort_max_age", result.get("age_max"))
+                data_store.setdefault("total_exposure_years", result.get("total_exposure"))
             elif fn_name == "builder" and function_name == "crude_rates":
                 data_store["qx_table"] = result.get("qx_table", [])
             elif fn_name == "builder" and function_name == "smoothing":
                 data_store["smoothed_table"] = result.get("smoothed_table", [])
+                data_store["smoothing_method"] = result.get("method", "whittaker")
+                # Propager dans study_plan pour load_yaml_template
+                sp = data_store.setdefault("study_plan", {})
+                sp.setdefault("smoothing_algorithm", result.get("method", "whittaker_henderson"))
+            elif fn_name == "builder" and function_name == "validation":
+                # Merger dans data_store["validation"] au lieu d'écraser
+                existing = data_store.get("validation") or {}
+                if isinstance(existing, dict):
+                    existing.update(result)
+                    data_store["validation"] = existing
+                else:
+                    data_store["validation"] = result
             else:
                 store_key = _RESULT_KEYS.get(function_name, function_name)
                 data_store[store_key] = result

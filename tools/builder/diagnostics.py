@@ -61,7 +61,15 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - diagnostics : dict — résultat complet selon function_name
+  - diagnostics.regime              : str   — niveau crédibilité global : high|medium|low (credibility)
+  - diagnostics.pct_low_credibility : float — % d'âges sous le seuil de crédibilité (credibility)
+  - diagnostics.n_low               : int   — nombre d'âges avec E_x < threshold (credibility)
+  - diagnostics.recommendation      : str   — action recommandée selon la crédibilité (credibility)
+  - diagnostics.comparison          : list[dict] — AIC, BIC, MSE, n_non_monotone par méthode (compare_smoothers)
+  - diagnostics.best_method         : str   — méthode avec le meilleur AIC (compare_smoothers)
+  - diagnostics.smr_global          : float — SMR global préliminaire (smr)
+  - diagnostics.smr_by_decade       : dict  — SMR par décennie d'âge (smr)
+  - diagnostics.interpretation      : str   — interprétation du SMR (smr)
 return_payload:
   credibility → regime, pct_low_credibility, n_low, recommendation
   compare_smoothers → comparison (list), best_method

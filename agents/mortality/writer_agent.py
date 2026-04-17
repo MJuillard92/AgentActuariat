@@ -97,7 +97,9 @@ class WriterAgent:
         while steps < self.MAX_STEPS:
             steps += 1
             try:
-                response = self._llm.chat.completions.create(
+                from agents.mortality.agents._utils import call_with_retry
+                response = call_with_retry(
+                    self._llm,
                     model=self._model,
                     messages=messages,
                     tools=tools if tools else None,
@@ -295,7 +297,7 @@ class WriterAgent:
         caps_text = json.dumps(caps, ensure_ascii=False, indent=2)
         prompt = (
             base
-            + "\n\n## Catalogue de tes tools (builder_capabilities.json)\n\n"
+            + "\n\n## Catalogue de tes tools\n\n"
             + "```json\n" + caps_text + "\n```\n"
         )
 
