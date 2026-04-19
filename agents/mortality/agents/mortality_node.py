@@ -214,12 +214,17 @@ def sanitize_openai_messages(messages: list[dict]) -> list[dict]:
                 clean["tool_calls"] = answered_tcs
                 result.append(clean)
         elif msg.get("role") == "tool":
-            # Orphan tool — vérifier qu'un assistant précédent a ce tool_call_id
-            prev = next(
-                (m for m in reversed(result) if m.get("role") != "system"),
+            # Orphan tool — vérifier qu'un assistant précédent possède ce tool_call_id.
+            # On cherche le DERNIER assistant (pas seulement le message précédent),
+            # car plusieurs ToolMessages consécutifs ont tous le même assistant parent.
+            tc_id = msg.get("tool_call_id")
+            last_assistant = next(
+                (m for m in reversed(result) if m.get("role") == "assistant"),
                 None,
             )
-            if prev and prev.get("role") == "assistant" and prev.get("tool_calls"):
+            if last_assistant and any(
+                tc.get("id") == tc_id for tc in (last_assistant.get("tool_calls") or [])
+            ):
                 result.append(msg)
             # Sinon : orphelin — on saute silencieusement
         else:

@@ -222,9 +222,13 @@ def validate_plan(plan, data_store: dict) -> PlanValidation:
     raw      = _call_llm(prompt)
     sections = _parse_response(raw, plan)
 
-    ko_sections = [s.section_id for s in sections if not s.valid]
+    # Only ready=True sections that the LLM marks invalid block the pipeline.
+    # ready=False sections are skipped by _04_redaction — don't block here.
+    ko_sections = [s.section_id for s in sections if not s.valid and
+                   any(p.section_id == s.section_id and p.ready for p in plan.sections)]
     ko_fields   = list(set(
         f for s in sections if not s.valid
+        and any(p.section_id == s.section_id and p.ready for p in plan.sections)
         for f in s.missing_or_insufficient
     ))
     all_valid = len(ko_sections) == 0

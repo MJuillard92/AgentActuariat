@@ -196,26 +196,24 @@ def builder_node(state: "AgentState") -> dict:
         "n_tool_calls":       len(msg_obj.tool_calls or []),
     })
 
+    data_store = state.get("data_store") or {}
+    data_store["_builder_turns"] = data_store.get("_builder_turns", 0) + 1
+
     if choice.finish_reason != "tool_calls":
         content = msg_obj.content or ""
         if content:
             new_events.append({"type": "message", "content": content})
-            state.get("data_store", {}).setdefault("_reasoning_log", []).append(content)
+            data_store.setdefault("_reasoning_log", []).append(content)
 
-        # Retourner vers MasterAgent si BUILD_DONE ou HANDOFF_WRITER
-        build_done = "<BUILD_DONE>" in content or "<HANDOFF_WRITER>" in content
-        if build_done:
-            return {
-                "messages":     [lc_msg],
-                "events":       new_events,
-                "active_agent": "master",
-                "plan_established": True,
-            }
-
-        new_events.append({"type": "done"})
-
-    return {
-        "messages":      [lc_msg],
-        "events":        new_events,
+    result: dict = {
+        "messages":         [lc_msg],
+        "events":           new_events,
         "plan_established": True,
+        "data_store":       data_store,
     }
+    # active_agent="master" si BUILD_DONE — _should_continue_builder le détecte aussi
+    # via data_store, mais on le signale explicitement pour la lisibilité
+    content = msg_obj.content or ""
+    if "<BUILD_DONE>" in content or "<HANDOFF_WRITER>" in content:
+        result["active_agent"] = "master"
+    return result

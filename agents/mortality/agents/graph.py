@@ -50,14 +50,14 @@ _checkpointer = MemorySaver()
 # ── Routing ───────────────────────────────────────────────────────────────────
 
 def _router(state: AgentState) -> str:
-    agent = state.get("active_agent", "builder")
+    agent = state.get("active_agent", "master")
     if agent == "master":
         return "master"
     if agent in ("builder", "calculation"):
         return "builder"
     if agent == "writer":
         return "writer"
-    return "builder"
+    return "master"
 
 
 def _should_continue_master(state: AgentState) -> str:
@@ -82,13 +82,33 @@ def _should_continue_builder(state: AgentState) -> str:
     last = msgs[-1]
     if not isinstance(last, AIMessage):
         return END
+
+    # Priorité 1 : encore des tool_calls en attente
     if getattr(last, "tool_calls", None):
         return "tools"
+
     content = last.content or ""
+
+    # Priorité 2 : signal explicite du Builder (legacy, conservé)
     if "<BUILD_DONE>" in content or "<HANDOFF_WRITER>" in content:
         return "to_master"
     if "<MODEL_CHOICE_CHECKPOINT>" in content:
         return END
+
+    # Priorité 3 (Proposition 3) : vérification data_store — routing déterministe
+    # Si les données minimales sont présentes, retourner au Master sans attendre
+    # que le LLM Builder émette un signal textuel.
+    data_store = state.get("data_store") or {}
+    _MINIMUM_BUILDER_KEYS = ["exposure_table", "smoothed_table"]
+    if all(data_store.get(k) for k in _MINIMUM_BUILDER_KEYS):
+        return "to_master"
+
+    # Sécurité : si le Builder tourne trop longtemps sans produire les données,
+    # revenir au Master pour éviter une boucle infinie.
+    builder_turns = data_store.get("_builder_turns", 0)
+    if builder_turns >= 5:
+        return "to_master"
+
     if state.get("active_agent") == "master":
         return "to_master"
     return END

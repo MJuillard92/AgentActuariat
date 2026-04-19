@@ -76,6 +76,9 @@ def run(
             nb_sections  = 0,
         )
 
+    # Persister template_context pour les étapes 4, 5, 6 (validation et rédaction)
+    data_store["template_context"] = plan.context
+
     # ── Étape 3 — Enrichissement RAG ─────────────────────────────────────────
     log.info("[pipeline] étape 3 — complete_plan (RAG)")
     from agents.report.pipeline._03_completion_plan import complete_plan
@@ -94,7 +97,7 @@ def run(
     if not asm.success:
         log.error("[pipeline] assemblage échoué : %s", asm.warning)
         return PipelineResult(
-            status       = "need_data",
+            status       = "error",
             output_path  = "",
             need_data    = [],
             anomalies    = [],
@@ -124,7 +127,7 @@ def run(
         vr.summary += " (retry effectué)"
 
     # ── Résultat final ────────────────────────────────────────────────────────
-    status = "success" if vr.verdict in ("ok", "minor") else "success_with_warnings"
+    status = "success" if vr.verdict == "ok" else "success_with_warnings"
 
     log.info("[pipeline] terminé — status=%s, PDF=%s", status, asm.output_path)
 

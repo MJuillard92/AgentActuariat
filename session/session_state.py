@@ -30,7 +30,11 @@ class StudyPlan(BaseModel):
     cohort_min_age:              Optional[int]  = None
     cohort_max_age:              Optional[int]  = None
     smoothing_algorithm:         Optional[str]  = None   # "whittaker_henderson"
+    smoothing_parameters:        Optional[str]  = None
     baseline_regulatory_table:   Optional[str]  = None   # "TH0002"
+    product_list:                Optional[str]  = None
+    exclusion_criteria:          Optional[str]  = None
+    boundary_age_treatment:      Optional[str]  = None
     confidence_interval_level:   float          = 0.95
     chi_squared_p_significance:  float          = 0.05
 
@@ -140,10 +144,23 @@ class SessionState(BaseModel):
             ds["column_mapping_confirmed"] = self.column_mapping_confirmed
             ds["column_mapping_unmatched"] = self.column_mapping_unmatched
 
-        # Paramètres d'étude
-        sp_dict = {k: v for k, v in self.study_plan.model_dump().items() if v is not None}
+        # Paramètres d'étude — avec dérivation automatique des champs calendaires
+        sp = self.study_plan
+        if sp.observation_start_date and sp.observation_end_date and not sp.observation_period_years:
+            try:
+                start_y = int(sp.observation_start_date[:4])
+                end_y   = int(sp.observation_end_date[:4])
+                sp.observation_period_years = list(range(start_y, end_y + 1))
+            except (ValueError, TypeError):
+                pass
+
+        sp_dict = {k: v for k, v in sp.model_dump().items() if v is not None and v != []}
         if sp_dict:
             ds["study_plan"] = sp_dict
+            # Exposer aussi au niveau racine du data_store pour le WriterAgent
+            if sp.observation_period_years:
+                ds["observation_period_years"] = sp.observation_period_years
+                ds["num_observation_years"]     = len(sp.observation_period_years)
 
         # Référence dataset
         if self.dataset_meta:
@@ -166,10 +183,12 @@ class SessionState(BaseModel):
             self.column_mapping_confirmed = data_store.get("column_mapping_confirmed", self.column_mapping_confirmed)
             self.column_mapping_unmatched = data_store.get("column_mapping_unmatched", self.column_mapping_unmatched)
 
-        # study_plan
-        sp_data = data_store.get("study_plan")
-        if sp_data and isinstance(sp_data, dict):
-            # Merge : ne pas écraser les champs déjà définis avec None
+        # study_plan — merge aussi les scalaires exposure qui matchent des champs StudyPlan
+        sp_data = data_store.get("study_plan") or {}
+        for key in ("cohort_min_age", "cohort_max_age"):
+            if data_store.get(key) is not None and key not in sp_data:
+                sp_data[key] = data_store[key]
+        if sp_data:
             current = self.study_plan.model_dump()
             merged  = {k: v for k, v in {**current, **sp_data}.items()}
             self.study_plan = StudyPlan(**merged)
@@ -179,6 +198,9 @@ class SessionState(BaseModel):
             "exposure_table", "qx_table", "smoothed_table", "diagnostics",
             "validation", "benchmarking", "certification_report", "summary",
             "cox_regression", "logit_regression", "series",
+            # Scalaires issus du tool exposure — perdus entre les tours sans cette liste
+            "total_deaths", "total_exposure_years", "cohort_min_age", "cohort_max_age",
+            "age_min", "age_max", "total_exposure", "n_insured",
         }
         for key in _TOOL_RESULT_KEYS:
             if data_store.get(key) is not None:

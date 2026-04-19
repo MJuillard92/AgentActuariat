@@ -70,19 +70,41 @@ def writer_node(state: "AgentState") -> dict:
         new_events.append({"type": "done"})
         return {"messages": [], "events": new_events}
 
+    # ── Erreur technique (assemblage, reportlab, etc.) ────────────────────────
+    if result.status == "error":
+        content = f"Erreur lors de la génération du rapport : {result.validation_summary}"
+        new_events.append({"type": "error", "message": content})
+        new_events.append({"type": "done"})
+        lc_msg = AIMessage(content=content)
+        return {
+            "messages":     [lc_msg],
+            "events":       new_events,
+            "active_agent": "master",
+        }
+
     # ── Données manquantes → retour au MasterAgent ────────────────────────────
     if result.status == "need_data":
-        fields_str = ", ".join(result.need_data) if result.need_data else "inconnues"
+        # need_data vide = validation a bloqué sur des champs sans pouvoir les nommer
+        if not result.need_data:
+            content = (
+                f"Le pipeline de rapport a détecté des données insuffisantes "
+                f"mais ne peut pas identifier les champs manquants précisément. "
+                f"Détail : {result.validation_summary}"
+            )
+            new_events.append({"type": "message", "content": content})
+            new_events.append({"type": "done"})
+            lc_msg = AIMessage(content=content)
+            return {"messages": [lc_msg], "events": new_events, "active_agent": "master"}
+
+        fields_str = ", ".join(result.need_data)
 
         # Garde anti-boucle : si le WriterAgent a déjà signalé ces mêmes champs
-        # lors d'un appel précédent, ne pas re-émettre NEED_DATA — le Builder
-        # ne peut pas les produire. Rédiger avec les sections disponibles.
+        # lors d'un appel précédent, le Builder ne peut pas les produire → mode dégradé.
         prev_need_data = data_store.get("_writer_need_data_prev") or set()
-        current_need = set(result.need_data or [])
+        current_need = set(result.need_data)
         if prev_need_data and (current_need <= prev_need_data):
             log.warning(
-                "[WriterAgent] même NEED_DATA qu'au tour précédent (%s) — "
-                "le Builder ne peut pas combler ces champs. Passage en mode dégradé.",
+                "[WriterAgent] même NEED_DATA qu'au tour précédent (%s) — mode dégradé.",
                 fields_str,
             )
             content = (

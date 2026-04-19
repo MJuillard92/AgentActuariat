@@ -1,0 +1,850 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage[margin=2.3cm, top=2.8cm, bottom=2.8cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{caption}
+
+\usetikzlibrary{
+  shapes.geometric, shapes.multipart,
+  arrows.meta, positioning, fit,
+  backgrounds, calc
+}
+
+%──────────────────────────────
+% COULEURS
+%──────────────────────────────
+\definecolor{agentblue}{RGB}{25, 80, 150}
+\definecolor{agentgreen}{RGB}{30, 130, 60}
+\definecolor{agentred}{RGB}{170, 30, 30}
+\definecolor{agentorange}{RGB}{200, 110, 0}
+\definecolor{agentpurple}{RGB}{100, 40, 140}
+\definecolor{agentgray}{RGB}{245, 245, 248}
+\definecolor{agentlightblue}{RGB}{218, 232, 252}
+\definecolor{agentlightgreen}{RGB}{218, 245, 225}
+\definecolor{agentlightred}{RGB}{252, 225, 225}
+\definecolor{agentlightyellow}{RGB}{255, 248, 218}
+\definecolor{agentlightpurple}{RGB}{238, 225, 252}
+\definecolor{blockred}{RGB}{210, 50, 50}
+
+%──────────────────────────────
+% BOÎTES
+%──────────────────────────────
+\tcbuselibrary{skins, breakable}
+
+\newtcolorbox{forcebox}[1][]{
+  colback=agentlightgreen, colframe=agentgreen,
+  fonttitle=\bfseries, title=#1, breakable, arc=5pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt
+}
+
+\newtcolorbox{weaknessbox}[1][]{
+  colback=agentlightred, colframe=blockred,
+  fonttitle=\bfseries, title=#1, breakable, arc=5pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt
+}
+
+\newtcolorbox{blockerbox}[1][]{
+  colback=agentlightred!60, colframe=blockred, boxrule=1.2pt,
+  fonttitle=\bfseries, title=\faExclamation~#1, breakable, arc=5pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt
+}
+
+\newtcolorbox{notebox}{
+  colback=agentlightyellow, colframe=agentorange,
+  fonttitle=\bfseries, breakable, arc=5pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt
+}
+
+\newtcolorbox{diagbox}[1][]{
+  colback=agentlightblue, colframe=agentblue,
+  fonttitle=\bfseries, title=#1, breakable, arc=5pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt
+}
+
+%──────────────────────────────
+% EN-TÊTES
+%──────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{agentblue}{\textbf{AgentActuariat}} \textcolor{gray}{— Analyse diagnostique}}
+\fancyhead[R]{\textcolor{gray}{\small Avril 2026}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.5pt}
+
+\titleformat{\section}{\Large\bfseries\color{agentblue}}{}{0em}{\thesection\quad}[\vspace{-2pt}\rule{\linewidth}{0.6pt}\vspace{2pt}]
+\titleformat{\subsection}{\large\bfseries\color{agentblue!80!black}}{}{0em}{\thesubsection\quad}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{agentblue!60!black}}{}{0em}{\thesubsubsection\quad}
+
+\hypersetup{
+  colorlinks=true, linkcolor=agentblue, urlcolor=agentblue,
+  pdftitle={AgentActuariat — Analyse diagnostique},
+  pdfauthor={AgentActuariat}
+}
+
+%══════════════════════════════════════════════════════════════════
+\begin{document}
+%══════════════════════════════════════════════════════════════════
+
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+{\fontsize{30}{36}\bfseries\color{agentblue} AgentActuariat\par}
+\vspace{0.4cm}
+{\Large\color{gray} Analyse diagnostique de l'architecture\par}
+\vspace{0.3cm}
+{\large\color{agentred}\textit{Pourquoi le système peine à produire un rapport professionnel}\par}
+\vspace{1.5cm}
+\rule{0.7\linewidth}{0.6pt}
+\vspace{1cm}
+
+\begin{tcolorbox}[colback=agentgray, colframe=agentblue!25,
+                  width=0.85\textwidth, arc=6pt]
+\small
+\textbf{Objet :} Ce document décrit en français le fonctionnement complet
+d'AgentActuariat, met en avant ses forces réelles, et identifie précisément
+les points qui bloquent la qualité du rapport actuariel produit.
+
+\medskip
+\textbf{Approche :} Diagnostique. Pour chaque composant, on indique ce qui
+fonctionne, ce qui pose problème, et l'impact concret sur le livrable.
+
+\medskip
+\textbf{Public :} Marc, pour comprendre où agir en priorité.
+\end{tcolorbox}
+
+\vfill
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Système}        & AgentActuariat \\
+\textbf{Architecture}   & LangGraph multi-agents \\
+\textbf{Modèle LLM}     & GPT-4o (OpenAI) \\
+\textbf{Livrable cible} & Rapport PDF de table de mortalité d'expérience \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{1cm}
+{\footnotesize\color{gray} Avril 2026 · Version 2.0\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Synthèse exécutive — Le diagnostic en une page}
+%══════════════════════════════════════════════════════════════════
+
+\begin{diagbox}[Ce que fait le système]
+À partir d'un fichier CSV (portefeuille assurantiel) et d'un rapport de référence,
+AgentActuariat doit produire un rapport actuariel professionnel décrivant la
+construction d'une table de mortalité d'expérience. Il enchaîne pour cela :
+
+\begin{enumerate}[leftmargin=2em, itemsep=2pt]
+  \item Une compréhension de la demande (MasterAgent).
+  \item Une chaîne de calculs actuariels (BuilderAgent et ses 10 outils).
+  \item Une rédaction automatisée du rapport (Pipeline en 6 étapes).
+  \item Une validation finale du rapport (LLM juge).
+\end{enumerate}
+\end{diagbox}
+
+\begin{forcebox}[Les forces réelles du système]
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item Le \textbf{moteur de calcul actuariel} est solide (10 outils couvrant exposition,
+        lissage, validation, benchmarking, régressions Cox et logit).
+  \item Les \textbf{tableaux et graphiques} sont rendus de façon déterministe, sans LLM —
+        donc reproductibles et sans hallucination.
+  \item Un \textbf{validateur de traçabilité} vérifie que chaque chiffre cité dans le texte
+        existe bien dans les données calculées.
+  \item La \textbf{mémoire persistante} permet de reprendre une étude entre sessions.
+\end{itemize}
+\end{forcebox}
+
+\begin{weaknessbox}[Les blocages structurels qui dégradent le rapport]
+\begin{enumerate}[leftmargin=1.5em, itemsep=3pt]
+  \item Le rapport de référence n'est \textbf{jamais lu en entier} : seuls 600 caractères
+        par section sont injectés via RAG. Le style et la structure du modèle ne sont
+        donc pas vraiment transmis.
+  \item Le LLM rédige avec un \textbf{plafond de 1\,200 tokens par section}, souvent
+        insuffisant pour une analyse actuarielle dense.
+  \item Les étapes de validation (sufficience des données, qualité finale) tournent à
+        \textbf{température 1.0 par défaut}, ce qui rend les verdicts non reproductibles.
+  \item Le WriterNode \textbf{ne réfléchit pas avant de rédiger} : il déclenche le pipeline
+        sans aucune analyse contextuelle des spécificités du portefeuille.
+  \item Chaque section est rédigée \textbf{de façon indépendante} : aucune cohérence narrative
+        n'est imposée d'une section à l'autre.
+  \item Le validateur de traçabilité vérifie \textbf{les chiffres uniquement}, pas le sens :
+        le LLM peut produire une interprétation fausse d'un chiffre correct.
+\end{enumerate}
+\end{weaknessbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Vue d'ensemble du fonctionnement}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Schéma global}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.8cm and 1.5cm,
+  every node/.style={font=\small},
+  data/.style={cylinder, shape border rotate=90, aspect=0.3,
+               draw=gray, fill=agentgray, minimum width=2cm,
+               minimum height=1cm, font=\small},
+  agent/.style={rectangle, rounded corners=6pt, draw=agentblue,
+                fill=agentlightblue, minimum width=3.2cm,
+                minimum height=1cm, text centered, font=\small\bfseries},
+  process/.style={rectangle, rounded corners=4pt, draw=agentpurple,
+                  fill=agentlightpurple, minimum width=3.2cm,
+                  minimum height=1cm, text centered, font=\small\bfseries},
+  output/.style={rectangle, rounded corners=6pt, draw=agentred,
+                 fill=agentlightred, minimum width=3.2cm,
+                 minimum height=1cm, text centered, font=\small\bfseries},
+  arr/.style={-{Stealth[length=6pt]}, line width=1pt, color=agentblue}
+]
+
+\node[data]                  (csv)     {CSV};
+\node[agent, right=of csv]   (master)  {MasterAgent\\ \footnotesize Comprend, route};
+\node[agent, right=of master](builder) {BuilderAgent\\ \footnotesize Calcule};
+\node[process, below=of builder] (pipeline) {Pipeline rapport\\ \footnotesize 6 étapes};
+\node[output, below=of pipeline] (pdf) {PDF rapport\\ final};
+\node[data, below=of master] (memory) {Mémoire\\persistante};
+\node[data, left=of pipeline, xshift=-0.5cm] (yaml) {Template\\YAML};
+\node[data, right=of pipeline, xshift=0.5cm] (rag) {Rapport\\exemple\\(RAG)};
+
+\draw[arr] (csv)     -- (master);
+\draw[arr] (master)  -- (builder);
+\draw[arr] (builder) -- (pipeline);
+\draw[arr] (pipeline)-- (pdf);
+\draw[arr] (yaml)    -- (pipeline);
+\draw[arr] (rag)     -- (pipeline);
+\draw[arr, dashed, gray] (memory.north) -- (master.south);
+\draw[arr, dashed, gray] (builder.south) -- (memory.north east);
+
+\end{tikzpicture}
+\caption{Vue d'ensemble du flux de bout en bout}
+\end{figure}
+
+\subsection{Composants et leur rôle}
+
+\begin{center}
+\begin{tabular}{p{3.2cm} p{6.5cm} p{3cm}}
+\toprule
+\textbf{Composant} & \textbf{Rôle} & \textbf{Utilise un LLM} \\
+\midrule
+Interface Dash    & Dialogue avec l'utilisateur, upload du CSV     & Non \\
+\addlinespace
+MasterAgent       & Comprend l'intention, oriente la conversation  & Oui (3 à 4 appels) \\
+\addlinespace
+BuilderAgent      & Choisit et enchaîne les outils de calcul       & Oui (boucle ReAct) \\
+\addlinespace
+Outils actuariels & Calculs déterministes (exposition, lissage, etc.) & Non \\
+\addlinespace
+WriterNode        & Déclenche le pipeline de rédaction             & Non \\
+\addlinespace
+Pipeline rapport  & Rédige et assemble le PDF en 6 étapes          & Partiel \\
+\addlinespace
+Mémoire           & Conserve l'état entre les tours et les sessions & Non \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Le MasterAgent — Le chef d'orchestre}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Ce qu'il fait}
+
+Le MasterAgent est le seul composant autorisé à décider qui parle ensuite.
+À chaque tour, il :
+
+\begin{enumerate}[leftmargin=2em]
+  \item Classifie l'intention de l'utilisateur (calcul, rapport, question).
+  \item Au premier tour : désambiguïse les colonnes du CSV et le plan d'étude.
+  \item Extrait le plan d'étude depuis l'historique conversationnel.
+  \item Décide vers qui router : BuilderAgent, WriterNode, ou réponse directe.
+  \item Répond conversationnellement aux questions simples.
+\end{enumerate}
+
+\subsection{Logique de décision}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.4cm,
+  decision/.style={diamond, draw=agentorange, fill=agentlightyellow,
+                   minimum width=4cm, aspect=2.5,
+                   text centered, font=\footnotesize, inner sep=1pt},
+  action/.style={rectangle, rounded corners=4pt, draw=agentblue,
+                 fill=agentlightblue, minimum width=2.8cm,
+                 minimum height=0.7cm, text centered, font=\footnotesize\bfseries},
+  arr/.style={-{Stealth[length=4pt]}, line width=0.6pt},
+  lbl/.style={font=\tiny\itshape, fill=white, inner sep=2pt}
+]
+
+\node[decision] (d1) {Le rapport est-il fini ?};
+\node[action, right=2cm of d1] (e1) {Terminer};
+\node[decision, below=0.5cm of d1] (d2) {Les calculs sont-ils finis et un rapport demandé ?};
+\node[action, right=2cm of d2] (e2) {Aller au Writer};
+\node[decision, below=0.5cm of d2] (d3) {Le Writer manque de données ?};
+\node[action, right=2cm of d3] (e3) {Aller au Builder};
+\node[decision, below=0.5cm of d3] (d4) {Quelle intention ?};
+\node[action, right=2.5cm of d4, yshift=0.6cm] (e4a) {Builder};
+\node[action, right=2.5cm of d4] (e4b) {Writer};
+\node[action, right=2.5cm of d4, yshift=-0.6cm] (e4c) {Réponse directe};
+
+\draw[arr] (d1) -- node[lbl, above]{Oui} (e1);
+\draw[arr] (d1) -- node[lbl, right]{Non} (d2);
+\draw[arr] (d2) -- node[lbl, above]{Oui} (e2);
+\draw[arr] (d2) -- node[lbl, right]{Non} (d3);
+\draw[arr] (d3) -- node[lbl, above]{Oui} (e3);
+\draw[arr] (d3) -- node[lbl, right]{Non} (d4);
+\draw[arr] (d4.east) -- node[lbl, above]{calcul} (e4a.west);
+\draw[arr] (d4.east) -- node[lbl, above]{rédaction} (e4b.west);
+\draw[arr] (d4.east) -- node[lbl, below]{question} (e4c.west);
+
+\end{tikzpicture}
+\caption{Arbre de décision du MasterAgent à chaque tour}
+\end{figure}
+
+\subsection{Forces}
+
+\begin{forcebox}[Ce qui fonctionne bien]
+\begin{itemize}[leftmargin=1.5em]
+  \item La séparation claire des rôles : un seul composant décide du routing,
+        ce qui évite les conflits de décision.
+  \item La désambiguïsation au premier tour évite que le système se lance sur
+        des mauvaises colonnes.
+  \item Le system prompt est enrichi dynamiquement avec l'état du calcul
+        (résultats déjà disponibles, SMR global, mapping des colonnes).
+\end{itemize}
+\end{forcebox}
+
+\subsection{Faiblesses}
+
+\begin{weaknessbox}[Points qui posent problème]
+\begin{itemize}[leftmargin=1.5em]
+  \item Le contenu exact des consignes données au LLM (system prompt) n'a pas été
+        audité — c'est un angle mort. On ne sait pas vraiment ce que le MasterAgent
+        a appris à faire.
+  \item La classification d'intention se fait avec seulement 200 tokens en sortie,
+        ce qui force le LLM à être très concis et peut produire des classifications
+        approximatives sur des demandes nuancées.
+  \item Aucun mécanisme de confirmation avant de lancer un calcul lourd : si la
+        désambiguïsation se trompe, l'utilisateur doit interrompre.
+\end{itemize}
+\end{weaknessbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Le BuilderAgent — Le calculateur}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Ce qu'il fait}
+
+Le BuilderAgent est un \textbf{agent ReAct} : il alterne raisonnement et action.
+Il dispose de 10 outils actuariels qu'il peut appeler dans l'ordre qu'il choisit.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=1.2cm,
+  box/.style={rectangle, rounded corners=5pt, draw=agentgreen,
+              fill=agentlightgreen, minimum width=4cm,
+              minimum height=1cm, text centered, font=\small\bfseries},
+  arr/.style={-{Stealth[length=5pt]}, line width=0.8pt, color=agentgreen},
+  lbl/.style={font=\footnotesize\itshape, fill=white, inner sep=2pt}
+]
+
+\node[box] (llm) {LLM GPT-4o\\ \footnotesize raisonne et choisit};
+\node[box, below=of llm] (tool) {Outil actuariel\\ \footnotesize calcule};
+\node[box, right=2.5cm of llm] (data) {Mémoire\\ \footnotesize résultats};
+
+\draw[arr, bend left=20] (llm) to node[lbl, right]{appel d'outil} (tool);
+\draw[arr, bend left=20] (tool) to node[lbl, left]{résultat} (llm);
+\draw[arr] (tool) -- node[lbl, below]{stocke} (data.south);
+
+\node[font=\footnotesize\itshape, color=agentred,
+      below=0.3cm of tool, text width=8cm, align=center]
+  {Boucle limitée à 5 itérations pour éviter les boucles infinies};
+
+\end{tikzpicture}
+\caption{Boucle de raisonnement-action du BuilderAgent}
+\end{figure}
+
+\subsection{Les 10 outils disponibles}
+
+\begin{center}
+\begin{tabular}{p{4.5cm} p{4cm} p{4.5cm}}
+\toprule
+\textbf{Outil} & \textbf{Donnée d'entrée} & \textbf{Résultat produit} \\
+\midrule
+Calcul de l'exposition  & DataFrame du portefeuille & Années-personnes par âge \\
+Taux bruts ($q_x$)      & Table d'exposition        & Probabilités brutes par âge \\
+Lissage                 & Taux bruts                & Probabilités lissées \\
+Diagnostics             & Table d'exposition        & Crédibilité, recommandations \\
+Validation statistique  & Exposition et lissage     & Intervalles de confiance, $\chi^2$ \\
+Benchmarking            & Exposition et lissage     & SMR global, abattement \\
+Régression de Cox       & DataFrame et exposition   & Hazard ratio par sexe \\
+Régression logit        & Lissage et table de référence & Pente, $R^2$ \\
+Comparaison antérieure  & Lissage                   & Dérive vs étude précédente \\
+Synthèse de portefeuille& DataFrame                 & Statistiques descriptives \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Forces}
+
+\begin{forcebox}[Ce qui fonctionne bien]
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Tous les calculs sont déterministes} : aucune hallucination possible
+        sur les chiffres produits par les outils.
+  \item Le LLM \textbf{adapte le system prompt à la phase} : court après une exécution
+        d'outil, complet quand il faut planifier la suite.
+  \item La boucle est \textbf{bornée à 5 itérations}, ce qui empêche les boucles
+        infinies coûteuses.
+  \item Les résultats sont \textbf{accumulés dans une mémoire partagée} (\texttt{data\_store})
+        accessible aux autres composants.
+\end{itemize}
+\end{forcebox}
+
+\subsection{Faiblesses}
+
+\begin{weaknessbox}[Points qui posent problème]
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Pas de garde-fou proactif sur l'ordre des outils.} Le LLM peut
+        appeler le benchmarking avant le lissage : l'outil retournera une erreur,
+        mais cela consomme une itération sur les 5 disponibles.
+  \item Le seul point bloquant identifié dans les outils est le contrôle de
+        monotonie du lissage — tout le reste passe en mode "passif".
+  \item L'historique est limité à 20 messages : au-delà, un résumé automatique
+        prend le relais, ce qui peut faire perdre des nuances importantes du dialogue.
+  \item La température du LLM est laissée à la valeur par défaut (1.0), ce qui
+        peut produire des choix d'outils différents pour la même demande.
+\end{itemize}
+\end{weaknessbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Le WriterNode et le Pipeline de rapport}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Le WriterNode — Un simple déclencheur}
+
+Le WriterNode porte un nom trompeur : \textbf{il ne rédige rien lui-même}.
+Il appelle directement le pipeline de rapport et retourne le chemin du PDF produit.
+
+\begin{blockerbox}[Premier blocage majeur identifié]
+Le WriterNode \textbf{n'effectue aucun appel LLM avant de déclencher le pipeline}.
+Il n'y a donc aucune analyse intelligente du contexte avant la rédaction :
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt]
+  \item Pas d'identification des particularités du portefeuille.
+  \item Pas de détection des âges à faible crédibilité avant rédaction.
+  \item Pas d'adaptation du ton ou de la structure selon les résultats.
+  \item Pas de briefing transmis aux étapes suivantes du pipeline.
+\end{itemize}
+Conséquence : le pipeline traite tous les portefeuilles de la même manière,
+indépendamment de leurs spécificités.
+\end{blockerbox}
+
+\subsection{Le pipeline en 6 étapes}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.5cm,
+  step/.style={rectangle, rounded corners=4pt, draw=agentblue,
+               fill=agentlightblue, minimum width=10cm,
+               minimum height=0.85cm, text centered, font=\small},
+  llmstep/.style={step, draw=agentpurple, fill=agentlightpurple},
+  ragstep/.style={step, draw=agentgreen, fill=agentlightgreen},
+  outstep/.style={step, draw=agentred, fill=agentlightred,
+                  minimum width=5cm},
+  arr/.style={-{Stealth[length=4pt]}, line width=0.7pt, color=agentblue}
+]
+
+\node[step]                (s1) {\textbf{1.} Préparation du plan (déterministe)};
+\node[llmstep, below=of s1](s2) {\textbf{2.} Validation des données par LLM};
+\node[ragstep, below=of s2](s3) {\textbf{3.} Recherche d'exemples par RAG};
+\node[llmstep, below=of s3](s4) {\textbf{4.} Rédaction des sections par LLM};
+\node[step,    below=of s4](s5) {\textbf{5.} Assemblage du PDF (déterministe)};
+\node[llmstep, below=of s5](s6) {\textbf{6.} Validation finale par LLM};
+\node[outstep, below=0.7cm of s6] (pdf) {\textbf{PDF livré}};
+
+\foreach \a/\b in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6, s6/pdf}
+  \draw[arr] (\a) -- (\b);
+
+\end{tikzpicture}
+\caption{Les 6 étapes du pipeline de rédaction}
+\end{figure}
+
+\subsubsection{Étape 1 — Préparation du plan}
+
+Le système charge un template YAML qui décrit la structure du rapport
+(sections, sous-sections, tableaux et graphiques attendus). Il y substitue
+automatiquement les valeurs calculées (par exemple "exposition totale = 12 345 années-personnes").
+
+\textbf{Force :} la structure du rapport est garantie et reproductible.\\
+\textbf{Faiblesse :} la structure est figée, elle ne s'adapte pas au cas particulier.
+
+\subsubsection{Étape 2 — Validation des données}
+
+Un appel LLM vérifie que chaque section dispose des données nécessaires.
+Si une donnée manque, le pipeline s'arrête et renvoie au BuilderAgent.
+
+\begin{blockerbox}[Deuxième blocage : verdict non déterministe]
+Cette étape utilise GPT-4o avec une \textbf{température par défaut de 1.0}.
+Conséquence : le verdict (données suffisantes ou non) peut varier entre deux exécutions
+identiques. Pour une étape de validation, c'est inacceptable.
+\end{blockerbox}
+
+\subsubsection{Étape 3 — Recherche d'exemples (RAG)}
+
+Le système interroge une base vectorielle (ChromaDB) qui contient le rapport
+de référence. Pour chaque section, il extrait des passages similaires destinés
+à inspirer le style.
+
+\begin{blockerbox}[Troisième blocage : RAG insuffisant]
+Les passages récupérés sont \textbf{tronqués à 600 caractères}, soit l'équivalent
+d'environ 100 mots. C'est très insuffisant pour transmettre le style et la
+structure d'une section actuarielle qui fait typiquement 600 à 900 mots.
+
+De plus, \textbf{le rapport de référence n'est jamais lu en entier} par le système.
+Le RAG ne récupère que des fragments isolés, sans cohérence narrative globale.
+C'est probablement \textbf{le blocage le plus important} pour reproduire un style
+professionnel.
+\end{blockerbox}
+
+\subsubsection{Étape 4 — Rédaction des sections}
+
+C'est le cœur de la rédaction. Pour chaque section, en parallèle :
+
+\begin{enumerate}[leftmargin=2em]
+  \item Les tableaux et graphiques sont rendus de façon déterministe
+        (ReportLab et matplotlib), avec injection des bonnes données.
+  \item Le LLM rédige le texte narratif en s'appuyant sur le prompt préparé
+        à l'étape 1, enrichi des exemples de l'étape 3 et des tableaux rendus.
+  \item Le validateur de traçabilité vérifie que tous les chiffres cités sont
+        bien issus des calculs (voir section dédiée).
+\end{enumerate}
+
+\textbf{Paramètres LLM :} température 0.4, plafond de 1\,200 tokens par section.
+
+\begin{blockerbox}[Quatrième blocage : sections trop courtes]
+Le plafond de \textbf{1\,200 tokens} (environ 850 mots) est suffisant pour les
+sections courtes (préambule, conclusion) mais \textbf{trop juste pour les sections
+denses} comme la construction de la table ou l'analyse des résultats.
+
+Une section actuarielle professionnelle de qualité fait typiquement 800 à
+1\,200 mots, soit 1\,500 à 2\,000 tokens. Le risque est que le LLM tronque ses
+explications ou omette des éléments d'analyse.
+\end{blockerbox}
+
+\begin{blockerbox}[Cinquième blocage : pas de cohérence inter-sections]
+Les 5 sections sont rédigées \textbf{en parallèle, indépendamment}.
+Aucune section ne sait ce que les autres ont écrit. Conséquence :
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt]
+  \item Risque de répétitions (même chiffre commenté deux fois différemment).
+  \item Risque d'incohérences (interprétations divergentes du même résultat).
+  \item Pas de fil narratif global.
+\end{itemize}
+\end{blockerbox}
+
+\subsubsection{Étape 5 — Assemblage du PDF}
+
+Une étape purement déterministe qui assemble les sections, les tableaux et
+les graphiques dans l'ordre fixe défini par le template. Aucune surprise ici.
+
+\subsubsection{Étape 6 — Validation finale}
+
+Un appel LLM joue le rôle de "réviseur qualité actuariel senior". Il reçoit
+un résumé de chaque section (limité à 300 mots) et émet un verdict :
+\textit{ok}, \textit{minor} (anomalies mineures) ou \textit{major} (anomalies majeures).
+
+Si le verdict est \textit{minor}, les sections concernées sont régénérées
+une fois.
+
+\begin{blockerbox}[Sixième blocage : validation finale aveugle]
+Cette étape souffre de \textbf{deux limitations majeures} :
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=0pt]
+  \item Comme à l'étape 2, la \textbf{température est laissée à 1.0 par défaut}.
+        Le verdict est non reproductible.
+  \item Le réviseur ne voit qu'\textbf{un résumé de 300 mots par section}, pas
+        le texte intégral. Il ne peut donc pas détecter une mauvaise tournure de
+        phrase, une interprétation erronée, ou une formulation non professionnelle.
+\end{enumerate}
+\end{blockerbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Le validateur de traçabilité}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Ce qu'il fait}
+
+Pour chaque section rédigée, le validateur extrait par expression régulière
+tous les nombres présents dans le texte, puis vérifie qu'ils correspondent
+à des valeurs calculées dans la mémoire (avec tolérance de 2 \%).
+
+Si des nombres ne sont pas traçables, un retour ciblé est donné au LLM,
+qui régénère la section une fois.
+
+\subsection{Force majeure}
+
+\begin{forcebox}[Une garantie forte sur les chiffres]
+C'est l'une des composantes les plus solides du système. Aucun nombre inventé
+ne devrait apparaître dans le rapport final. Les conversions usuelles
+(fraction vers pourcent, pourcent vers millième) sont gérées, et une liste
+blanche couvre les constantes statistiques universelles (1{,}96, 0{,}05, etc.).
+\end{forcebox}
+
+\subsection{Limite à connaître}
+
+\begin{weaknessbox}[Ce que le validateur ne fait pas]
+Le validateur \textbf{ne vérifie que les chiffres, pas le sens du texte}.
+Le LLM peut parfaitement écrire :
+
+\medskip
+\textit{« Le SMR global de 0,87 indique que la mortalité du portefeuille
+est supérieure à la référence. »}
+\medskip
+
+Le chiffre 0{,}87 est traçable, donc le validateur le valide. Mais
+l'interprétation est \textbf{fausse} (un SMR inférieur à 1 indique une mortalité
+\emph{inférieure}). \textbf{Aucun mécanisme du système ne détecte ce type d'erreur}.
+\end{weaknessbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Le système de mémoire}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Quatre couches superposées}
+
+\begin{center}
+\begin{tabular}{p{3.5cm} p{4.5cm} p{3cm} p{2.5cm}}
+\toprule
+\textbf{Couche} & \textbf{Contenu} & \textbf{Persistance} & \textbf{Survit au redémarrage} \\
+\midrule
+Mémoire de travail & État LangGraph complet & RAM & Non \\
+Mémoire métier & Plan d'étude, mapping colonnes, résultats actuariels & JSON sur disque & Oui \\
+Mémoire des données & DataFrame du portefeuille & Parquet sur disque & Oui \\
+Mémoire conversationnelle & Historique des messages compactés & RAM & Non \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Forces}
+
+\begin{forcebox}[Ce qui fonctionne bien]
+\begin{itemize}[leftmargin=1.5em]
+  \item Les résultats actuariels coûteux à recalculer sont \textbf{persistés sur disque}.
+  \item Le DataFrame brut n'est écrit qu'une seule fois, pas à chaque tour.
+  \item Au-delà de 15 messages, un résumé automatique structuré prend le relais
+        pour éviter de saturer le contexte du LLM.
+\end{itemize}
+\end{forcebox}
+
+\subsection{Faiblesses}
+
+\begin{weaknessbox}[Limites importantes à comprendre]
+\begin{itemize}[leftmargin=1.5em]
+  \item Seules les clés présentes dans une \textbf{liste blanche fermée} sont sauvegardées
+        sur disque. Tout résultat intermédiaire non listé est perdu au prochain tour.
+  \item Si le processus est redémarré au milieu d'une conversation, l'\textbf{historique
+        des messages est perdu}. Seuls les résultats actuariels sont récupérables.
+  \item Le résumé automatique d'historique peut perdre des nuances importantes du dialogue
+        (par exemple une demande spécifique de l'utilisateur sur le ton du rapport).
+\end{itemize}
+\end{weaknessbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Diagnostic — Pourquoi le rapport n'est pas à la hauteur}
+%══════════════════════════════════════════════════════════════════
+
+\subsection{Hiérarchie des causes}
+
+L'analyse fait ressortir une hiérarchie claire des problèmes, du plus impactant
+au moins critique :
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.4cm,
+  block/.style={rectangle, rounded corners=5pt,
+                minimum width=12cm, minimum height=1.1cm,
+                text centered, font=\small\bfseries, draw, line width=1pt},
+  critique/.style={block, fill=blockred!20, draw=blockred},
+  haut/.style={block, fill=agentorange!20, draw=agentorange},
+  moyen/.style={block, fill=agentlightyellow, draw=agentorange!60}
+]
+
+\node[critique] (b1) {1. Rapport de référence non lu en entier (RAG limité à 600 caractères)};
+\node[critique, below=of b1] (b2) {2. WriterNode sans intelligence contextuelle};
+\node[critique, below=of b2] (b3) {3. Pas de cohérence inter-sections (rédaction parallèle)};
+\node[haut,     below=of b3] (b4) {4. Validateur final aveugle (résumé de 300 mots, température 1.0)};
+\node[haut,     below=of b4] (b5) {5. Plafond de 1\,200 tokens trop bas pour sections denses};
+\node[haut,     below=of b5] (b6) {6. Validation des données non déterministe (température 1.0)};
+\node[moyen,    below=of b6] (b7) {7. Validateur de traçabilité ne vérifie que les chiffres};
+\node[moyen,    below=of b7] (b8) {8. Garde-fous passifs sur l'ordre des outils};
+
+\end{tikzpicture}
+\caption{Hiérarchie des blocages identifiés (rouge : critique, orange : élevé, jaune : moyen)}
+\end{figure}
+
+\subsection{Le blocage principal}
+
+\begin{blockerbox}[Le système ne sait pas vraiment imiter le rapport de référence]
+\textbf{C'est le diagnostic central.} Le système a été pensé pour produire un rapport
+à partir de données calculées et d'un template structurel, mais le rapport de
+référence (qui est censé être le modèle de style et de structure narrative)
+n'est utilisé que de façon très superficielle :
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Il est découpé en chunks indexés dans une base vectorielle.
+  \item Pour chaque section à rédiger, le système récupère des passages
+        similaires (limités à 600 caractères chacun).
+  \item Aucune compréhension globale du rapport de référence n'est construite.
+  \item Aucune extraction de la voix, du ton, des tournures récurrentes.
+\end{itemize}
+
+Conséquence : le rapport produit a la \textbf{structure du template YAML}, les
+\textbf{chiffres des calculs actuariels}, mais \textbf{pas le style du modèle}.
+C'est pourquoi le résultat semble "synthétique" plutôt que "professionnel".
+\end{blockerbox}
+
+\subsection{Les leviers d'action — Par ordre d'efficacité}
+
+\begin{diagbox}[Ce qui apporterait le plus de qualité, dans l'ordre]
+
+\subsubsection*{1. Construire une vraie compréhension du rapport de référence}
+
+Plutôt qu'un RAG par fragments, faire une passe initiale unique où un LLM
+lit le rapport de référence en entier et en extrait :
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt]
+  \item La voix narrative (ton, registre, niveau de formalisme).
+  \item Les tournures récurrentes par type de section.
+  \item Les transitions habituelles entre sections.
+  \item Les conventions de présentation des chiffres.
+\end{itemize}
+Ce "guide de style" serait injecté dans tous les prompts de rédaction.
+
+\subsubsection*{2. Ajouter une étape de briefing contextuel avant la rédaction}
+
+Avant de lancer le pipeline, un appel LLM léger analyse le \texttt{data\_store}
+et produit une note de cadrage qui identifie :
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt]
+  \item Les particularités du portefeuille à mettre en avant.
+  \item Les zones de faiblesse statistique à signaler.
+  \item Le message principal que le rapport doit porter.
+\end{itemize}
+
+\subsubsection*{3. Introduire une cohérence inter-sections}
+
+Plutôt qu'une rédaction parallèle, rédiger les sections en \textbf{séquence}, en
+passant à chaque nouvelle section un résumé de ce qui a déjà été écrit et de
+quoi parlera la section suivante.
+
+\subsubsection*{4. Augmenter le plafond de tokens et fixer les températures}
+
+Corrections rapides :
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt]
+  \item Plafond à 2\,000 tokens pour les sections \textit{construction} et \textit{analysis}.
+  \item Température à 0,1 sur les étapes 2 et 6 (validation).
+\end{itemize}
+
+\subsubsection*{5. Validateur final voyant le texte complet}
+
+Au lieu d'un résumé de 300 mots, donner au validateur final l'intégralité du
+texte, avec une grille d'évaluation explicite (cohérence, professionnalisme,
+exactitude des interprétations).
+
+\end{diagbox}
+
+\newpage
+
+%══════════════════════════════════════════════════════════════════
+\section{Synthèse — Ce qu'il faut retenir}
+%══════════════════════════════════════════════════════════════════
+
+\begin{center}
+\begin{tabular}{p{7cm} p{7cm}}
+\toprule
+\textbf{\color{agentgreen} Forces réelles} & \textbf{\color{blockred} Blocages structurels} \\
+\midrule
+Calcul actuariel complet et solide
+& Le rapport de référence n'est pas vraiment lu \\
+\addlinespace
+Tableaux et graphiques déterministes
+& Pas d'intelligence contextuelle avant rédaction \\
+\addlinespace
+Validateur de traçabilité des chiffres
+& Sections rédigées indépendamment, sans cohérence \\
+\addlinespace
+Mémoire persistante des résultats
+& Plafond de tokens trop bas pour sections denses \\
+\addlinespace
+Boucle ReAct bornée à 5 itérations
+& Validations à température 1.0 (non déterministes) \\
+\addlinespace
+Désambiguïsation au premier tour
+& Validateur final voit seulement un résumé \\
+\addlinespace
+Mode pas-à-pas avec approbation
+& Validation des chiffres mais pas du sens \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bigskip
+
+\begin{diagbox}[Conclusion]
+Le système est techniquement bien construit sur sa partie \textbf{calcul actuariel}.
+Sa partie \textbf{rédaction de rapport} souffre en revanche d'un défaut de conception
+majeur : elle traite la génération de texte comme une suite de tâches indépendantes
+plutôt que comme l'écriture d'un document cohérent inspiré d'un modèle.
+
+\medskip
+Pour produire un rapport vraiment professionnel, il faut faire passer le système
+d'une logique de \textbf{remplissage de template} à une logique de \textbf{rédaction
+contextuelle inspirée d'un exemple}. C'est un changement d'architecture, pas
+seulement un réglage de paramètres.
+\end{diagbox}
+
+\vfill
+\begin{center}
+\rule{0.5\linewidth}{0.4pt}\\[4pt]
+{\footnotesize\color{gray}
+Document produit à partir de \texttt{docs/AGENT\_ARCHITECTURE.md}\\
+AgentActuariat — Analyse diagnostique — Avril 2026\par}
+\end{center}
+
+\end{document}

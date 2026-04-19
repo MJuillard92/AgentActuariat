@@ -135,28 +135,64 @@ def _build_section_prompt(
         lines.append("")
 
     # ── Données disponibles pour cette section ────────────────────────────────
-    section_keys = _get_section_keys(section_id)
-    if section_keys:
-        lines += ["## Données disponibles"]
-        for key in section_keys:
-            val = context.get(key)
-            if val is None:
-                continue
-            if isinstance(val, dict):
-                n = len(val)
-                sample = list(val.items())[:3]
-                lines.append(f"- `{key}` : {n} entrées — ex. {sample}")
-            elif isinstance(val, list):
-                lines.append(f"- `{key}` : {len(val)} enregistrements")
-            else:
-                lines.append(f"- `{key}` : {val}")
+    # On injecte les données COMPLÈTES en JSON (scalaires + objets actuariels)
+    # pour que le LLM puisse citer n'importe quel chiffre sans en inventer.
+    import json as _json
+
+    scalars:   dict = {}
+    objects:   dict = {}
+
+    for key in _get_section_keys(section_id):
+        val = context.get(key)
+        if val is None:
+            continue
+        if isinstance(val, (dict, list)):
+            objects[key] = val
+        else:
+            scalars[key] = val
+
+    # Toujours inclure les résultats actuariels pertinents (cox, logit, χ², etc.)
+    for key in _ACTUARIAL_RESULT_KEYS:
+        val = context.get(key)
+        if val is None or key in objects:
+            continue
+        objects[key] = val
+
+    if scalars or objects:
+        lines += ["## Données disponibles pour la rédaction", ""]
+
+    if scalars:
+        lines += ["### Paramètres et scalaires"]
+        for k, v in scalars.items():
+            # Arrondir les floats avant affichage pour éviter les
+            # valeurs brutes à 15 décimales que le LLM recopierait.
+            if isinstance(v, float):
+                v = round(v, 4)
+            lines.append(f"- **`{k}`** : {v}")
         lines.append("")
+
+    if objects:
+        # Arrondir les floats pour éviter que le LLM recopie des valeurs
+        # comme 0.4879139941055774 telles quelles.
+        objects = _round_floats(objects, ndigits=4)
+        # Neutralise les triple-backticks éventuels dans les chaînes de data_store
+        # pour éviter qu'elles brisent le bloc ```json du prompt.
+        dump = _json.dumps(objects, indent=2, ensure_ascii=False, default=str)
+        dump = dump.replace("```", "``\u200b`")
+        lines += [
+            "### Résultats actuariels et séries (JSON — cite ces valeurs telles quelles)",
+            "```json",
+            dump,
+            "```",
+            "",
+        ]
 
     # ── Règles absolues ───────────────────────────────────────────────────────
     lines += [
         "## Règles absolues",
-        "- Ne cite que des chiffres présents dans les données ci-dessus",
-        "- Si une donnée est absente, écris '[donnée non disponible]' et continue",
+        "- Ne cite QUE des chiffres présents textuellement dans le bloc JSON ci-dessus",
+        "- Si une statistique manque, OMETS la phrase entière — n'écris JAMAIS `[donnée non disponible]`",
+        "- N'invente JAMAIS un âge, une valeur, un ratio absent du bloc JSON",
         "- Rédige en français, style professionnel actuariel",
         "- Ne dépasse pas 10% au-delà du nombre de mots cible",
     ]
@@ -170,12 +206,35 @@ def _resolve_placeholders(text: str, context: dict) -> str:
     def _sub(m):
         key = m.group(1).strip()
         val = context.get(key)
-        if val is None:
-            return f"[{key}]"
+        # Marqueur neutre au lieu de [key] : le LLM ne recopie pas "—"
+        # et ne déclenche pas la règle "écris [donnée non disponible]".
+        if val is None or val == "":
+            return "—"
+        if isinstance(val, float):
+            # Arrondi à 4 décimales pour éviter les "0.4879139941055774"
+            # dans les narrative_templates YAML (ex. {{ avg_prudence_ratio }}).
+            return f"{round(val, 4):g}"
         if isinstance(val, (list, dict)):
             return str(val)[:80]
         return str(val)
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", _sub, text)
+
+
+# Objets métier actuariels injectés en JSON dans le prompt pour que le LLM
+# puisse citer des chiffres réels (HR, p-values, R², IC, SMR…). Ces dicts
+# proviennent directement du BuilderAgent via data_store.
+#
+# MORTALITY : cette liste est domaine-spécifique et sera déplacée dans
+# agents/mortality/report_plugin/section_briefs.py lors du strangler.
+_ACTUARIAL_RESULT_KEYS: list[str] = [
+    "summary",
+    "cox_regression",
+    "logit_regression",
+    "validation",
+    "benchmarking",
+    "diagnostics",
+    "precedent_comparison",
+]
 
 
 # Champs pertinents par section (pour le snapshot de contexte)
@@ -206,6 +265,48 @@ _SECTION_CONTEXT_KEYS: dict[str, list[str]] = {
 
 def _get_section_keys(section_id: str) -> list[str]:
     return _SECTION_CONTEXT_KEYS.get(section_id, [])
+
+
+def _round_floats(obj, ndigits: int = 4):
+    """Arrondit récursivement tous les floats — évite les valeurs brutes à
+    10+ décimales dans le prompt LLM."""
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        return round(obj, ndigits)
+    if isinstance(obj, dict):
+        return {k: _round_floats(v, ndigits) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_round_floats(v, ndigits) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_round_floats(v, ndigits) for v in obj)
+    return obj
+
+
+# Clés à remonter depuis data_store / study_plan vers le context
+# de résolution des placeholders (complète _PLACEHOLDER_MAP).
+# Regroupe scalaires ET dicts/list actuariels — tout ce qui doit atteindre
+# le prompt LLM via _build_section_prompt.
+_EXTRA_CONTEXT_KEYS: set[str] = {
+    # Scalaires
+    "initial_record_count", "final_record_count", "total_exclusions",
+    "total_deaths", "total_exposure_years", "num_observation_years",
+    "mean_age_cohort", "cohort_min_age", "cohort_max_age",
+    "exposure_by_year", "deaths_by_year",
+    "baseline_regulatory_table", "product_list",
+    "smoothing_algorithm", "smoothing_parameters",
+    "exclusion_criteria", "boundary_age_treatment",
+    "observation_start_date", "observation_end_date",
+    "observation_period_years", "study_objective",
+    "chi_squared_p", "avg_prudence_ratio",
+    # Dicts actuariels (résultats BuilderAgent) — sans eux le LLM n'a aucun
+    # chiffre à citer (Cox HR, χ², logit R², SMR, benchmarking, diagnostics).
+    "cox_regression", "logit_regression", "validation", "benchmarking",
+    "diagnostics", "precedent_comparison", "summary", "series",
+    # Séries age-indexées
+    "smoothed_table", "exposure_table", "qx_table",
+    "final_mortality_table_by_age",
+}
 
 
 def _context_snapshot(section_id: str, context: dict) -> dict:
@@ -270,6 +371,17 @@ def load_plan(
     missing_fields  = lyt_result.get("missing_fields", [])
     n_ready         = lyt_result.get("n_ready", 0)
     n_total         = lyt_result.get("n_total", 0)
+
+    # Enrichir le contexte avec les scalaires data_store/study_plan non remontés
+    # par _PLACEHOLDER_MAP. Sans cela, le LLM reçoit des placeholders non résolus
+    # et produit "[donnée non disponible]" pour des valeurs pourtant présentes.
+    for k in _EXTRA_CONTEXT_KEYS:
+        if context.get(k) in (None, "", []):
+            v = data_store.get(k)
+            if v is None:
+                v = study_plan.get(k) if isinstance(study_plan, dict) else None
+            if v is not None:
+                context[k] = v
 
     # ── 2. Charger le YAML brut pour accéder aux sections complètes ───────────
     yaml_full = _PROJECT_ROOT / yaml_path

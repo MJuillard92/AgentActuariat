@@ -31,6 +31,216 @@ _MAX_TOKENS_NARRATIVE = 1200
 _TEMPERATURE          = 0.4   # Faible : style professionnel, peu créatif
 
 
+# ── Hydratation des specs YAML avec données réelles ──────────────────────────
+
+def _hydrate_table_spec(spec: dict, context: dict) -> dict:
+    """
+    Injecte des lignes dans un spec table vide pour le rendu automatique.
+    Les specs YAML définissent uniquement les colonnes — les lignes sont
+    construites ici depuis le contexte pour les IDs connus.
+
+    MORTALITY : les branches `sid` ci-dessous sont domaine-spécifiques et
+    seront déplacées dans le plugin lors du strangler.
+    """
+    import copy
+    spec = copy.deepcopy(spec)
+    sid  = spec.get("id", "")
+
+    if sid == "table_construction":
+        n0 = context.get("initial_record_count")
+        nx = context.get("total_exclusions", 0) or 0
+        n1 = context.get("final_record_count") or (int(n0) - int(nx) if n0 else None)
+        if n0 is not None:
+            spec["rows"] = [
+                ["Étape", "Effectif", "Notes"],
+                ["Enregistrements initiaux", str(n0), ""],
+                ["Exclusions", str(nx), "hors plage d'âge, exposition nulle"],
+                ["Enregistrements finaux", str(n1 or ""), ""],
+            ]
+
+    elif sid == "exposure_stats":
+        series = context.get("series") or {}
+        serie  = series.get("serie", []) if isinstance(series, dict) else []
+        if not serie:
+            eby   = context.get("exposure_by_year") or {}
+            serie = [{"annee": k, "exposition_pa": v} for k, v in eby.items()]
+        if serie:
+            rows = [["Année", "Exposition (a.-p.)", "Âge moyen", "Genre (H/F %)"]]
+            for r in sorted(serie, key=lambda x: x.get("annee", 0)):
+                rows.append([
+                    str(r.get("annee", "")),
+                    f"{r.get('exposition_pa', 0):,.0f}",
+                    str(r.get("age_moyen", "")),
+                    str(r.get("pct_by_sex", r.get("gender_split", ""))),
+                ])
+            spec["rows"] = rows
+
+    elif sid == "death_stats":
+        series = context.get("series") or {}
+        serie  = series.get("serie", []) if isinstance(series, dict) else []
+        if not serie:
+            dby   = context.get("deaths_by_year") or {}
+            serie = [{"annee": k, "nb_deces": v} for k, v in dby.items()]
+        if serie:
+            rows = [["Année", "Décès", "Taux (‰)", "Âge moyen au décès"]]
+            for r in sorted(serie, key=lambda x: x.get("annee", 0)):
+                tm = r.get("taux_mortalite") or r.get("death_rate")
+                rows.append([
+                    str(r.get("annee", "")),
+                    str(r.get("nb_deces", "")),
+                    f"{tm:.2f}" if tm else "",
+                    str(r.get("age_moyen_deces", r.get("mean_age_death", ""))),
+                ])
+            spec["rows"] = rows
+
+    elif "obs_vs_modeled" in sid or "analysis" in sid or "comparison" in sid:
+        validation = context.get("validation") or {}
+        ci_table   = (validation.get("ci_table") if isinstance(validation, dict) else []) or []
+        exposure_t = context.get("exposure_table") or []
+        exp_by_age = {r["age"]: r.get("E_x", 0) for r in exposure_t if "age" in r}
+        total_exp  = sum(exp_by_age.values()) or 1
+
+        if ci_table:
+            # Agrégation par classes d'âges de 5 ans (pratique actuarielle Winter).
+            import collections
+            buckets = collections.OrderedDict()
+            for r in ci_table:
+                age = r.get("age")
+                if age is None:
+                    continue
+                bucket_min = (int(age) // 5) * 5
+                key = f"{bucket_min}-{bucket_min + 4}"
+                b = buckets.setdefault(key, {
+                    "exp": 0.0, "obs": 0, "mod": 0.0, "cl": [], "cu": [],
+                })
+                b["exp"] += exp_by_age.get(age, 0)
+                b["obs"] += r.get("observed_deaths", r.get("D_x_obs", 0)) or 0
+                b["mod"] += r.get("expected_deaths", r.get("modeled_deaths", 0)) or 0
+                if r.get("ci_lower") is not None: b["cl"].append(r["ci_lower"])
+                if r.get("ci_upper") is not None: b["cu"].append(r["ci_upper"])
+
+            rows = [[
+                "Classe d'âges", "Exposition", "Proportion",
+                "Décès obs.", "Décès prédits", "Écart",
+                "Diff/Prédits %", "IC bas (95 %)", "IC haut (95 %)",
+            ]]
+            for key, b in buckets.items():
+                diff = b["obs"] - b["mod"]
+                pct  = (diff / b["mod"] * 100) if b["mod"] else 0.0
+                ic_lo = sum(b["cl"]) if b["cl"] else None
+                ic_hi = sum(b["cu"]) if b["cu"] else None
+                rows.append([
+                    key,
+                    f"{b['exp']:,.0f}".replace(",", " "),
+                    f"{(b['exp'] / total_exp * 100):.1f} %",
+                    f"{b['obs']:.0f}",
+                    f"{b['mod']:.0f}",
+                    f"{diff:+.0f}",
+                    f"{pct:+.1f} %",
+                    f"{ic_lo:.0f}" if ic_lo is not None else "",
+                    f"{ic_hi:.0f}" if ic_hi is not None else "",
+                ])
+            spec["rows"] = rows
+
+    elif "final_mortality" in sid or "mortality_table" in sid or sid == "annex":
+        fmt = context.get("final_mortality_table_by_age") or {}
+        if not fmt:
+            smoothed = context.get("smoothed_table") or []
+            if smoothed:
+                qx_col = next(
+                    (c for c in ("q_x_lisse", "qx", "q_x_brut")
+                     if c in (smoothed[0] if smoothed else {})),
+                    None,
+                )
+                if qx_col:
+                    fmt = {str(r["age"]): r.get(qx_col, 0) for r in smoothed}
+        if fmt:
+            rows = [["Âge", "q_x (%)"]]
+            for age_s, qx in sorted(
+                fmt.items(),
+                key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999,
+            ):
+                rows.append([str(age_s), f"{float(qx) * 100:.4f}"])
+            spec["rows"] = rows
+
+    else:
+        log.info("[04_redaction] _hydrate_table_spec: aucun hydratateur pour sid=%s", sid)
+
+    return spec
+
+
+def _enrich_graph_context(ctx: dict) -> dict:
+    """
+    Dérive les dicts {age: valeur} attendus par builder_plots depuis les
+    artefacts déjà présents (validation.ci_table, exposure_table,
+    benchmarking.abatement_table). Sans cela, seul le graphique `exposure`
+    rend — les autres spécifications dispatchées échouent faute de clés.
+    """
+    validation = ctx.get("validation") or {}
+    ci_table   = validation.get("ci_table") if isinstance(validation, dict) else None
+    if ci_table and "observed_deaths_by_age" not in ctx:
+        ctx["observed_deaths_by_age"] = {
+            str(r["age"]): r.get("observed_deaths", r.get("D_x_obs"))
+            for r in ci_table if "age" in r
+        }
+        ctx["modeled_deaths_by_age"] = {
+            str(r["age"]): r.get("expected_deaths", r.get("modeled_deaths"))
+            for r in ci_table if "age" in r
+        }
+        ctx["ci_lower_by_age"] = {
+            str(r["age"]): r.get("ci_lower", r.get("ci_lower_95"))
+            for r in ci_table
+            if "age" in r and (r.get("ci_lower") is not None or r.get("ci_lower_95") is not None)
+        }
+        ctx["ci_upper_by_age"] = {
+            str(r["age"]): r.get("ci_upper", r.get("ci_upper_95"))
+            for r in ci_table
+            if "age" in r and (r.get("ci_upper") is not None or r.get("ci_upper_95") is not None)
+        }
+
+    # deaths_by_age : si la cohorte est segmentée H/F, on remonte les deux
+    # séries ; sinon on laisse les clés absentes pour que builder_plots.
+    # deaths_by_age déclenche son propre fallback sur exposure_table.D_x.
+    exp = ctx.get("exposure_table") or []
+    if exp and "deaths_by_age_male" not in ctx and "deaths_by_age_female" not in ctx:
+        has_split = any(isinstance(r, dict) and "D_x_male" in r for r in exp)
+        if has_split:
+            ctx["deaths_by_age_male"] = {
+                str(r["age"]): r.get("D_x_male", 0) for r in exp if "age" in r
+            }
+            ctx["deaths_by_age_female"] = {
+                str(r["age"]): r.get("D_x_female", 0) for r in exp if "age" in r
+            }
+
+    # Abattements : le BuilderAgent stocke `abatement_factor` en priorité ;
+    # on accepte aussi `discount_pct` / `abatement` pour tolérance.
+    bench = ctx.get("benchmarking") or {}
+    abat  = bench.get("abatement_table") if isinstance(bench, dict) else None
+    if abat and "discount_by_age" not in ctx:
+        ctx["discount_by_age"] = {
+            str(r["age"]): (
+                r.get("abatement_factor")
+                if r.get("abatement_factor") is not None
+                else r.get("discount_pct", r.get("abatement"))
+            )
+            for r in abat if "age" in r
+        }
+
+    # Ratio courant/précédent : produit depuis precedent_comparison pour que
+    # le chart rate_ratio puisse être dispatché sans que les clés soient
+    # peuplées directement dans data_store.
+    prec = ctx.get("precedent_comparison") or {}
+    comp_table = prec.get("comparison_table") if isinstance(prec, dict) else None
+    if comp_table and "rate_ratio_current_vs_prior" not in ctx:
+        ctx["rate_ratio_current_vs_prior"] = {
+            str(r["age"]): r.get("ratio", r.get("rate_ratio"))
+            for r in comp_table
+            if "age" in r and (r.get("ratio") is not None or r.get("rate_ratio") is not None)
+        }
+
+    return ctx
+
+
 # ── Appels outils déterministes ───────────────────────────────────────────────
 
 def _run_tables(section, data_store: dict) -> list[dict]:
@@ -53,7 +263,8 @@ def _run_tables(section, data_store: dict) -> list[dict]:
 
     for spec in section.table_specs:
         try:
-            _, html, rows = render_table_from_spec(spec, context)
+            hydrated = _hydrate_table_spec(spec, context)
+            _, html, rows = render_table_from_spec(hydrated, context)
             if rows:
                 results.append({"spec": spec, "html": html, "rows": rows})
                 # Stocker pour write_section
@@ -84,6 +295,11 @@ def _run_stats(section, data_store: dict) -> list[dict]:
 
     for spec in section.stat_specs:
         try:
+            # Injection du `type` manquant depuis mapping id → stat_type.
+            sid = spec.get("id", "")
+            if not spec.get("type") and sid in _STAT_TYPE_BY_ID:
+                spec = {**spec, "type": _STAT_TYPE_BY_ID[sid]}
+
             _, html, rows = render_statistical_output(spec, context)
             if rows:
                 results.append({"spec": spec, "html": html, "rows": rows})
@@ -111,6 +327,7 @@ def _run_graphs(section, data_store: dict) -> list[str]:
         return paths
 
     context = {**data_store, **(section.context_snapshot or {})}
+    context = _enrich_graph_context(context)
 
     for spec in section.graph_specs:
         try:
@@ -132,24 +349,27 @@ def _run_graphs(section, data_store: dict) -> list[str]:
 def _build_redaction_prompt(section, table_results: list, graph_paths: list) -> str:
     """
     Finalise le prompt de rédaction en ajoutant :
-    - les résultats des tableaux (HTML compact)
+    - les tableaux rendus EN INTÉGRALITÉ (pas de troncature — le LLM doit voir
+      toutes les lignes pour pouvoir citer correctement les âges et valeurs)
     - la liste des graphiques générés
     """
     prompt = section.prompt
 
     if table_results:
-        prompt += "\n\n## Tableaux générés (résultats disponibles pour la rédaction)"
+        prompt += "\n\n## Tableaux effectivement rendus dans le PDF"
+        prompt += (
+            "\n\nCes tableaux seront visibles par le lecteur. Dans ta narration, "
+            "introduis-les et commente les points saillants — NE RE-CITE PAS "
+            "ligne-à-ligne (ce serait redondant avec le tableau)."
+        )
         for tr in table_results:
             name = tr["spec"].get("name", tr["spec"].get("id", "tableau"))
             rows = tr["rows"]
-            # Résumé compact : en-tête + 3 premières lignes
-            if len(rows) > 1:
-                header = " | ".join(str(c) for c in rows[0])
-                sample = "\n".join(
-                    " | ".join(str(v) for v in row)
-                    for row in rows[1:4]
-                )
-                prompt += f"\n\n**{name}**\n```\n{header}\n{sample}\n...\n```"
+            if not rows:
+                continue
+            header = " | ".join(str(c) for c in rows[0])
+            body   = "\n".join(" | ".join(str(v) for v in row) for row in rows[1:])
+            prompt += f"\n\n**{name}** ({len(rows) - 1} lignes)\n```\n{header}\n{body}\n```"
 
     if graph_paths:
         prompt += "\n\n## Graphiques générés"
@@ -157,18 +377,89 @@ def _build_redaction_prompt(section, table_results: list, graph_paths: list) -> 
             prompt += f"\n- {p}"
         prompt += (
             "\nCes graphiques sont intégrés dans le rapport. "
-            "Fais-y référence dans le texte (ex: 'La figure X montre...')."
+            "Fais-y référence dans le texte (ex: 'La figure ci-dessous montre...')."
         )
 
     prompt += (
         "\n\n## Consigne finale"
-        "\nRédige maintenant le texte narratif de cette section."
-        "\nStyle : professionnel, actuariel, en français."
-        "\nNe répète pas les données brutes déjà dans les tableaux."
-        "\nConclus la section par une phrase de synthèse."
+        "\n- Rédige le texte narratif de cette section en respectant la charte de style."
+        "\n- Cite les chiffres clés du bloc JSON « Résultats actuariels » (HR, IC, "
+        "p-values, R², SMR, ratios, pourcentages) — ils doivent apparaître mot-pour-mot "
+        "dans ta prose."
+        "\n- Si une statistique manque, OMETS la phrase entière plutôt que d'écrire "
+        "« [donnée non disponible] »."
+        "\n- N'INVENTE JAMAIS d'âge, de valeur ou d'intervalle absent des données fournies."
+        "\n- Ne répète pas ligne-à-ligne les tableaux — commente-les."
+        "\n- Conclus la section par une phrase de synthèse."
     )
 
     return prompt
+
+
+# Captions lisibles par chart_name dispatché (vs. spec.name YAML qui ment souvent).
+# Source de vérité = le chart réellement rendu par builder_plots.
+# MORTALITY : à déplacer dans le plugin lors du strangler.
+_CHART_CAPTIONS: dict[str, str] = {
+    "exposure":       "Exposition au risque par âge",
+    "deaths_by_age":  "Décès observés par âge",
+    "obs_vs_modeled": "Décès observés vs décès modélisés par âge (IC 95 %)",
+    "rate_ratio":     "Ratio de taux — comparaison avec la table antérieure",
+    "discount_line":  "Abattements par âge vs table réglementaire",
+    "crude_smoothed": "Taux bruts et taux lissés par âge",
+    "smr":            "SMR par tranche d'âge",
+    "survival_curve": "Courbe de survie",
+}
+
+# MORTALITY : mapping spec.id → `type` attendu par render_statistical_output.
+# Le YAML déclare l'id mais omet `type`, ce qui fait échouer silencieusement
+# le dispatcher. On injecte le type avant le rendu.
+_STAT_TYPE_BY_ID: dict[str, str] = {
+    "cox_model":         "cox_proportional_hazards",
+    "annual_prediction": "annual_cohort_check",
+    "logit_fit":         "logit_regression",
+    "chi_squared":       "chi_squared",
+}
+
+
+# MORTALITY : captions lisibles par id table YAML — à déplacer dans le plugin.
+_TABLE_CAPTIONS: dict[str, str] = {
+    "table_construction": "Construction de l'échantillon d'étude",
+    "exposure_stats":     "Statistiques d'exposition par année",
+    "death_stats":        "Statistiques de décès par année",
+    "table_comparison":   "Décès observés vs modélisés — par âge avec IC 95 %",
+    "mortality_table":    "Table de mortalité d'expérience (q_x lissés)",
+}
+
+
+def _caption_for_graph(spec: dict) -> str:
+    """Caption dérivée du chart réellement dispatché, fallback sur spec.name."""
+    from tools.graphs.graph_from_spec import _DISPATCH
+    chart_name = _DISPATCH.get(spec.get("id", ""), "")
+    if chart_name and chart_name in _CHART_CAPTIONS:
+        return _CHART_CAPTIONS[chart_name]
+    return spec.get("name") or spec.get("id", "Graphique")
+
+
+def _caption_for_table(spec: dict) -> str:
+    """Caption depuis la table de mapping connue, fallback sur spec.name."""
+    sid = spec.get("id", "")
+    if sid in _TABLE_CAPTIONS:
+        return _TABLE_CAPTIONS[sid]
+    return spec.get("name") or sid or "Tableau"
+
+
+# Sections dont la narration est bypassée (intro courte, insertion directe du tableau).
+# MORTALITY : à déplacer dans le plugin lors du strangler.
+_ANNEX_SECTION_IDS: set[str] = {"annex"}
+
+_ANNEX_INTRO: str = (
+    "## Table de mortalité d'expérience\n\n"
+    "La table ci-dessous présente les taux de mortalité lissés "
+    "pour chaque âge de la cohorte d'étude. Ces taux sont le résultat "
+    "direct de l'algorithme de lissage appliqué aux taux bruts observés.\n\n"
+    "> Les valeurs sont exprimées en pourcentage et arrondies au "
+    "dix-millième pour une meilleure lisibilité."
+)
 
 
 _SYSTEM_PROMPT_REDACTION = """\
@@ -258,6 +549,91 @@ Exemples INTERDITS (notation ASCII) :
 """
 
 
+def _build_traceability_refs(section, all_tables: list, context: dict) -> dict:
+    """
+    Rassemble le référentiel numérique contre lequel le texte rédigé doit
+    être vérifié : les lignes de tableaux rendues + les clés métier injectées
+    au LLM.
+    """
+    refs: dict = {}
+    for key in ("summary", "cox_regression", "logit_regression",
+                "validation", "benchmarking", "diagnostics",
+                "precedent_comparison",
+                "exposure_table", "smoothed_table", "qx_table",
+                "total_deaths", "total_exposure_years", "total_exposure",
+                "age_min", "age_max", "cohort_min_age", "cohort_max_age"):
+        v = context.get(key)
+        if v is not None:
+            refs[key] = v
+    # Les lignes des tableaux rendus (chiffres déjà montrés au lecteur)
+    refs["_rendered_table_rows"] = [tr.get("rows", []) for tr in all_tables]
+    # Le study_plan contient les paramètres cités (années d'observation, etc.)
+    if isinstance(context.get("study_plan"), dict):
+        refs["_study_plan"] = context["study_plan"]
+    return refs
+
+
+def _enforce_traceability(
+    text:        str,
+    prompt:      str,
+    section,
+    all_tables:  list,
+    context:     dict,
+) -> str:
+    """
+    Vérifie que chaque chiffre cité dans `text` est traçable dans les données.
+    Si non → 1 retry ciblé avec feedback au LLM. Si le retry échoue encore,
+    on garde le texte tel quel (on ne veut pas livrer vide).
+    """
+    if not text:
+        return text
+
+    from agents.report.pipeline.traceability import validate_section
+
+    refs = _build_traceability_refs(section, all_tables, context)
+    result = validate_section(text, refs)
+
+    if result.ok:
+        return text
+
+    log.warning(
+        "[04_redaction] '%s' — traçabilité KO : %d chiffres non traçables, %d bad tokens",
+        section.section_id, len(result.untraceable), len(result.bad_tokens),
+    )
+
+    # Retry 1 fois avec feedback chirurgical
+    feedback = result.feedback_for_retry()
+    retry_prompt = (
+        prompt
+        + "\n\n## CORRECTIONS REQUISES AVANT LIVRAISON"
+        + f"\n{feedback}"
+        + "\n\nRéécris le texte narratif complet en appliquant ces corrections. "
+          "Ne change rien d'autre."
+    )
+    retry_text = _call_llm_redaction(retry_prompt)
+    if not retry_text:
+        return text
+
+    retry_result = validate_section(retry_text, refs)
+    if retry_result.ok:
+        log.info("[04_redaction] '%s' — traçabilité OK après retry", section.section_id)
+        return retry_text
+
+    # Ne pas remplacer le texte original par un retry PIRE.
+    if len(retry_result.untraceable) > len(result.untraceable):
+        log.warning(
+            "[04_redaction] '%s' — retry pire que l'original (%d vs %d), on garde l'original",
+            section.section_id, len(retry_result.untraceable), len(result.untraceable),
+        )
+        return text
+
+    log.warning(
+        "[04_redaction] '%s' — traçabilité toujours KO après retry : %s",
+        section.section_id, retry_result.untraceable[:5],
+    )
+    return retry_text
+
+
 def _call_llm_redaction(prompt: str) -> str:
     """
     Appelle GPT-4o pour rédiger le texte narratif de la section.
@@ -333,8 +709,17 @@ def _process_section_parallel(sec, ds_snapshot: dict) -> tuple[str, dict]:
     graph_paths   = _run_graphs(sec, local_ds)
     all_tables    = table_results + stat_results
 
-    prompt = _build_redaction_prompt(sec, all_tables, graph_paths)
-    text   = _call_llm_redaction(prompt)
+    # Annexe : pas d'appel LLM — le tableau q_x suffit. Une intro générique
+    # évite les hallucinations (âges inventés, commentaires sans source).
+    if sec.section_id in _ANNEX_SECTION_IDS:
+        text = _ANNEX_INTRO
+    else:
+        prompt = _build_redaction_prompt(sec, all_tables, graph_paths)
+        text   = _call_llm_redaction(prompt)
+
+        # Validator traçabilité : chaque chiffre cité doit être traçable
+        # dans les données fournies. Si non → 1 retry ciblé.
+        text = _enforce_traceability(text, prompt, sec, all_tables, local_ds)
 
     return sec.section_id, {
         "text":          text,
@@ -343,6 +728,11 @@ def _process_section_parallel(sec, ds_snapshot: dict) -> tuple[str, dict]:
         "status":        "done" if text else "partial",
         "n_tables":      len(all_tables),
         "n_graphs":      len(graph_paths),
+        # Pass raw data so the sequential write phase can inject into shared data_store
+        # Retournés pour que la phase d'écriture séquentielle les re-propage
+        # vers write_section via _last_table_rows/_last_graph_path.
+        "all_tables":    all_tables,
+        "graph_paths":   graph_paths,
     }
 
 
@@ -413,17 +803,48 @@ def redact_plan(plan, data_store: dict) -> dict:
                     "status": "error", "n_tables": 0, "n_graphs": 0,
                 }
 
-    # Écriture séquentielle pour préserver l'ordre du plan et éviter les conflits
+    # Écriture séquentielle pour préserver l'ordre du plan.
+    # On appelle write_section autant de fois que nécessaire : 1 appel par
+    # tableau et 1 par graphique — sinon seul le dernier survivrait (write_section
+    # consomme _last_table_rows / _last_graph_path singuliers).
+    # NOT THREAD-SAFE — ce loop mute data_store, ne pas paralléliser.
     n_done = 0
     for sec in ready:
         r = results.get(sec.section_id, {})
-        _write_section(
-            section_id    = sec.section_id,
-            text          = r.get("text", ""),
-            data_store    = data_store,
-            table_caption = r.get("table_caption", ""),
-            graph_caption = r.get("graph_caption", ""),
-        )
+        all_tables  = r.get("all_tables", [])
+        graph_paths = r.get("graph_paths", [])
+        text        = r.get("text", "")
+        sid         = sec.section_id
+
+        # Nettoyage des résidus du tour précédent
+        data_store.pop("_last_table_rows", None)
+        data_store.pop("_last_graph_path", None)
+
+        # Nombre total d'inserts attendus — on met le texte sur le PREMIER write,
+        # les suivants sont purement pour append tableau/graphique.
+        n_inserts = max(len(all_tables), len(graph_paths), 1)
+        text_written = False
+
+        for i in range(n_inserts):
+            tbl_spec = all_tables[i]["spec"] if i < len(all_tables) else None
+            tbl_rows = all_tables[i]["rows"] if i < len(all_tables) else None
+            g_spec   = sec.graph_specs[i]   if i < len(sec.graph_specs) else None
+            g_path   = graph_paths[i]       if i < len(graph_paths) else None
+
+            if tbl_rows:
+                data_store["_last_table_rows"] = tbl_rows
+            if g_path:
+                data_store["_last_graph_path"] = g_path
+
+            _write_section(
+                section_id    = sid,
+                text          = "" if text_written else text,
+                data_store    = data_store,
+                table_caption = _caption_for_table(tbl_spec) if tbl_spec else "",
+                graph_caption = _caption_for_graph(g_spec) if g_spec else "",
+            )
+            text_written = True
+
         n_done += 1
 
     log.info("[04_redaction] terminé — %d sections rédigées, %d skippées",

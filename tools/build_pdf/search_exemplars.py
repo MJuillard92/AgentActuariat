@@ -116,9 +116,9 @@ from __future__ import annotations
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_CHROMA_PATH  = _PROJECT_ROOT / "base_de_connaissance" / "exemplaires" / "chromadb"
+_CHROMA_PATH  = _PROJECT_ROOT / "knowledge_base" / "rag" / "chroma_db"
 _COLLECTION   = "exemplaires_actuariels"
-_MAX_CONTENT  = 800  # caractères max par chunk retourné
+_MAX_CONTENT  = 2500  # caractères max par chunk retourné (aligné sur _MAX_CHUNK_CHARS de build_rag.py)
 
 
 def run(data: dict, params: dict | None = None) -> dict:

@@ -1,0 +1,420 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{tikz}
+\usepackage{tikz-qtree}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds, calc}
+
+% Colors
+\definecolor{agentblue}{RGB}{30, 90, 160}
+\definecolor{agentgreen}{RGB}{34, 139, 34}
+\definecolor{agentred}{RGB}{180, 30, 30}
+\definecolor{agentorange}{RGB}{210, 120, 0}
+\definecolor{agentgray}{RGB}{240, 240, 245}
+\definecolor{agentlightblue}{RGB}{220, 235, 255}
+\definecolor{agentlightgreen}{RGB}{220, 245, 220}
+\definecolor{agentlightred}{RGB}{255, 230, 230}
+
+% tcolorbox styles
+\tcbuselibrary{skins, breakable}
+
+\newtcolorbox{capabilitybox}[1][]{
+  colback=agentlightgreen,
+  colframe=agentgreen,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable,
+  arc=4pt
+}
+
+\newtcolorbox{limitbox}[1][]{
+  colback=agentlightred,
+  colframe=agentred,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable,
+  arc=4pt
+}
+
+\newtcolorbox{improvebox}[1][]{
+  colback=agentlightblue,
+  colframe=agentblue,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable,
+  arc=4pt
+}
+
+% Header/footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{agentblue}{\textbf{AgentActuariat}}}
+\fancyhead[R]{\textcolor{gray}{\small Analyse des capacités}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Section formatting
+\titleformat{\section}{\large\bfseries\color{agentblue}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries\color{agentblue!70!black}}{}{0em}{}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=agentblue,
+  urlcolor=agentblue,
+  pdftitle={AgentActuariat — Capacités et limites},
+  pdfauthor={AgentActuariat}
+}
+
+% ─────────────────────────────────────────────
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+  {\Huge\bfseries\color{agentblue} AgentActuariat\par}
+  \vspace{0.5cm}
+  {\large\color{gray} Analyse des capacités et des limites du système\par}
+  \vspace{2cm}
+  \rule{0.6\textwidth}{0.5pt}
+  \vspace{1cm}
+
+  \begin{tcolorbox}[colback=agentgray, colframe=agentblue!30, width=0.75\textwidth, arc=6pt]
+    \centering
+    \textbf{Objet :} Ce document décrit précisément ce que fait l'agent,
+    ce qu'il ne fait pas, et les priorités d'amélioration identifiées
+    à partir de l'analyse de son architecture (avril 2026).
+  \end{tcolorbox}
+
+  \vfill
+  {\small\color{gray} Document généré à partir de \texttt{docs/AGENT\_ARCHITECTURE.md}\par}
+  {\small\color{gray} Avril 2026\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Vue d'ensemble — Architecture du système}
+
+\texttt{AgentActuariat} est un agent multi-nœud LangGraph dont l'objectif est
+de construire et certifier des tables de mortalité d'expérience à partir d'un
+portefeuille assurantiel, puis de générer un rapport actuariel professionnel au
+format PDF.
+
+\bigskip
+
+% ── TikZ diagram ──────────────────────────────
+\subsection{Schéma de la pipeline}
+
+\begin{figure}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance = 0.9cm and 1.4cm,
+  box/.style = {rectangle, rounded corners=4pt, minimum width=2.6cm,
+                minimum height=0.9cm, text centered, font=\small\bfseries,
+                draw, line width=0.8pt},
+  input/.style  = {box, fill=agentgray,    draw=gray},
+  master/.style = {box, fill=agentlightblue, draw=agentblue},
+  builder/.style= {box, fill=agentlightgreen,draw=agentgreen},
+  writer/.style = {box, fill=agentlightblue, draw=agentblue},
+  pipeline/.style={box, fill=agentlightblue!60, draw=agentblue!60,
+                   minimum width=2.2cm, minimum height=0.75cm, font=\footnotesize},
+  output/.style = {box, fill=agentlightred, draw=agentred},
+  tools/.style  = {box, fill=agentlightgreen!60, draw=agentgreen!70,
+                   minimum width=2.2cm, minimum height=0.75cm, font=\footnotesize},
+  arr/.style    = {-{Stealth[length=5pt]}, line width=0.7pt},
+  arrblue/.style= {arr, color=agentblue},
+  arrgreen/.style={arr, color=agentgreen},
+  arrred/.style = {arr, color=agentred},
+  label/.style  = {font=\tiny\itshape, text=gray}
+]
+
+% ── Nodes ──────────────────────────────────────
+\node[input]   (csv)     {CSV\\ Portefeuille};
+\node[master,  right=of csv]  (master)  {MasterAgent\\ \footnotesize(intent + routing)};
+\node[builder, right=of master](builder){BuilderAgent\\ \footnotesize(ReAct, max 5 iter.)};
+\node[tools,   below=0.7cm of builder]  (tools)   {Tools actuariels\\ \footnotesize(exposure, lissage…)};
+\node[writer,  right=of builder](writer){WriterNode\\ \footnotesize(no LLM)};
+
+% pipeline steps to the right of writer, stacked vertically
+\node[pipeline, right=1.6cm of writer, yshift=2.2cm] (p01) {01 load\_plan};
+\node[pipeline, below=0.3cm of p01] (p02) {02 validation\_plan\\ \footnotesize(LLM)};
+\node[pipeline, below=0.3cm of p02] (p03) {03 completion\_plan\\ \footnotesize(RAG ChromaDB)};
+\node[pipeline, below=0.3cm of p03] (p04) {04 redaction\\ \footnotesize(LLM × section)};
+\node[pipeline, below=0.3cm of p04] (p05) {05 assemble\\ \footnotesize(ReportLab)};
+\node[pipeline, below=0.3cm of p05] (p06) {06 validate\_report\\ \footnotesize(LLM, verdict)};
+\node[output,   below=0.5cm of p06] (pdf) {PDF\\ Rapport final};
+
+% ── Arrows ─────────────────────────────────────
+\draw[arrblue]  (csv)     -- node[above, label]{upload} (master);
+\draw[arrblue]  (master)  -- node[above, label]{build} (builder);
+\draw[arrgreen] (builder) -- node[right, label]{tool calls} (tools);
+\draw[arrgreen] (tools)   -- ++(0,0.7) -| (builder);   % loop back
+\draw[arrblue]  (builder) -- node[above, label]{BUILD\_DONE} (writer);
+
+% master ↔ builder feedback
+\draw[arrblue, dashed, bend right=30]
+  (builder.south west) to node[below, label]{to\_master} (master.south east);
+
+% writer → pipeline
+\draw[arrblue]  (writer.east) -- ++(0.5,0) |- (p01.west);
+
+% pipeline steps
+\draw[arrblue] (p01) -- (p02);
+\draw[arrblue] (p02) -- (p03);
+\draw[arrblue] (p03) -- (p04);
+\draw[arrblue] (p04) -- (p05);
+\draw[arrblue] (p05) -- (p06);
+\draw[arrred]  (p06) -- (pdf);
+
+% need_data feedback
+\draw[arrred, dashed, bend left=50]
+  (p02.west) to node[left, label]{need\_data} (master.north east);
+
+% retry step 04
+\draw[arrblue, dashed, bend left=40]
+  (p06.east) to[out=0, in=0] node[right, label]{retry minor} (p04.east);
+
+% ── Legend box ─────────────────────────────────
+\begin{scope}[shift={(-0.2,-3.8)}]
+  \node[input,  minimum width=1.8cm, minimum height=0.55cm, font=\tiny] (l1) at (0,0) {Données};
+  \node[master, minimum width=1.8cm, minimum height=0.55cm, font=\tiny] (l2) at (2.2,0) {Nœud LangGraph};
+  \node[builder,minimum width=1.8cm, minimum height=0.55cm, font=\tiny] (l3) at (4.4,0) {Calcul / LLM actif};
+  \node[output, minimum width=1.8cm, minimum height=0.55cm, font=\tiny] (l4) at (6.6,0) {Sortie};
+  \node[font=\tiny\itshape, text=gray] at (3.3,-0.6) {Légende};
+\end{scope}
+
+\end{tikzpicture}
+}
+\caption{Architecture complète d'AgentActuariat — pipeline de bout en bout}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Composants et modèle LLM}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Composant} & \textbf{Rôle} & \textbf{LLM} & \textbf{Type} \\
+\midrule
+MasterAgent    & Routing, intent, désambiguïsation & GPT-4o & 1–3 appels/tour \\
+BuilderAgent   & Calculs actuariels (ReAct)        & GPT-4o & Borné à 5 iter. \\
+WriterNode     & Déclencheur pipeline              & Aucun  & Déterministe \\
+Étape 02       & Validation données suffisantes    & GPT-4o & JSON mode \\
+Étape 04       & Rédaction narrative               & GPT-4o & temp=0.4 \\
+Étape 06       & Contrôle qualité final            & GPT-4o & JSON mode \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Ce que l'agent fait}
+
+\begin{capabilitybox}[Capacités validées par l'analyse de l'architecture]
+
+\subsection*{1. Ingestion et préparation des données}
+\begin{itemize}[leftmargin=1.5em]
+  \item Charge un fichier CSV de portefeuille assurantiel via l'interface Dash.
+  \item Mappe automatiquement les colonnes sur les champs attendus
+        (\texttt{date\_naissance}, \texttt{date\_entree}, \texttt{date\_sortie},
+        \texttt{cause\_sortie}) par règles d'abord, puis par LLM si ambigu.
+  \item Désambiguïse le plan d'étude au premier tour (objectif, filtres, tranches d'âge).
+  \item Persiste le DataFrame en Parquet pour éviter de le retransmettre à chaque tour.
+\end{itemize}
+
+\subsection*{2. Calcul actuariel complet}
+Le BuilderAgent orchestre via function-calling l'enchaînement des outils suivants :
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Exposition} : calcul en années-personnes par âge.
+  \item \textbf{Taux bruts} ($\hat{q}_x$) : méthode Kaplan-Meier ou actuarielle classique.
+  \item \textbf{Lissage} ($q_x$ lissés) : ajustement paramétrique avec contrôle de monotonie.
+  \item \textbf{Diagnostics} : détection des âges à faible crédibilité, recommandation de régime.
+  \item \textbf{Validation statistique} : intervalles de confiance, test du $\chi^2$.
+  \item \textbf{Benchmarking} : abattement vs table réglementaire, SMR global.
+  \item \textbf{Régression de Cox} : rapport de risque par sexe avec IC à 95\%.
+  \item \textbf{Régression logit} : ajustement $q_x$ lissés vs table de référence ($R^2$, pente).
+  \item \textbf{Comparaison antérieure} : dérive globale et âges à forte dérive vs étude précédente.
+\end{itemize}
+
+\subsection*{3. Génération du rapport PDF}
+Pipeline de 6 étapes séquentielles :
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Chargement du plan} : résolution des \texttt{\{\{\ placeholders\ \}\}} depuis le
+        \texttt{data\_store}, construction d'un prompt autonome par section.
+  \item \textbf{Validation des données} : vérification LLM que chaque section a ses inputs
+        — retour au builder si manquant.
+  \item \textbf{Complétion RAG} : injection d'exemples de rédaction depuis ChromaDB
+        (rapport de référence indexé).
+  \item \textbf{Rédaction} : LLM GPT-4o rédige chaque section en parallèle
+        (\texttt{temperature=0.4}, \texttt{max\_tokens=1200}).
+        Tables et graphiques sont rendus de façon déterministe (ReportLab / matplotlib)
+        \emph{avant} l'appel LLM.
+  \item \textbf{Assemblage} : ReportLab assemble les sections dans l'ordre fixe.
+  \item \textbf{Validation finale} : LLM audite le rapport (verdict ok / minor / major)
+        avec retry ciblé sur les sections KO.
+\end{enumerate}
+
+\subsection*{4. Validator de traçabilité des chiffres}
+\begin{itemize}[leftmargin=1.5em]
+  \item Extrait tous les nombres cités dans le texte narratif par regex.
+  \item Vérifie que chaque nombre est traçable dans le \texttt{data\_store}
+        (tolérance $\pm 2\,\%$, conversions fraction/pourcent/millième).
+  \item En cas d'échec : retry ciblé avec feedback chirurgical au LLM (1 fois max).
+  \item Whitelist pour constantes statistiques universelles (1,96 ; 0,05 ; etc.).
+\end{itemize}
+
+\subsection*{5. Mémoire persistante multi-couches}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Working memory} (RAM) : état LangGraph complet, compacté au-delà de 15 messages.
+  \item \textbf{Business memory} (JSON sur disque) : plan d'étude, mapping colonnes, résultats
+        des outils actuariels — survit au redémarrage.
+  \item \textbf{Dataset memory} (Parquet sur disque) : DataFrame brut — écrit une seule fois.
+  \item \textbf{Conversation memory} : historique LangGraph avec résumé structuré automatique.
+\end{itemize}
+
+\end{capabilitybox}
+
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Ce que l'agent ne fait pas — Limites identifiées}
+
+\begin{limitbox}[Limites confirmées par l'analyse du code]
+
+\subsection*{1. Sections narratives potentiellement tronquées}
+\texttt{max\_tokens=1200} par section à l'étape 04. Une section actuarielle professionnelle
+(construction de table, analyse statistique) peut nécessiter 600–900 mots, soit
+environ 1\,200–1\,500 tokens. Ce plafond est donc \emph{au bord de l'insuffisance}
+pour les sections les plus denses.
+
+\subsection*{2. Température trop élevée sur les étapes critiques}
+Les étapes 02 (validation plan) et 06 (contrôle qualité) n'ont pas de
+\texttt{temperature} explicite dans le code $\Rightarrow$ défaut OpenAI = \textbf{1,0}.
+Pour un contenu de certification réglementaire, une température de 1,0 introduit
+une variabilité inacceptable dans les verdicts JSON.
+
+\subsection*{3. RAG insuffisant pour capturer le style de référence}
+L'étape 03 injecte au maximum \textbf{600 caractères} par section depuis le rapport
+d'exemple (ChromaDB). C'est trop peu pour transmettre le registre, la structure
+et le niveau de détail d'un rapport actuariel professionnel.
+
+\subsection*{4. WriterNode sans intelligence contextuelle}
+Le WriterNode appelle \texttt{run\_pipeline()} directement \emph{sans aucun appel LLM
+au niveau du nœud}. Il n'y a donc aucune adaptation intelligente à la spécificité
+des données (portefeuille atypique, âges extrêmes, crédibilité faible) avant
+de lancer la rédaction.
+
+\subsection*{5. Ordre d'exécution des outils non garanti}
+Le BuilderAgent choisit librement l'ordre des tools via function-calling.
+Les garde-fous sont \emph{passifs} uniquement : un tool retourne une erreur si son
+prérequis manque, mais l'agent peut théoriquement appeler \texttt{benchmarking}
+avant \texttt{smoothing} sans blocage proactif.
+
+\subsection*{6. Working memory perdue au redémarrage}
+Le \texttt{MemorySaver} de LangGraph est en RAM. Un redémarrage du process efface
+l'état LangGraph de toutes les sessions actives. Seule la \texttt{SessionState}
+(JSON/Parquet) survit.
+
+\subsection*{7. Contenu des system prompts non auditable en l'état}
+Les prompts du MasterAgent et du BuilderAgent sont chargés dynamiquement depuis
+des fichiers \texttt{.md} dans \texttt{agents/*/agent\_instructions/}. Leur contenu
+exact n'a pas été vérifié dans cette analyse — ils constituent un angle mort
+de la garantie qualité.
+
+\subsection*{8. Pas de gestion robuste des CSV mal formés}
+La désambiguïsation peut boucler ou échouer silencieusement sur un CSV mal structuré
+(encodage, colonnes manquantes, formats de date hétérogènes). Aucun mécanisme
+d'abandon propre n'a été identifié dans le code.
+
+\end{limitbox}
+
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Points d'amélioration prioritaires}
+
+\begin{improvebox}[Recommandations classées par impact / effort]
+
+\subsection*{Priorité 1 — Corriger la température des étapes 02 et 06}
+\textbf{Impact : élevé — Effort : minimal (2 lignes de code)}\\
+Fixer \texttt{temperature=0.0} ou \texttt{0.1} sur les appels LLM des étapes de validation
+(02 et 06). Un verdict de certification doit être déterministe.
+
+\begin{center}
+\begin{tcolorbox}[colback=black!5, colframe=black!30, width=0.8\textwidth,
+                  fontupper=\ttfamily\small, arc=3pt]
+\# Étape 02 et 06 — ajouter :\\
+temperature=0.1,~~\# déterminisme pour contenu réglementaire
+\end{tcolorbox}
+\end{center}
+
+\subsection*{Priorité 2 — Augmenter max\_tokens à l'étape 04}
+\textbf{Impact : élevé — Effort : faible}\\
+Passer \texttt{max\_tokens} de 1\,200 à \textbf{2\,000} pour les sections denses
+(\texttt{construction}, \texttt{analysis}), en conservant 1\,200 pour les sections
+courtes (\texttt{preamble}, \texttt{conclusion}).
+
+\subsection*{Priorité 3 — Enrichir le RAG de l'étape 03}
+\textbf{Impact : élevé — Effort : moyen}\\
+Porter la limite de troncature de 600 à \textbf{1\,500 caractères} par section,
+et augmenter le nombre de chunks récupérés de 1 à 3. L'exemple de référence
+doit couvrir au moins un paragraphe complet pour transmettre le style.
+
+\subsection*{Priorité 4 — Introduire un LLM de contexte dans WriterNode}
+\textbf{Impact : moyen — Effort : moyen}\\
+Avant de déclencher \texttt{run\_pipeline()}, ajouter un appel LLM léger
+(\texttt{gpt-4o-mini}, \texttt{max\_tokens=300}) qui analyse le \texttt{data\_store}
+et produit un \emph{briefing contextuel} injecté dans les prompts de section :
+particularités du portefeuille, âges à crédibilité faible, anomalies détectées.
+
+\subsection*{Priorité 5 — Garde-fous proactifs sur l'ordre des tools}
+\textbf{Impact : moyen — Effort : moyen}\\
+Ajouter une vérification explicite dans \texttt{tools\_node.py} :
+refuser l'exécution de \texttt{benchmarking} ou \texttt{logit\_regression}
+si les prérequis (\texttt{smoothed\_table}) sont absents du \texttt{data\_store},
+avec un message d'erreur clair renvoyé au BuilderAgent.
+
+\end{improvebox}
+
+\bigskip
+
+% ─────────────────────────────────────────────
+\section*{Synthèse}
+
+\begin{center}
+\begin{tabular}{p{6cm} p{6cm}}
+\toprule
+\textbf{\color{agentgreen}Points forts} & \textbf{\color{agentred}Points faibles} \\
+\midrule
+Pipeline déterministe (tables, graphes) & max\_tokens trop bas pour sections denses \\
+Validator de traçabilité des chiffres   & Temperature par défaut = 1.0 (étapes 02/06) \\
+Mémoire persistante multi-couches       & RAG insuffisant (600 chars) \\
+Retry ciblé sur sections KO             & WriterNode sans intelligence contextuelle \\
+Bornage du ReAct à 5 itérations         & Ordre des tools non garanti (passif) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vfill
+\begin{center}
+  \textcolor{gray}{\small Document produit à partir de \texttt{docs/AGENT\_ARCHITECTURE.md} — Avril 2026}
+\end{center}
+
+\end{document}

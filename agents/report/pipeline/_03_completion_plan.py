@@ -88,55 +88,138 @@ def _query_for_section(section_id: str, label: str) -> str:
 
 def _search_rag(query: str, n_results: int = _N_RESULTS) -> list[dict]:
     """
-    Appelle search_exemplars et retourne les chunks pertinents.
+    Appelle search_exemplars et retourne les chunks pertinents (hors guide de style).
     Retourne [] si le corpus est vide ou si search_exemplars est indisponible.
     """
     try:
         from tools.build_pdf.search_exemplars import run as _search_run
-        result = _search_run(data={}, params={"query": query, "n_results": n_results})
+        # On demande un peu plus que _N_RESULTS : le style_guide capture souvent
+        # le top-1 sémantique, on le filtre pour le réinjecter à part.
+        result = _search_run(data={}, params={
+            "query": query,
+            "n_results": n_results + 1,
+        })
 
-        if result.get("warning") or not result.get("chunks"):
+        if not result.get("chunks"):
             return []
 
-        # Filtrer par distance (pertinence)
         chunks = result["chunks"]
-        filtered = [
-            c for c in chunks
-            if c.get("distance") is None or c.get("distance", 999) <= _MAX_DISTANCE
-        ]
-        return filtered
+
+        # Exclure le style_guide : on l'ajoute séparément via _fetch_style_guide
+        # pour garantir sa présence systématique.
+        chunks = [c for c in chunks if _get_section_id(c) != "_style_guide"]
+        return chunks[:n_results]
 
     except Exception as exc:
         log.debug("[03_completion_plan] search_exemplars indisponible : %s", exc)
         return []
 
 
+def _get_section_id(chunk: dict) -> str:
+    """section_id peut être dans `section` (search_exemplars) ou meta['section_id']."""
+    meta = chunk.get("metadata") or {}
+    return meta.get("section_id") or chunk.get("section") or ""
+
+
+# ── Fetch du guide de style (mis en cache pour toute la durée du pipeline) ────
+
+_STYLE_GUIDE_CACHE: dict = {"fetched": False, "chunk": None}
+
+
+def _fetch_style_guide() -> dict | None:
+    """
+    Récupère le chunk `_style_guide` via search_exemplars (filtre par section).
+    Mis en cache : ne fait qu'un seul appel par run de pipeline.
+    Retourne None si le corpus n'a pas encore été peuplé.
+    """
+    if _STYLE_GUIDE_CACHE["fetched"]:
+        return _STYLE_GUIDE_CACHE["chunk"]
+
+    _STYLE_GUIDE_CACHE["fetched"] = True
+    try:
+        from tools.build_pdf.search_exemplars import run as _search_run
+        result = _search_run(data={}, params={
+            "query": "guide de style tournures conventions typographiques rapport actuariel",
+            "n_results": 5,
+            "filters": {"section_id": "_style_guide"},
+        })
+        for c in result.get("chunks", []):
+            if _get_section_id(c) == "_style_guide":
+                _STYLE_GUIDE_CACHE["chunk"] = c
+                return c
+    except Exception as exc:
+        log.debug("[03_completion_plan] fetch style_guide indisponible : %s", exc)
+    return None
+
+
 # ── Formatage des extraits bruts ──────────────────────────────────────────────
 
-def _format_chunks(chunks: list[dict]) -> str:
+def _chunk_text(chunk: dict) -> str:
+    """
+    Extrait le texte du chunk. `search_exemplars` remonte `contenu` (français) ;
+    on accepte aussi `content` / `document` pour tolérance aux autres producteurs.
+    """
+    return (
+        chunk.get("contenu")
+        or chunk.get("content")
+        or chunk.get("document")
+        or ""
+    ).strip()
+
+
+def _chunk_source(chunk: dict, fallback: str = "rapport") -> str:
+    meta = chunk.get("metadata") or {}
+    return (
+        meta.get("rapport_id")
+        or meta.get("source")
+        or chunk.get("rapport_id")
+        or chunk.get("source")
+        or fallback
+    )
+
+
+# Limite de troncature par extrait dans le prompt. 1800 chars = ~450 tokens,
+# suffisant pour transmettre le style d'une section entière sans saturer.
+_EXTRACT_MAX_CHARS = 1800
+
+
+def _format_chunks(chunks: list[dict], style_guide: dict | None = None) -> str:
     """
     Formate les extraits RAG bruts pour injection dans le prompt de rédaction.
     L'agent de rédaction voit le texte réel des rapports de référence :
     wording, niveau de détail, longueur — sans transformation.
+
+    Si `style_guide` est fourni, il est injecté AVANT les extraits (rôle :
+    établir les conventions avant de donner les exemples).
     """
-    if not chunks:
+    if not chunks and not style_guide:
         return ""
 
     lines = [
         "## Exemples de rédaction issus du corpus de référence",
-        "Ces extraits sont tirés de rapports actuariels réels.",
+        "Les éléments ci-dessous proviennent de rapports actuariels réels.",
         "Ils te donnent le ton, le niveau de détail et la longueur attendus.",
         "Ne les copie pas — inspire-toi du style.",
         "",
     ]
+
+    if style_guide:
+        sg_text = _chunk_text(style_guide)
+        if sg_text:
+            lines += [
+                "### Guide de style (tournures et conventions du rapport de référence)",
+                sg_text[:_EXTRACT_MAX_CHARS],
+                "",
+            ]
+
     for i, chunk in enumerate(chunks):
-        source   = chunk.get("rapport_id") or chunk.get("source") or f"rapport_{i+1}"
-        content  = (chunk.get("content") or chunk.get("document") or "").strip()
+        content = _chunk_text(chunk)
         if not content:
             continue
+        source = _chunk_source(chunk, fallback=f"rapport_{i+1}")
         lines += [
             f"### Extrait {i+1} — {source}",
-            content[:600],   # tronqué à 600 chars pour ne pas saturer le prompt
+            content[:_EXTRACT_MAX_CHARS],
             "",
         ]
 
@@ -145,18 +228,37 @@ def _format_chunks(chunks: list[dict]) -> str:
 
 # ── Point d'entrée public ─────────────────────────────────────────────────────
 
-def _fetch_rag_for_section(sec) -> tuple[str, str, int]:
+def _fetch_rag_for_section(sec, style_guide: dict | None = None) -> tuple[str, str, int]:
     """
     Interroge le corpus RAG pour une section donnée.
-    Thread-safe — pas d'état partagé.
-    Retourne (section_id, rag_block, n_chunks).
+    Thread-safe — pas d'état partagé (le style_guide est pré-fetché à l'entrée
+    de complete_plan et passé par paramètre, pas via globale).
+    Retourne (section_id, rag_block, n_chunks_injected).
     """
     query  = _query_for_section(sec.section_id, sec.label)
     chunks = _search_rag(query)
-    if not chunks:
+
+    # Filtrage par distance (pertinence). Les chunks avec distance > _MAX_DISTANCE
+    # sont ignorés. NB : search_exemplars remonte `score = 1 - distance`.
+    def _dist(c):
+        score = c.get("score")
+        if score is not None:
+            try:
+                return 1.0 - float(score)
+            except (TypeError, ValueError):
+                return 0.0
+        d = c.get("distance")
+        return float(d) if d is not None else 0.0
+
+    chunks = [c for c in chunks if _dist(c) <= _MAX_DISTANCE]
+
+    # Même sans chunks pertinents, on injecte le guide de style seul (c'est sa raison d'être).
+    if not chunks and not style_guide:
         return sec.section_id, "", 0
-    block = _format_chunks(chunks)
-    return sec.section_id, block, len(chunks)
+
+    block = _format_chunks(chunks, style_guide=style_guide)
+    n_items = len(chunks) + (1 if style_guide else 0)
+    return sec.section_id, block, n_items
 
 
 def complete_plan(plan, data_store: dict):
@@ -187,13 +289,24 @@ def complete_plan(plan, data_store: dict):
 
     log.info("[03_completion_plan] %d sections à enrichir (parallèle)", len(eligible))
 
+    # Pré-fetch du guide de style une seule fois (commun à toutes les sections).
+    # Reset du cache pour cette exécution du pipeline, puis fetch.
+    _STYLE_GUIDE_CACHE["fetched"] = False
+    _STYLE_GUIDE_CACHE["chunk"]   = None
+    style_guide = _fetch_style_guide()
+    if style_guide:
+        log.info("[03_completion_plan] guide de style récupéré (sera injecté dans chaque section)")
+
     # Recherches RAG en parallèle (I/O bound — pas de conflit)
     # Timeout par section : 20s max (ChromaDB + embedding model init peut être lent)
     _RAG_TIMEOUT = 20
 
     rag_results: dict[str, tuple[str, int]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_fetch_rag_for_section, sec): sec.section_id for sec in eligible}
+        futures = {
+            pool.submit(_fetch_rag_for_section, sec, style_guide): sec.section_id
+            for sec in eligible
+        }
         for future in concurrent.futures.as_completed(futures, timeout=_RAG_TIMEOUT * len(eligible)):
             sid = futures[future]
             try:

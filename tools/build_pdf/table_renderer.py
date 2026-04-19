@@ -150,21 +150,83 @@ def _build_static_rows(rows_spec: list, data: dict, col_formats: list[str]) -> l
     return result
 
 
+import re as _re
+
+
+def _resolve_inline(text: Any, data: dict) -> Any:
+    """
+    Remplace `{{ key }}` par `data[key]` stringifié (ou laisse le token
+    intact si la clé manque). Utilisé pour les labels de colonnes déclarés
+    dans le YAML avec des placeholders non résolus (ex. « CI Lower
+    ({{ confidence_interval_level }}%) »).
+    """
+    if not isinstance(text, str) or "{{" not in text:
+        return text
+    def _sub(m):
+        k = m.group(1).strip()
+        v = data.get(k)
+        if v is None:
+            return m.group(0)
+        if isinstance(v, float):
+            # Un niveau d'IC stocké en fraction → affiché en pourcent entier
+            return f"{v * 100:.0f}" if 0 < v < 1 else f"{v:g}"
+        return str(v)
+    return _re.sub(r"\{\{\s*(\w+)\s*\}\}", _sub, text)
+
+
+def _normalize_columns(columns: list) -> list[dict]:
+    """
+    Normalise la liste de colonnes : une col peut être soit un dict
+    {label, key, format} soit une simple chaîne (label = chaîne elle-même).
+    Retourne toujours une liste de dicts uniformes.
+    """
+    out = []
+    for i, c in enumerate(columns or []):
+        if isinstance(c, dict):
+            out.append({
+                "label":  c.get("label") or c.get("key") or str(i),
+                "key":    c.get("key"),
+                "format": c.get("format", ""),
+            })
+        else:
+            out.append({"label": str(c), "key": None, "format": ""})
+    return out
+
+
 def render_table_from_spec(spec: dict, data: dict) -> tuple[Any, str, list]:
     """
     Returns (reportlab_Table | None, html_str).
     spec keys: id, name, columns, rows, highlight_rule, format
+
+    Les `columns` du spec peuvent être des dicts ou de simples chaînes
+    (labels). Le renderer les normalise.
     """
     if not spec:
         return None, "", []
 
     table_id   = spec.get("id", "table")
     table_name = spec.get("name", table_id)
-    columns    = spec.get("columns", [])
-    rows_spec  = spec.get("rows", "dynamic")
-    col_formats = [c.get("format", "") for c in columns] if columns else []
 
-    headers = [c.get("label", c.get("key", str(i))) for i, c in enumerate(columns)] if columns else []
+    # Résoudre les placeholders `{{ }}` dans les labels avant normalisation,
+    # sinon ils apparaissent bruts dans le PDF.
+    raw_cols = spec.get("columns", [])
+    resolved_cols = []
+    for c in raw_cols:
+        if isinstance(c, str):
+            resolved_cols.append(_resolve_inline(c, data))
+        elif isinstance(c, dict):
+            c2 = dict(c)
+            if "label" in c2:
+                c2["label"] = _resolve_inline(c2["label"], data)
+            resolved_cols.append(c2)
+        else:
+            resolved_cols.append(c)
+
+    columns    = _normalize_columns(resolved_cols)
+    rows_spec  = spec.get("rows", "dynamic")
+    col_formats = [c["format"] for c in columns]
+
+    headers = [c["label"] for c in columns]
 
     # Build rows
     if rows_spec == "dynamic" or rows_spec == "age_indexed":

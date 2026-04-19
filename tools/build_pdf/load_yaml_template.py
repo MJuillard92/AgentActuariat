@@ -460,6 +460,16 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
         else:
             missing.append(ph_name)
 
+    # ── Dériver observation_start_date / observation_end_date depuis les années ──
+    # Si l'utilisateur n'a pas saisi les dates, on les dérive depuis observation_period_years
+    if "observation_start_date" not in context and "observation_period_years" in context:
+        years = context["observation_period_years"]
+        if isinstance(years, list) and years:
+            context["observation_start_date"] = f"{min(years)}-01-01"
+            context["observation_end_date"]   = f"{max(years)}-12-31"
+            missing[:] = [m for m in missing
+                          if m not in ("observation_start_date", "observation_end_date")]
+
     # ── Index sections : section_id → section YAML (pour extraire les specs) ──
     # Couvre les sections de premier niveau et leurs subsections
     _sections_index = {}
@@ -499,6 +509,23 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
             specs["graph_specs"].extend(sub_specs["graph_specs"])
             specs["stat_specs"].extend(sub_specs["stat_specs"])
             specs["narrative_templates"].extend(sub_specs["narrative_templates"])
+
+        # Dédupliquer par id : une subsection qui réutilise un spec d'une autre
+        # ne doit pas faire rendre le tableau/graphique N fois.
+        def _dedup_by_id(items):
+            seen, out = set(), []
+            for it in items:
+                sid = it.get("id") if isinstance(it, dict) else None
+                if sid and sid in seen:
+                    continue
+                if sid:
+                    seen.add(sid)
+                out.append(it)
+            return out
+
+        specs["table_specs"] = _dedup_by_id(specs["table_specs"])
+        specs["graph_specs"] = _dedup_by_id(specs["graph_specs"])
+        specs["stat_specs"]  = _dedup_by_id(specs["stat_specs"])
 
         sections_status.append({
             "section_id":          sec_id,

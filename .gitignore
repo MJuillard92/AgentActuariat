@@ -66,6 +66,13 @@ inspector/snapshots/
 *.pickle
 *.db
 
+# ChromaDB (base vectorielle locale — non versionnée)
+knowledge_base/rag/chroma_db/
+base_de_connaissance/
+
+# Claude Code worktrees (état interne CLI)
+.claude/worktrees/
+
 # LaTeX auxiliaires
 *.aux
 *.log
