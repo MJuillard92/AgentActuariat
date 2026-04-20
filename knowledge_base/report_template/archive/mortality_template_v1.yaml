@@ -1,0 +1,746 @@
+report_template:
+  id: mortality_experience_construction
+  type: actuarial_construction
+  description: "Mortality Experience Table Construction Report"
+  version: 2.0
+
+# ============================================================================
+# PROCESSING SEQUENCE (guide for iterative Python loop)
+# ============================================================================
+# Python program iterates through this sequence, processing one section at a time.
+# Each section declares its dependencies, required inputs, tool calls, and validation checkpoints.
+
+processing_sequence:
+
+  - section_number: 1
+    section_id: preamble
+    label: "Preamble"
+    required: true
+    type: narrative
+    dependencies: []  # No prior sections required
+    inputs_required: 
+      - study_objective
+      - observation_start_date
+      - observation_end_date
+      - num_observation_years
+      - total_exposure_years
+      - total_deaths
+      - smoothing_algorithm
+      - baseline_regulatory_table
+      - product_list
+    outputs_produced:
+      - preamble_text
+    tool_calls: []  # Narrative only; no tool calls
+    validation_checkpoints:
+      - "All {{ placeholders }} in preamble_text substituted"
+      - "Word count ~200-300"
+      - "No technical detail; orientation only"
+
+  - section_number: 2
+    section_id: data_submission
+    label: "Data Submission & Preprocessing (Section 2)"
+    required: true
+    type: "narrative + tables + graphs"
+    dependencies: [section_1]  # Preamble provides context
+    inputs_required:
+      - initial_record_count
+      - final_record_count
+      - total_exclusions
+      - observation_period_years
+      - exposure_by_year
+      - deaths_by_year
+      - exposure_by_age_male
+      - exposure_by_age_female
+      - deaths_by_age_male
+      - deaths_by_age_female
+      - mean_age_cohort
+      - gender_distribution
+      - cox_hazard_ratio
+      - cox_pvalue
+    outputs_produced:
+      - data_initial_text
+      - table_construction_ref
+      - table_exposure_ref
+      - table_deaths_ref
+      - graph_exposure_ref
+      - graph_deaths_ref
+      - cox_output_ref
+    tool_calls:
+      - render_table_from_spec  # table_construction_summary
+      - render_table_from_spec  # table_exposure_by_year
+      - render_table_from_spec  # table_deaths_by_year
+      - generate_graph_from_spec  # graph_exposure_distribution
+      - generate_graph_from_spec  # graph_deaths_distribution
+      - render_statistical_output  # cox_proportional_hazards
+    validation_checkpoints:
+      - "Sum of deaths by age = total_deaths"
+      - "Exposure by age integrates to total_exposure_years"
+      - "All tables render without errors"
+      - "All graphs render with correct axes, legends, series"
+      - "Gender distribution sums to 100%"
+
+  - section_number: 3
+    section_id: construction
+    label: "Table Construction Methodology (Section 3)"
+    required: true
+    type: narrative
+    dependencies: [section_2]  # Understand data characteristics first
+    inputs_required:
+      - exclusion_criteria
+      - crude_rate_method
+      - smoothing_algorithm
+      - smoothing_parameters
+      - boundary_age_treatment
+      - cohort_min_age
+      - cohort_max_age
+    outputs_produced:
+      - construction_narrative_text
+    tool_calls: []  # Narrative only
+    validation_checkpoints:
+      - "All methodological choices explained"
+      - "Word count ~300"
+      - "Tone: technical but accessible"
+
+  - section_number: 4
+    section_id: analysis
+    label: "Analysis & Validation (Section 4)"
+    required: true
+    type: "narrative + tables + graphs"
+    dependencies: [section_3]  # Have the constructed table to validate
+    subsections:
+      - subsection_id: obs_vs_modeled
+        label: "4.1 Observed vs Modeled Deaths"
+        inputs_required:
+          - observed_deaths_by_age
+          - modeled_deaths_by_age
+          - ci_lower_by_age
+          - ci_upper_by_age
+          - exposure_by_age_class
+          - chi_squared_p
+          - confidence_interval_level
+          - annual_prediction_ratio
+        outputs_produced:
+          - table_obs_vs_modeled_ref
+          - graph_obs_vs_modeled_ref
+          - annual_check_ref
+        tool_calls:
+          - render_table_from_spec  # table_obs_vs_modeled_by_age_class
+          - generate_graph_from_spec  # graph_obs_vs_modeled_by_age
+          - render_statistical_output  # annual_cohort_check
+        validation_checkpoints:
+          - "Observed falls within or below CI (prudence confirmed or noted)"
+          - "Anomalies flagged if chi_squared_p < threshold"
+          - "Annual ratios computed for all years in observation_period_years"
+
+      - subsection_id: prior_comparison
+        label: "4.2 Comparison with Prior Table"
+        conditional: "if prior_table_exists"
+        inputs_required:
+          - prior_table_exists
+          - rate_ratio_current_vs_prior
+          - prior_prudence_ratio
+        outputs_produced:
+          - graph_prior_ref
+        tool_calls:
+          - generate_graph_from_spec  # graph_rate_ratio
+        validation_checkpoints:
+          - "Rate ratio computed for all ages"
+          - "Smoothness of ratio curve assessed"
+
+      - subsection_id: regulatory_positioning
+        label: "4.3 Positioning vs Regulatory Tables"
+        required: true
+        inputs_required:
+          - baseline_regulatory_table
+          - discount_by_age
+          - logit_slope
+          - logit_intercept
+          - logit_r_squared
+          - discount_jump_tolerance_pct
+          - logit_r_squared_minimum
+        outputs_produced:
+          - graph_discount_ref
+          - logit_output_ref
+        tool_calls:
+          - generate_graph_from_spec  # graph_discount_factors
+          - render_statistical_output  # logit_regression
+        validation_checkpoints:
+          - "Discount computed for all ages"
+          - "Discount jumps checked against tolerance"
+          - "Logit fit R² meets minimum threshold"
+
+  - section_number: 5
+    section_id: conclusion
+    label: "Conclusion (Section 5)"
+    required: true
+    type: narrative
+    dependencies: [section_4]  # Summarize analysis findings
+    inputs_required:
+      - total_exposure_years
+      - total_deaths
+      - study_objective
+      - smoothing_algorithm
+      - baseline_regulatory_table
+      - avg_prudence_ratio
+    outputs_produced:
+      - conclusion_text
+    tool_calls: []  # Narrative only
+    validation_checkpoints:
+      - "Summary synthesizes key findings"
+      - "No new data introduced"
+      - "Word count ~200"
+
+  - section_number: 6
+    section_id: annex
+    label: "Annexe / Mortality Table Reference (Section 6)"
+    required: true
+    type: table
+    dependencies: [section_5]  # Final output after all analysis
+    inputs_required:
+      - final_mortality_table_by_age
+      - cohort_min_age
+      - cohort_max_age
+    outputs_produced:
+      - mortality_table_ref
+    tool_calls:
+      - render_table_from_spec  # table_final_mortality
+    validation_checkpoints:
+      - "Table covers all ages from cohort_min_age to cohort_max_age"
+      - "Rates monotonically increasing after age 30"
+      - "No missing ages"
+      - "Final age q_x approaches 1.0"
+
+# ============================================================================
+# PARAMETERIZED INPUTS (to be injected by agent_writer)
+# ============================================================================
+
+inputs:
+  # Study temporal scope
+  observation_period_years: null          # e.g., [2007, 2008, 2009, 2010, 2011]
+  observation_start_date: null            # YYYY-MM-DD
+  observation_end_date: null              # YYYY-MM-DD
+  num_observation_years: null             # Computed: length of observation_period_years
+  
+  # Cohort characteristics
+  cohort_min_age: null
+  cohort_max_age: null
+  mean_age_cohort: null
+  gender_distribution: null               # e.g., {"male": 0.63, "female": 0.37}
+  total_exposure_years: null
+  total_deaths: null
+  
+  # Study design
+  study_objective: null                   # e.g., "term life death contracts"
+  product_list: null                      # List of product codes
+  underwriting_rules: null                # Text description
+  exclusion_criteria: null                # Text description (e.g., policies < 2 years)
+  
+  # Methodology
+  smoothing_algorithm: null               # "whittaker_henderson" / "splines" / "kernel"
+  smoothing_parameters: null              # Dict of algorithm-specific params
+  baseline_regulatory_table: null         # e.g., "THF 00/02"
+  boundary_age_treatment: null            # Text description
+  
+  # Validation thresholds (adaptive to study length)
+  max_mean_age_change_per_year: null      # e.g., 1.0 (year/year)
+  death_rate_cv_threshold: null           # e.g., 0.15 (15% coefficient of variation)
+  chi_squared_p_significance: null        # e.g., 0.05
+  discount_jump_tolerance_pct: null       # e.g., 5.0
+  logit_r_squared_minimum: null           # e.g., 0.99
+  confidence_interval_level: null         # e.g., 0.95 (95%)
+
+# ============================================================================
+# REPORT STRUCTURE (sequential sections)
+# ============================================================================
+
+sections:
+
+  # 1. PREAMBLE / CONTEXT
+  - section_id: preamble
+    title: "Preamble"
+    required: true
+    type: narrative
+    content:
+      - purpose: "Brief overview of data characteristics and methodology applied; point to later sections for detail"
+      - narrative_elements:
+          - data_summary: "We constructed this table from {{ num_observation_years }} years of {{ study_objective }} experience data ({{ observation_start_date }} to {{ observation_end_date }}), covering {{ total_exposure_years }} exposure-years and {{ total_deaths }} observed deaths."
+          - methodology_summary: "We applied {{ smoothing_algorithm }} smoothing to crude mortality rates and validated the result against the {{ baseline_regulatory_table }} regulatory benchmark. Detailed data characteristics, methodology justification, and validation analyses follow in Sections 2–5."
+          - scope: "This table is applicable to {{ product_list }} and comparable products."
+      - word_count: "~200-300 words"
+      - tone: "Clear, high-level orientation; no technical detail"
+      - instructions_for_agent_writer: "Extract data_summary, methodology_summary, and scope from calculation_agent_output and study_plan. Substitute {{ placeholders }} from inputs."
+
+  # 2. DATA SUBMISSION & PREPROCESSING
+  - section_id: data_submission
+    title: "Les Données Transmises / Data Submitted"
+    required: true
+    subsections:
+
+      - subsection_id: data_initial
+        title: "2.1 Données Initiales / Initial Data"
+        type: narrative
+        content:
+          - purpose: "Describe raw data file, field mapping, death identification rules"
+          - elements:
+              - file_format: "Source data file format and record count before cleaning"
+              - death_identification: "Business rule for flagging deaths vs censored exits"
+              - data_cleaning: "List all rejection rules applied (negative ages, out-of-range, etc.)"
+              - final_record_count: "Observations after cleaning"
+          - word_count: "~250 words"
+          - instructions_for_agent_writer: "Extract from calculation_agent_output: file_format, record counts before/after, cleaning rules applied."
+
+      - subsection_id: descriptive_stats
+        title: "2.2 Statistiques Descriptives de la Base Retraitée / Descriptive Statistics"
+        type: "narrative + tables + graphs"
+        required_elements:
+        required_elements:
+          
+          # Table 1: Data processing summary
+          - table_construction_summary:
+              tool_call: render_table_from_spec
+              inputs:
+                spec:
+                  id: table_construction
+                  name: "Construction de la table de données"
+                  columns: ["Step", "Count", "Notes"]
+                  rows:
+                    - ["Initial records", "{{ initial_record_count }}", "Raw data file"]
+                    - ["Exclusions applied", "{{ total_exclusions }}", "See rules in 2.1"]
+                    - ["Final records", "{{ final_record_count }}", "Ready for analysis"]
+                data: "calculation_agent_output"
+              output_var: "table_construction_ref"
+              instructions: "Extract initial_record_count, total_exclusions, final_record_count from calculation_agent_output."
+
+          # Table 2: Exposure & Deaths by year
+          - table_exposure_by_year:
+              tool_call: render_table_from_spec
+              inputs:
+                spec:
+                  id: exposure_stats
+                  name: "Statistiques descriptives sur l'effectif sous risque"
+                  columns: ["Year", "Total Exposure (years)", "Mean Age", "Gender Split (M/F %)"]
+                  rows: "{{ observation_period_years }} + [Total]"
+                data: "calculation_agent_output"
+                validation_rule: "Flag if mean_age_change_per_year > {{ max_mean_age_change_per_year }}"
+              output_var: "table_exposure_ref"
+              instructions: "Extract exposure statistics by year from calculation_agent_output. Generate rows for each year in {{ observation_period_years }}."
+
+          - table_deaths_by_year:
+              tool_call: render_table_from_spec
+              inputs:
+                spec:
+                  id: death_stats
+                  name: "Statistiques descriptives sur les décès"
+                  columns: ["Year", "Deaths Count", "Death Rate %", "Mean Age at Death"]
+                  rows: "{{ observation_period_years }} + [Total]"
+                data: "calculation_agent_output"
+                validation_rule: "Flag if death_rate_cv > {{ death_rate_cv_threshold }}"
+              output_var: "table_deaths_ref"
+              instructions: "Extract death statistics by year from calculation_agent_output. Compute rates as (deaths / exposure)."
+
+          # Graph 1: Exposure distribution
+          - graph_exposure_distribution:
+              tool_call: generate_graph_from_spec
+              inputs:
+                spec:
+                  id: graph_exposure_by_age
+                  name: "Exposition au risque"
+                  type: line_chart
+                  axes:
+                    x:
+                      variable: age
+                      range: [0, "{{ cohort_max_age }}"]
+                      label: "Age"
+                    y:
+                      variable: exposure_count
+                      label: "Exposure (persons)"
+                  series:
+                    - name: males
+                      color: dark_blue
+                      style: solid_line
+                      data: "{{ exposure_by_age_male }}"
+                    - name: females
+                      color: red
+                      style: solid_line
+                      data: "{{ exposure_by_age_female }}"
+                  legend: true
+                  note: "Shows distribution peaked around mean age {{ mean_age_cohort }}; gender breakdown: {{ gender_distribution }}"
+                results: "calculation_agent_output"
+              output_var: "graph_exposure_ref"
+              instructions: "Extract age-indexed exposure vectors (male/female) from calculation_agent_output."
+
+          # Graph 2: Deaths distribution
+          - graph_deaths_distribution:
+              tool_call: generate_graph_from_spec
+              inputs:
+                spec:
+                  id: graph_deaths_by_age
+                  name: "Décès par âge"
+                  type: line_chart
+                  axes:
+                    x:
+                      variable: age
+                      range: [0, "{{ cohort_max_age }}"]
+                      label: "Age"
+                    y:
+                      variable: death_count
+                      label: "Death Count"
+                  series:
+                    - name: males
+                      color: dark_blue
+                      style: solid_line
+                      data: "{{ deaths_by_age_male }}"
+                    - name: females
+                      color: red
+                      style: solid_line
+                      data: "{{ deaths_by_age_female }}"
+                  legend: true
+                  note: "Peak mortality in ages 60+; gender disparity ~2:1 (males:females)"
+                results: "calculation_agent_output"
+              output_var: "graph_deaths_ref"
+              instructions: "Extract age-indexed death counts (male/female) from calculation_agent_output."
+
+          - cox_proportional_hazards:
+              tool_call: render_statistical_output
+              inputs:
+                spec:
+                  id: cox_model
+                  name: "Cox Regression: Male vs Female Mortality"
+                  purpose: "Verify gender mortality ratio is biologically plausible (~1.8-2.5)"
+                data: "calculation_agent_output"
+                output_fields:
+                  - "hazard_ratio (with 95% CI)"
+                  - "proportionality_test_pvalue"
+                  - "sample_size"
+              output_var: "cox_output_ref"
+              instructions: "Extract Cox model results from calculation_agent_output. Report HR, CI, and p-value for proportionality test."
+
+  # 3. TABLE CONSTRUCTION METHODOLOGY
+  - section_id: construction
+    title: "La Construction de la Table / Table Construction"
+    required: true
+    type: narrative
+    content:
+      - purpose: "Describe the algorithm: crude rate calc, smoothing method, boundary treatment"
+      - narrative_elements:
+          - cohort_restriction: "{{ exclusion_criteria }}"
+          - crude_rate_method: "Exposure calculated on daily basis; rates computed by age and gender"
+          - smoothing_algorithm: "Applied {{ smoothing_algorithm }} with parameters: {{ smoothing_parameters }}"
+          - boundary_treatment: "{{ boundary_age_treatment }}"
+          - final_output: "Age range [{{ cohort_min_age }}, {{ cohort_max_age }}]; unisex blending if applicable"
+      - word_count: "~300 words"
+      - tone: "Technical but accessible; justify each choice"
+      - instructions_for_agent_writer: "Extract exclusion_criteria, smoothing_algorithm, smoothing_parameters, boundary_age_treatment from study_plan and calculation_agent_output."
+
+  # 4. ANALYSIS & VALIDATION (MAIN EVIDENCE)
+  - section_id: analysis
+    title: "Commentaires / Analysis & Validation"
+    required: true
+    subsections:
+
+      # 4.1: Observed vs Modeled Deaths (CORE VALIDATION)
+      - subsection_id: obs_vs_modeled
+        title: "4.1 Décès Observés et Décès Modélisés / Observed vs Modeled Deaths"
+        type: "narrative + tables + graphs"
+        mandatory_elements:
+
+          - methodology:
+              content: "Expected deaths computed as: exposure(age, sex) × table_rate(age, sex). Confidence intervals from binomial/Poisson approximation at {{ confidence_interval_level }}% level."
+
+          - table_obs_vs_modeled_by_age_class:
+              tool_call: render_table_from_spec
+              inputs:
+                spec:
+                  id: table_comparison
+                  name: "Comparaison des décès observés et des décès modélisés (par classe d'âges)"
+                  columns:
+                    - "Age Group"
+                    - "Exposure"
+                    - "Proportion"
+                    - "Observed Deaths"
+                    - "Modeled Deaths"
+                    - "Difference"
+                    - "Diff/Modeled %"
+                    - "CI Lower ({{ confidence_interval_level }}%)"
+                    - "CI Upper ({{ confidence_interval_level }}%)"
+                  rows: "Age classes (5-yr or 10% exposure deciles) + Total"
+                  highlight_rule: "Yellow if observed > CI_upper; Green if observed < CI_lower (high prudence)"
+                data: "calculation_agent_output"
+              output_var: "table_obs_vs_modeled_ref"
+              instructions: "Compute age classes from cohort_min_age and cohort_max_age. For each class: extract exposure, death counts, fit binomial CI."
+
+          - graph_obs_vs_modeled_by_age:
+              tool_call: generate_graph_from_spec
+              inputs:
+                spec:
+                  id: graph_comparison
+                  name: "Comparaison des décès observés et des décès modélisés (par âges)"
+                  type: line_chart
+                  axes:
+                    x:
+                      variable: age
+                      range: [0, "{{ cohort_max_age }}"]
+                      label: "Age"
+                    y:
+                      variable: death_count
+                      label: "Number of Deaths"
+                  series:
+                    - name: observed_deaths
+                      color: black
+                      style: dashed_line
+                      data: "{{ observed_deaths_by_age }}"
+                    - name: modeled_deaths
+                      color: red
+                      style: solid_line
+                      data: "{{ modeled_deaths_by_age }}"
+                  overlays:
+                    - name: ci_lower
+                      color: light_blue
+                      style: shading
+                      data: "{{ ci_lower_by_age }}"
+                    - name: ci_upper
+                      color: light_blue
+                      style: shading
+                      data: "{{ ci_upper_by_age }}"
+                    - name: anomalies
+                      condition: "if observed outside CI_95"
+                      marker: red_circle
+                  legend: true
+                  note: "Key: observed should fall within blue CI band. Red circles mark significant deviations (p < {{ chi_squared_p_significance }})."
+                results: "calculation_agent_output"
+              output_var: "graph_obs_vs_modeled_ref"
+              instructions: "Extract age-indexed observed/modeled deaths and CI bounds. Mark points where observed falls outside CI."
+
+          - annual_cohort_check:
+              tool_call: render_statistical_output
+              inputs:
+                spec:
+                  id: annual_prediction
+                  name: "Annual Cohort Prediction Check"
+                  columns: ["Year", "Predicted Deaths", "Observed Deaths", "Ratio (Pred/Obs)", "Prudence Flag"]
+                  rows: "{{ observation_period_years }}"
+                  validation_rule: "Flag if Ratio < 1.2 (insufficient prudence)"
+                data: "calculation_agent_output"
+              output_var: "annual_check_ref"
+              instructions: "For each year in {{ observation_period_years }}, compute Pred/Obs ratio. Expected: > 1.5 across all years."
+
+      # 4.2: Comparison with Prior Table (if applicable)
+      - subsection_id: prior_comparison
+        title: "4.2 Comparaison avec la Table d'Expérience Précédente (if prior exists)"
+        type: "narrative + graph"
+        conditional:
+          if: "prior_table_exists"
+          then: "required"
+          else: "skip_section"
+        content:
+          - purpose: "Show evolution; explain if prudence changed"
+          - graph_rate_ratio:
+              tool_call: generate_graph_from_spec
+              inputs:
+                spec:
+                  id: graph_prior_comparison
+                  name: "Comparison: Current vs Prior Mortality Rates"
+                  type: line_chart
+                  axes:
+                    x:
+                      variable: age
+                      range: [0, "{{ cohort_max_age }}"]
+                      label: "Age"
+                    y:
+                      variable: rate_ratio
+                      label: "Ratio: Current / Prior (%)"
+                  series:
+                    - name: rate_ratio
+                      color: blue
+                      style: solid_line
+                      data: "{{ rate_ratio_current_vs_prior }}"
+                  reference_line:
+                    value: 1.0
+                    label: "No change"
+                  validation_rule: "Flag if ratio_change > 10% in any age band"
+                  note: "Expect smooth curve; discontinuities warrant investigation."
+                results: "calculation_agent_output"
+              output_var: "graph_prior_ref"
+              instructions: "Compute rate_ratio = current_rate / prior_rate for each age. Extract from calculation_agent_output."
+
+      # 4.3: Positioning vs Regulatory Tables
+      - subsection_id: regulatory_positioning
+        title: "4.3 Positionnement par rapport aux Tables Réglementaires"
+        type: "narrative + graphs"
+        required: true
+        content:
+          - purpose: "Show how experience table compares to regulatory baseline {{ baseline_regulatory_table }}"
+          
+          - graph_discount_factors:
+              tool_call: generate_graph_from_spec
+              inputs:
+                spec:
+                  id: graph_discounts
+                  name: "Abattements par rapport aux tables réglementaires"
+                  type: line_chart
+                  axes:
+                    x:
+                      variable: age
+                      range: [0, "{{ cohort_max_age }}"]
+                      label: "Age"
+                    y:
+                      variable: discount_factor
+                      label: "Discount Factor (%)"
+                  series:
+                    - name: discount_factor
+                      color: blue
+                      style: solid_line
+                      data: "{{ discount_by_age }}"
+                  reference_line:
+                    value: 0
+                    label: "No discount (equal to {{ baseline_regulatory_table }})"
+                  validation_rule: "Flag if discount_has_jumps > {{ discount_jump_tolerance_pct }}"
+                  note: "Discount reflects portfolio selection relative to regulatory baseline."
+                results: "calculation_agent_output"
+              output_var: "graph_discount_ref"
+              instructions: "Compute discount = (1 - experience_rate / regulatory_rate) × 100 for each age."
+
+          - logit_regression:
+              tool_call: render_statistical_output
+              inputs:
+                spec:
+                  id: logit_fit
+                  name: "Régression des logits: Experience vs Regulatory"
+                  formula: "ln(q_exp / (1 - q_exp)) = α × ln(q_reg / (1 - q_reg)) + β + ε"
+                  output_fields:
+                    - "slope_alpha (expected ~0.9-1.0)"
+                    - "intercept_beta"
+                    - "R_squared (expected > {{ logit_r_squared_minimum }})"
+                  plot_type: "scatter_with_fitted_line"
+                data: "calculation_agent_output"
+              output_var: "logit_output_ref"
+              instructions: "Fit logit regression. Extract slope, intercept, R². Report in table and annotation on graph."
+
+  # 5. CONCLUSIONS
+  - section_id: conclusion
+    title: "Conclusion"
+    required: true
+    type: narrative
+    content:
+      - purpose: "Summary of table construction, validation results, and recommendations"
+      - narrative_elements:
+          - summary: "This mortality table was constructed from {{ total_exposure_years }} exposure-years of {{ study_objective }} experience data using {{ smoothing_algorithm }} smoothing. Validation against {{ baseline_regulatory_table }} confirms appropriateness for the defined cohort."
+          - key_findings: "Observed deaths: {{ total_deaths }}; modeled expectations showed {{ avg_prudence_ratio }}x margin."
+          - next_steps: "Table is ready for application. Annual monitoring required per Section 5.2."
+      - word_count: "~200 words"
+
+  # 6. ANNEX: FINAL MORTALITY TABLE
+  - section_id: annex
+    title: "Annexe / Mortality Table Reference"
+    required: true
+    type: table
+    content:
+      - table_final_mortality:
+          tool_call: render_table_from_spec
+          inputs:
+            spec:
+              id: mortality_table
+              name: "Table de mortalité d'expérience"
+              columns: ["Age", "q_x (%)"]
+              rows: "All ages from {{ cohort_min_age }} to {{ cohort_max_age }}"
+              format: "Three-column layout"
+            data: "calculation_agent_output"
+          output_var: "mortality_table_ref"
+
+# ============================================================================
+# CONDITIONAL SECTIONS (if/then adaptive logic)
+# ============================================================================
+
+conditional_sections:
+  - condition: "if total_exposure_years < 50000"
+    then: "Add note: 'Cohort size is relatively small; wider confidence intervals expected.'"
+  - condition: "if chi_squared_p < {{ chi_squared_p_significance }}"
+    then: "Expand section 4.1 with detailed anomaly analysis by age band"
+  - condition: "if prior_table_exists AND avg_prudence_ratio < prior_prudence_ratio * 0.9"
+    then: "Add section 4.2.1: Prudence evolution analysis"
+
+# ============================================================================
+# AGENT_WRITER INSTRUCTIONS
+# ============================================================================
+
+agent_writer_instructions:
+  overview: |
+    Assemble report by:
+    1. Extract {{ placeholder }} values from calculation_agent_output and study_plan
+    2. Call render_table_from_spec and generate_graph_from_spec for all tables/graphs
+    3. Write narrative sections following provided structure and tone guidelines
+    4. Validate all quality gates before finalizing
+
+  extraction_workflow:
+    - step_1: "Extract all inputs from plan and results"
+    - step_2: "Verify all {{ placeholders }} have values"
+    - step_3: "For each tool_call, prepare inputs dict from calculation_agent_output"
+    - step_4: "Write narrative sections per guidelines"
+    - step_5: "Run quality_gates checks"
+
+  narrative_guidelines:
+    - "Preamble: Orient to scope/methodology; ~200-300 words; no detail"
+    - "Section 3 (Construction): Explain methodological choices; ~300 words"
+    - "Conclusion: Synthesize findings and next steps; ~200 words"
+
+# ============================================================================
+# GENERATION RULES
+# ============================================================================
+
+generation_rules:
+  tables:
+    - title: "All tables must include total row (bold)"
+      applies_to: ["all_summary_tables"]
+    - title: "Highlight anomalies with background color"
+      applies_to: ["table_obs_vs_modeled_by_age_class"]
+      spec: "Green if observed < CI_lower; Yellow if observed > CI_upper"
+    - title: "Mortality table: format as percentages (0.27%, etc.)"
+      applies_to: ["mortality_table"]
+    - title: "Years must be dynamic from {{ observation_period_years }}"
+      applies_to: ["table_exposure_by_year", "table_deaths_by_year"]
+
+  graphs:
+    - title: "Include legend and axis labels on all graphs"
+      applies_to: ["all_graphs"]
+    - title: "CI shown as shaded band (light blue)"
+      applies_to: ["graph_obs_vs_modeled_by_age"]
+    - title: "Gender colors: males dark_blue solid; females red solid"
+      applies_to: ["graph_exposure_by_age", "graph_deaths_by_age"]
+    - title: "Mark anomalies: red circle if outside CI"
+      applies_to: ["graph_obs_vs_modeled_by_age"]
+    - title: "Age axes span [{{ cohort_min_age }}, {{ cohort_max_age }}]"
+      applies_to: ["all_age_indexed_graphs"]
+
+# ============================================================================
+# QUALITY GATES
+# ============================================================================
+
+quality_gates:
+  gate_1:
+    name: "Template completeness"
+    checks:
+      - "All {{ placeholders }} substituted"
+      - "All tool_calls executed with output_vars populated"
+  gate_2:
+    name: "Data coherence"
+    checks:
+      - "Sum of deaths by age = total_deaths"
+      - "Exposure by age = total_exposure_years"
+      - "Gender % sums to 100% each year"
+  gate_3:
+    name: "Validation logic"
+    checks:
+      - "Annual prudence ratios meet threshold or anomalies explained"
+      - "Anomaly sections present if chi_squared_p < threshold"
+  gate_4:
+    name: "Graph & table quality"
+    checks:
+      - "Axes labeled, legends present, totals row bold"
+      - "CI visually evident (shading/markers)"
+      - "Color scheme consistent"
+  gate_5:
+    name: "Narrative quality"
+    checks:
+      - "No vague language; use definite statements"
+      - "Terms consistent, cross-references correct"
+      - "Conclusion doesn't introduce new data"
