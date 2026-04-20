@@ -212,6 +212,20 @@ def load_section(sid: str, yaml_path: Path = DEFAULT_TEMPLATE) -> Section:
     raise KeyError(f"section inconnue : {sid!r}")
 
 
+def load_enum_specs(yaml_path: Path = DEFAULT_TEMPLATE) -> dict[str, list]:
+    """Extrait {column: [allowed]} depuis session_inputs.input_records.shape.
+
+    Ne considère que les champs de type `enum` déclarant `allowed`.
+    """
+    tpl = _load_yaml(Path(yaml_path))
+    specs: dict[str, list] = {}
+    for entry in tpl.get("session_inputs") or []:
+        for field_def in entry.get("shape") or []:
+            if field_def.get("type") == "enum" and field_def.get("allowed"):
+                specs[field_def["key"]] = list(field_def["allowed"])
+    return specs
+
+
 def load_style(style_path: Path = DEFAULT_STYLE) -> dict:
     """Charge style.yaml. Retourne defaults minimaux si fichier absent."""
     p = Path(style_path)

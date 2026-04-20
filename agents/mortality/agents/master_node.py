@@ -362,8 +362,10 @@ def master_node(state: "AgentState") -> dict:
                                  {"type": "disambiguation_required",
                                   "task_type":                 disam.get("task_type"),
                                   "needs_column_mapping":      disam.get("needs_column_mapping", False),
+                                  "needs_value_mapping":       disam.get("needs_value_mapping", False),
                                   "needs_form":                disam.get("needs_form", False),
                                   "column_mapping_suggestion": disam.get("column_mapping_suggestion", {}),
+                                  "value_mapping_suggestion":  disam.get("value_mapping_suggestion", {}),
                                   "df_columns":                disam.get("df_columns", []),
                                   "form_fields":               disam.get("form_fields", [])}],
                     "data_store": data_store,
@@ -377,6 +379,25 @@ def master_node(state: "AgentState") -> dict:
                                              "Je n'ai pas bien compris. Pouvez-vous préciser ?")}],
                     "data_store": data_store,
                 }
+            # Normalisation automatique des records si les deux mappings
+            # sont confirmés (US-14). No-op si l'un des drapeaux manque.
+            try:
+                from agents.master.disambiguation import maybe_normalize_records
+                df_json_for_norm: str | None = None
+                if dataset_ref:
+                    try:
+                        from session.dataset_store import DatasetStore
+                        df_loaded = DatasetStore.load_by_session(dataset_ref)
+                        if df_loaded is not None:
+                            df_json_for_norm = df_loaded.to_json(orient="split")
+                    except Exception:
+                        pass
+                norm_updates = maybe_normalize_records(data_store, df_json_for_norm)
+                if norm_updates:
+                    data_store.update(norm_updates)
+            except Exception as exc:
+                print(f"[MasterAgent] normalize error: {exc}", file=sys.stderr)
+
             data_store["_disambiguation_done"] = True
 
     # ── 5. Classification d'intention (remplace GO_BUILD / GO_WRITE LLM) ─────

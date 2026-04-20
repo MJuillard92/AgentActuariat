@@ -361,6 +361,87 @@ def _suggest_mapping_with_llm(
         return {k: None for k in unmapped_canonical}
 
 
+# ── Détection du stage value_mapping (US-13) ─────────────────────────────────
+
+def detect_value_mapping_stage(records, enum_specs: dict) -> dict:
+    """Inspecte les colonnes enum des records, propose un mapping.
+
+    Retourne un dict avec `stage` :
+      - "skip"                 : toutes les valeurs sont déjà conformes
+      - "needs_value_mapping"  : des valeurs non conformes mappables → suggestion
+      - "blocked"              : des valeurs n'ont pas de mapping évident → message
+    """
+    from tools.master.suggest_value_mapping import run as _suggest
+
+    out = _suggest({"records": records, "enum_specs": enum_specs}, {})
+    suggestion = {k: v for k, v in (out["value_mapping"] or {}).items() if v}
+    unmapped = {k: v for k, v in (out["unmapped"] or {}).items() if v}
+
+    if unmapped:
+        parts = [f"{col}: {vals}" for col, vals in unmapped.items()]
+        message = (
+            "Certaines valeurs de votre fichier ne peuvent pas être mises en "
+            "correspondance automatiquement : "
+            + " ; ".join(parts)
+            + ". Corrigez votre fichier ou précisez la correspondance."
+        )
+        return {"stage": "blocked", "suggestion": suggestion,
+                "unmapped": unmapped, "message": message}
+
+    if suggestion:
+        return {"stage": "needs_value_mapping", "suggestion": suggestion,
+                "unmapped": {}}
+
+    return {"stage": "skip", "suggestion": {}, "unmapped": {}}
+
+
+# ── Normalisation des records (US-14) ────────────────────────────────────────
+
+def maybe_normalize_records(data_store: dict, df_json: str | None) -> dict | None:
+    """Retourne les updates data_store à appliquer si normalisation due.
+
+    Déclenche uniquement quand :
+      column_mapping_confirmed ET value_mapping_confirmed ET NOT records_normalized.
+    Renvoie None sinon (no-op).
+    """
+    if not data_store.get("column_mapping_confirmed"):
+        return None
+    if not data_store.get("value_mapping_confirmed"):
+        return None
+    if data_store.get("records_normalized"):
+        return None
+    if not df_json:
+        return None
+
+    import pandas as pd
+    from tools.master.normalize_records import run as _normalize
+
+    df_in = pd.read_json(StringIO(df_json), orient="split")
+    column_mapping = data_store.get("column_mapping") or {}
+    value_mapping  = data_store.get("value_mapping") or {}
+
+    result = _normalize(
+        {"records": df_in, "column_mapping": column_mapping, "value_mapping": value_mapping},
+        {},
+    )
+    df_out = result["normalized_records"]
+
+    audit_entry = {
+        "column_mapping": dict(column_mapping),
+        "value_mapping":  dict(value_mapping),
+        "rows_in":        len(df_in),
+        "rows_out":       len(df_out),
+    }
+    existing_audit = dict(data_store.get("_audit") or {})
+    existing_audit["normalization"] = audit_entry
+
+    return {
+        "input_records":       df_out,
+        "records_normalized":  True,
+        "_audit":              existing_audit,
+    }
+
+
 # ── Point d'entrée principal ─────────────────────────────────────────────────
 
 def run_disambiguation(
@@ -413,6 +494,50 @@ def run_disambiguation(
                     df_json = df_loaded.to_json(orient="split")
             except Exception:
                 pass
+
+    # 2bis. Étape value_mapping (US-13) : si column_mapping est confirmé
+    # mais pas value_mapping, détecter les valeurs non conformes avant tout.
+    if (
+        data_store.get("column_mapping_confirmed")
+        and not data_store.get("value_mapping_confirmed")
+        and df_json
+    ):
+        try:
+            import pandas as pd
+            from knowledge_base.report_template.template_loader import load_enum_specs
+
+            df = pd.read_json(StringIO(df_json), orient="split")
+            col_map = data_store.get("column_mapping") or {}
+            # Renommer vers les noms canoniques avant inspection des valeurs
+            if col_map:
+                reverse = {v: k for k, v in col_map.items() if v}
+                df = df.rename(columns=reverse)
+            enum_specs = load_enum_specs()
+        except Exception:
+            enum_specs = {}
+            df = None
+
+        if df is not None and enum_specs:
+            vm = detect_value_mapping_stage(df, enum_specs)
+            if vm["stage"] == "blocked":
+                return {
+                    "status":    "unclear",
+                    "task_type": task_type,
+                    "confidence": confidence,
+                    "message":   vm["message"],
+                }
+            if vm["stage"] == "needs_value_mapping":
+                return {
+                    "status":                  "needs_input",
+                    "task_type":               task_type,
+                    "confidence":              confidence,
+                    "needs_value_mapping":     True,
+                    "needs_column_mapping":    False,
+                    "needs_form":              False,
+                    "value_mapping_suggestion": vm["suggestion"],
+                    "form_fields":             [],
+                }
+            # stage == "skip" : rien à mapper, on poursuit
 
     # 2. Vérification des prérequis
     prereq_check = check_prerequisites(task_type, df_json, data_store)

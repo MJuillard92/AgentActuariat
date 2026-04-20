@@ -12,6 +12,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from knowledge_base.report_template.template_loader import (  # noqa: E402
     build_manifest,
+    load_enum_specs,
     load_section,
     resolve_placeholders,
     Manifest,
@@ -112,3 +113,22 @@ def test_resolve_numeric_value():
 def test_resolve_missing_key_raises():
     with pytest.raises(KeyError):
         resolve_placeholders("{{ missing }}", {})
+
+
+# ───────────────── load_enum_specs (US-13) ─────────────────
+
+def test_load_enum_specs_from_preamble():
+    """Extrait {column: [allowed]} depuis session_inputs.input_records.shape."""
+    specs = load_enum_specs(TEMPLATE)
+    assert specs == {
+        "cause_sortie": ["deces", "autre"],
+        "sexe": ["H", "F"],
+    }
+
+
+def test_load_enum_specs_ignores_non_enum_fields():
+    """Les champs type: date ne doivent pas apparaître dans enum_specs."""
+    specs = load_enum_specs(TEMPLATE)
+    assert "date_naissance" not in specs
+    assert "date_entree" not in specs
+    assert "date_sortie" not in specs
