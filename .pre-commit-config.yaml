@@ -1,0 +1,20 @@
+# Gate US-5 : check_template bloquant pré-commit.
+# Installation :
+#   pip install pre-commit
+#   pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: check-template
+        name: check_template (YAML ↔ tool registry)
+        entry: python scripts/check_template.py --no-color
+        language: system
+        pass_filenames: false
+        files: "^(knowledge_base/report_template/mortality_template\\.yaml|tools/.*\\.py|knowledge_base/report_template/(tool_registry|validator)\\.py|scripts/check_template\\.py)$"
+
+      - id: pytest-template-contract
+        name: pytest test_template_contract + test_validator
+        entry: python -m pytest tests/test_template_contract.py tests/test_validator.py tests/test_tool_registry.py
+        language: system
+        pass_filenames: false
+        files: "^(knowledge_base/report_template/|tools/|tests/test_(template_contract|validator|tool_registry)\\.py|scripts/check_template\\.py)"
