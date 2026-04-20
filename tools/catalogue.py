@@ -499,35 +499,55 @@ def _is_stale() -> bool:
 
 # ── Public interface ──────────────────────────────────────────────────────────
 
+def scan_contracts(
+    root: Path | None = None,
+    *,
+    verbose: bool = False,
+) -> list[tuple[Path, dict]]:
+    """
+    Scan récursif d'un répertoire de tools. Parse le TOOL CONTRACT de chaque
+    .py et retourne [(source_path, contract_dict), ...]. Pur — aucun side effect.
+
+    Utilisé par regenerate() (écriture YAML) et par le registry côté validator
+    (knowledge_base/report_template/tool_registry.py).
+    """
+    scan_root = Path(root) if root is not None else _TOOLS_ROOT
+    py_files = sorted(
+        f for f in scan_root.rglob("*.py")
+        if f.name not in EXCLUDED_FILES and "__pycache__" not in f.parts
+    )
+
+    results: list[tuple[Path, dict]] = []
+    for py_file in py_files:
+        try:
+            content = py_file.read_text(encoding="utf-8")
+        except Exception as exc:
+            if verbose:
+                print(f"  [WARN] Cannot read {py_file.name}: {exc}", file=sys.stderr)
+            continue
+
+        contract = _extract_contract(content)
+        if contract is None:
+            if verbose:
+                try:
+                    rel = py_file.relative_to(_PROJECT_ROOT)
+                except ValueError:
+                    rel = py_file
+                print(f"  [SKIP] No CATALOGUE METADATA: {rel}", file=sys.stderr)
+            continue
+
+        results.append((py_file, contract))
+    return results
+
+
 def regenerate() -> int:
     """
     Scan all tool .py files, extract contracts, write catalogue.yaml.
     Returns the number of tools found.
     """
-    py_files = sorted(
-        f for f in _TOOLS_ROOT.rglob("*.py")
-        if f.name not in EXCLUDED_FILES and "__pycache__" not in f.parts
-    )
-
-    tools: list[dict] = []
-    domains: set[str] = set()
-
-    for py_file in py_files:
-        try:
-            content = py_file.read_text(encoding="utf-8")
-        except Exception as exc:
-            print(f"  [WARN] Cannot read {py_file.name}: {exc}", file=sys.stderr)
-            continue
-
-        contract = _extract_contract(content)
-        if contract is None:
-            rel = py_file.relative_to(_PROJECT_ROOT)
-            print(f"  [SKIP] No CATALOGUE METADATA: {rel}", file=sys.stderr)
-            continue
-
-        tools.append(contract)
-        if "domain" in contract:
-            domains.add(str(contract["domain"]))
+    scanned = scan_contracts(_TOOLS_ROOT, verbose=True)
+    tools: list[dict] = [c for _, c in scanned]
+    domains: set[str] = {str(c["domain"]) for c in tools if "domain" in c}
 
     _write_yaml(tools, YAML_PATH)
     print(
