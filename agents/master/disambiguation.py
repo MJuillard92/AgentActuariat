@@ -417,17 +417,21 @@ def maybe_normalize_records(data_store: dict, df_json: str | None) -> dict | Non
     from tools.master.normalize_records import run as _normalize
 
     df_in = pd.read_json(StringIO(df_json), orient="split")
-    column_mapping = data_store.get("column_mapping") or {}
-    value_mapping  = data_store.get("value_mapping") or {}
+    # data_store stocke column_mapping en format {canonical: csv_col} (cf.
+    # build_mapping_report). Le tool normalize_records attend {old: new},
+    # donc {csv_col: canonical} — on inverse.
+    column_mapping_canonical = data_store.get("column_mapping") or {}
+    column_mapping_for_tool = {v: k for k, v in column_mapping_canonical.items() if v}
+    value_mapping = data_store.get("value_mapping") or {}
 
     result = _normalize(
-        {"records": df_in, "column_mapping": column_mapping, "value_mapping": value_mapping},
+        {"records": df_in, "column_mapping": column_mapping_for_tool, "value_mapping": value_mapping},
         {},
     )
     df_out = result["normalized_records"]
 
     audit_entry = {
-        "column_mapping": dict(column_mapping),
+        "column_mapping": dict(column_mapping_canonical),
         "value_mapping":  dict(value_mapping),
         "rows_in":        len(df_in),
         "rows_out":       len(df_out),

@@ -46,12 +46,13 @@ def test_no_op_when_already_normalized():
 
 
 def test_applies_column_and_value_mappings():
+    """Format column_mapping = {canonical: csv_col} (cf. build_mapping_report)."""
     df = pd.DataFrame({
         "cause": ["décédé", "vivant"],
         "g":     ["Homme", "Femme"],
     })
     data_store = {
-        "column_mapping":           {"cause": "cause_sortie", "g": "sexe"},
+        "column_mapping":           {"cause_sortie": "cause", "sexe": "g"},
         "column_mapping_confirmed": True,
         "value_mapping": {
             "cause_sortie": {"décédé": "deces", "vivant": "autre"},
@@ -73,7 +74,7 @@ def test_applies_column_and_value_mappings():
 def test_audit_trace_written():
     df = pd.DataFrame({"cause": ["décédé"]})
     data_store = {
-        "column_mapping":           {"cause": "cause_sortie"},
+        "column_mapping":           {"cause_sortie": "cause"},
         "column_mapping_confirmed": True,
         "value_mapping":            {"cause_sortie": {"décédé": "deces"}},
         "value_mapping_confirmed":  True,
@@ -82,7 +83,7 @@ def test_audit_trace_written():
     out = maybe_normalize_records(data_store, _df_to_json(df))
 
     audit = out["_audit"]["normalization"]
-    assert audit["column_mapping"] == {"cause": "cause_sortie"}
+    assert audit["column_mapping"] == {"cause_sortie": "cause"}
     assert audit["value_mapping"]  == {"cause_sortie": {"décédé": "deces"}}
     assert audit["rows_in"]  == 1
     assert audit["rows_out"] == 1
