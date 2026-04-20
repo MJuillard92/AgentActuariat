@@ -20,6 +20,24 @@ import yaml
 
 
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent / "mortality_template.yaml"
+DEFAULT_STYLE    = Path(__file__).resolve().parent / "style.yaml"
+
+_DEFAULT_STYLE = {
+    "colors": {
+        "primary":   "#1A3668",
+        "secondary": "#D6E4F7",
+        "light":     "#F5F8FF",
+        "neutral":   "#888888",
+    },
+    "table": {
+        "header_bg":    "#1A3668",
+        "header_fg":    "#FFFFFF",
+        "row_alt_bg":   "#F5F8FF",
+        "border_color": "#888888",
+        "padding_pt":   4,
+        "font_size_pt": 9,
+    },
+}
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _BLOCKS = ("master_from_data", "master_from_modeling", "builder_outputs")
@@ -192,6 +210,14 @@ def load_section(sid: str, yaml_path: Path = DEFAULT_TEMPLATE) -> Section:
                 visual_specs=section.get("visual_specs") or [],
             )
     raise KeyError(f"section inconnue : {sid!r}")
+
+
+def load_style(style_path: Path = DEFAULT_STYLE) -> dict:
+    """Charge style.yaml. Retourne defaults minimaux si fichier absent."""
+    p = Path(style_path)
+    if not p.exists():
+        return {k: dict(v) for k, v in _DEFAULT_STYLE.items()}
+    return _load_yaml(p)
 
 
 def resolve_placeholders(text: str, data_store: dict) -> str:

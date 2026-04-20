@@ -1,0 +1,26 @@
+# Charte graphique du rapport (US-8).
+# Sortie du hardcoding de tools/build_pdf/table_renderer.py:76-79.
+# Lue via template_loader.load_style() ; defaults si absente.
+
+colors:
+  primary:   "#1A3668"   # BLUE — entêtes, titres
+  secondary: "#D6E4F7"   # LBLUE — bande alternée claire
+  light:     "#F5F8FF"   # LIGHT — fond cellule
+  neutral:   "#888888"   # GREY — séparateurs, texte atténué
+
+table:
+  header_bg:       "#1A3668"
+  header_fg:       "#FFFFFF"
+  row_alt_bg:      "#F5F8FF"
+  border_color:    "#888888"
+  padding_pt:      4
+  font_size_pt:    9
+  header_font_size_pt: 10
+
+chart:
+  palette:
+    - "#1A3668"
+    - "#D6E4F7"
+    - "#4F7CAC"
+    - "#A8C5E6"
+  font_family: "Helvetica"
