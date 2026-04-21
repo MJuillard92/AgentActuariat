@@ -14,6 +14,7 @@ Signaux émis :
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from io import StringIO
 from pathlib import Path
@@ -24,6 +25,8 @@ from langchain_core.messages import ToolMessage
 
 if TYPE_CHECKING:
     from agents.mortality.agents.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -124,8 +127,8 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
 def _execute_manifest_dag(data_store: dict) -> dict | None:
     """Exécute en une passe le DAG `builder_outputs` du manifest YAML.
 
-    Retourne les updates à appliquer au data_store, ou None si pas de
-    records exploitables.
+    Retourne un dict {"updates": ..., "needed_keys": ...} à appliquer au
+    data_store, ou None si pas de records exploitables.
     """
     import pandas as pd
     if not isinstance(data_store.get("input_records"), (pd.DataFrame, list, dict)):
@@ -136,11 +139,11 @@ def _execute_manifest_dag(data_store: dict) -> dict | None:
 
     manifest = build_manifest()
     produced: dict = dict(data_store)  # résolution des inputs au fil de l'eau
-    updates:  dict = {}
+    updates: dict = {}
 
     for call in manifest.dag:
-        tool_name      = call["tool"]            # ex: "master.analyze_data_and_request"
-        inputs_spec    = call.get("inputs", {})  # {local_name: data_store_key_or_literal}
+        tool_name = call["tool"]                 # ex: "master.analyze_data_and_request"
+        inputs_spec = call.get("inputs", {})     # {local_name: data_store_key_or_literal}
         output_mapping = call.get("output_mapping", {})  # {tool_output: canonical_key}
 
         # Résolution des inputs
@@ -155,18 +158,35 @@ def _execute_manifest_dag(data_store: dict) -> dict | None:
         module_path = "tools." + tool_name
         try:
             mod = importlib.import_module(module_path)
+        except ImportError:
+            # Tool manquant = bug de config/déploiement : on doit le voir.
+            logger.exception("[BuilderAgent] tool introuvable: %s", tool_name)
+            raise
+
+        try:
             result = mod.run(tool_inputs, {})
-        except Exception as exc:
-            print(f"[BuilderAgent] tool {tool_name} a échoué: {exc}", file=sys.stderr)
+        except Exception:
+            logger.exception("[BuilderAgent] tool %s a échoué à l'exécution", tool_name)
+            continue
+
+        # Protection : result doit être un dict pour l'output_mapping
+        if not isinstance(result, dict):
+            logger.warning(
+                "[BuilderAgent] tool %s a renvoyé %s (attendu: dict) — skip mapping",
+                tool_name, type(result).__name__,
+            )
             continue
 
         # Application de l'output_mapping
         for tool_out, canonical in (output_mapping or {}).items():
-            if tool_out in (result or {}):
+            if tool_out in result:
                 produced[canonical] = result[tool_out]
-                updates[canonical]  = result[tool_out]
+                updates[canonical] = result[tool_out]
 
-    return updates or None
+    if not updates:
+        return None
+    needed = [k.key for k in manifest.builder_outputs]
+    return {"updates": updates, "needed_keys": needed}
 
 
 def builder_node(state: "AgentState") -> dict:
@@ -180,18 +200,18 @@ def builder_node(state: "AgentState") -> dict:
     data_store = state.get("data_store") or {}
 
     # ── Branche déterministe : exécute le DAG du manifest (US-20) ────────────
-    dag_updates = _execute_manifest_dag(data_store)
-    if dag_updates:
-        data_store.update(dag_updates)
-        from knowledge_base.report_template.template_loader import build_manifest
-        needed = [k.key for k in build_manifest().builder_outputs]
+    dag_result = _execute_manifest_dag(data_store)
+    if dag_result:
+        updates = dag_result["updates"]
+        needed = dag_result["needed_keys"]
+        data_store.update(updates)
         if all(data_store.get(k) is not None for k in needed):
             from langchain_core.messages import AIMessage
             return {
                 "messages":         [AIMessage(content="Calculs preamble terminés. <BUILD_DONE>")],
                 "events":           [
                     {"type": "agent_switch", "agent": "BuilderAgent"},
-                    {"type": "message", "content": "Preamble calculé (4 clés). <BUILD_DONE>"},
+                    {"type": "message", "content": f"Preamble calculé ({len(needed)} clés). <BUILD_DONE>"},
                 ],
                 "active_agent":     "master",
                 "data_store":       data_store,
