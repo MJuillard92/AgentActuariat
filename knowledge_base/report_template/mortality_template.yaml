@@ -88,40 +88,46 @@ data_contract:
       confirm_with_user: false
 
 
-  # ─── Calculs Builder (DAG exécuté après GO_BUILD) ─────────────────────
+  # ─── Clés consommées par le Writer (produites par des tools existants) ─
   builder_outputs:
-    - key: total_exposure_years
+    - key: total_exposure
       type: number
       unit: "années-personne"
       description: "Exposition totale sommée sur la période d'observation."
       produced_by:
-        tool: mortality.compute_exposure
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {cumulative_exposure: total_exposure_years}
+        tool: builder.exposure
+        inputs: {}
+        output_mapping: {total_exposure: total_exposure}
 
     - key: total_deaths
       type: integer
       description: "Nombre total de décès observés sur la période."
       produced_by:
-        tool: mortality.compute_deaths
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {death_count: total_deaths}
+        tool: builder.exposure
+        inputs: {}
+        output_mapping: {total_deaths: total_deaths}
 
-    - key: portfolio_composition_by_sex
-      type: table
-      description: "Composition du portefeuille par sexe : n_lives, exposure, deaths."
+    - key: segmentations
+      type: dict
+      description: >
+        Résultat complet de statistical_analysis.segmentation : dict keyé par
+        variable catégorielle (sexe, produit, cause_sortie…), chaque valeur est
+        une list[{valeur, nb_contrats, nb_deces, pct_contrats, pct_deces}].
+        Le visual_spec preamble extrait la clé 'sexe' via sub-path.
       produced_by:
-        tool: mortality.compute_composition
-        inputs: {records: input_records, group_by: [sexe]}
-        output_mapping: {composition_table: portfolio_composition_by_sex}
+        tool: statistical_analysis.segmentation
+        inputs: {}
+        output_mapping: {segmentations: segmentations}
 
-    - key: deaths_by_year_series
+    - key: serie
       type: list[dict]
-      description: "Série temporelle des décès par année sur la période."
+      description: >
+        Série temporelle annuelle : list[{annee, nb_entres, nb_deces,
+        exposition_pa}] produite par statistical_analysis.time_series.
       produced_by:
-        tool: mortality.compute_deaths_timeseries
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {series: deaths_by_year_series}
+        tool: statistical_analysis.time_series
+        inputs: {}
+        output_mapping: {serie: serie}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -139,7 +145,7 @@ sections:
         Ce rapport présente {{ study_objective }} construite à partir
         d'un portefeuille observé de {{ start_year }} à {{ end_year }},
         soit {{ num_observation_years }} années. L'étude porte sur une
-        exposition totale de {{ total_exposure_years }} années-personne
+        exposition totale de {{ total_exposure }} années-personne
         et {{ total_deaths }} décès observés.
         
         D'une manière synthétique,l'étude réalisée peut se résumer de la 
@@ -156,21 +162,21 @@ sections:
       - id: portfolio_composition
         type: table
         purpose: "Décrire la composition du portefeuille observé par sexe."
-        source: portfolio_composition_by_sex
+        source: segmentations.sexe   # sub-path dans le dict `segmentations`
         columns:
-          - {key: sexe,     label: "Sexe"}
-          - {key: n_lives,  label: "Nombre de vies", format: int}
-          - {key: exposure, label: "Exposition",     format: float2, unit: "années-personne"}
-          - {key: deaths,   label: "Décès",          format: int}
-        highlight_rule: totals_row
+          - {key: valeur,         label: "Sexe"}
+          - {key: nb_contrats,    label: "Nombre de vies",   format: int}
+          - {key: nb_deces,       label: "Décès",            format: int}
+          - {key: pct_contrats,   label: "Part du portefeuille (%)", format: float2}
+          - {key: pct_deces,      label: "Part des décès (%)",       format: float2}
 
       - id: deaths_per_year
         type: chart
         chart_type: bar
         purpose: "Nombre de décès observés par année calendaire."
-        source: deaths_by_year_series
-        x_axis: {key: year,   label: "Année"}
-        y_axis: {key: deaths, label: "Décès"}
+        source: serie
+        x_axis: {key: annee,    label: "Année"}
+        y_axis: {key: nb_deces, label: "Décès"}
 
 
 # ─────────────────────────────────────────────────────────────────────────

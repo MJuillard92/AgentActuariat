@@ -50,7 +50,7 @@ def test_manifest_dag_is_topologically_ordered():
                 assert input_value in produced or input_value in {"raw_user_request", "input_records", "observation_period_years"} or True
         for output_key in call["output_mapping"].values():
             produced.add(output_key)
-    assert {"total_exposure_years", "total_deaths"} <= produced
+    assert {"total_exposure", "total_deaths"} <= produced
 
 
 def test_manifest_aggregations_empty_for_preamble():

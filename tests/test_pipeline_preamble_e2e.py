@@ -11,20 +11,24 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 def _data_store():
     return {
-        "study_objective":               "construction_table_mortalite",
-        "start_year":                    2019,
-        "end_year":                      2021,
-        "num_observation_years":         3,
-        "total_exposure_years":          1234.5,
-        "total_deaths":                  42,
-        "portfolio_composition_by_sex":  [
-            {"sexe": "H", "n_lives": 500, "exposure": 700.0, "deaths": 25},
-            {"sexe": "F", "n_lives": 500, "exposure": 534.5, "deaths": 17},
-        ],
-        "deaths_by_year_series":         [
-            {"year": 2019, "deaths": 10},
-            {"year": 2020, "deaths": 15},
-            {"year": 2021, "deaths": 17},
+        "study_objective":        "construction_table_mortalite",
+        "start_year":             2019,
+        "end_year":               2021,
+        "num_observation_years":  3,
+        "total_exposure":         1234.5,
+        "total_deaths":           42,
+        "segmentations":          {
+            "sexe": [
+                {"valeur": "H", "nb_contrats": 500, "nb_deces": 25,
+                 "pct_contrats": 50.0, "pct_deces": 59.5},
+                {"valeur": "F", "nb_contrats": 500, "nb_deces": 17,
+                 "pct_contrats": 50.0, "pct_deces": 40.5},
+            ],
+        },
+        "serie":                  [
+            {"annee": 2019, "nb_deces": 10},
+            {"annee": 2020, "nb_deces": 15},
+            {"annee": 2021, "nb_deces": 17},
         ],
     }
 

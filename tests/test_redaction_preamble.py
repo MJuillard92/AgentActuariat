@@ -11,32 +11,35 @@ if str(_PROJECT_ROOT) not in sys.path:
 from agents.report.pipeline._04_redaction import _hydrate_visual_spec  # noqa: E402
 
 
-def test_hydrate_table_reads_direct_from_data_store():
+def test_hydrate_table_reads_sub_path_from_data_store():
+    """Le sub-path `segmentations.sexe` doit être résolu dans le data_store."""
     spec = {
         "id": "portfolio_composition",
         "type": "table",
-        "source": "portfolio_composition_by_sex",
+        "source": "segmentations.sexe",
         "columns": [
-            {"key": "sexe",     "label": "Sexe"},
-            {"key": "n_lives",  "label": "Vies"},
-            {"key": "exposure", "label": "Exposition"},
-            {"key": "deaths",   "label": "Décès"},
+            {"key": "valeur",      "label": "Sexe"},
+            {"key": "nb_contrats", "label": "Vies"},
+            {"key": "nb_deces",    "label": "Décès"},
         ],
     }
     data_store = {
-        "portfolio_composition_by_sex": [
-            {"sexe": "H", "n_lives": 500, "exposure": 700.0, "deaths": 25},
-            {"sexe": "F", "n_lives": 500, "exposure": 534.5, "deaths": 17},
-        ],
+        "segmentations": {
+            "sexe": [
+                {"valeur": "H", "nb_contrats": 500, "nb_deces": 25},
+                {"valeur": "F", "nb_contrats": 500, "nb_deces": 17},
+            ],
+            "produit": [{"valeur": "A", "nb_contrats": 1000, "nb_deces": 42}],
+        },
     }
 
     out = _hydrate_visual_spec(spec, data_store)
 
     assert out["type"] == "table"
-    assert out["headers"] == ["Sexe", "Vies", "Exposition", "Décès"]
+    assert out["headers"] == ["Sexe", "Vies", "Décès"]
     assert out["rows"] == [
-        ["H", 500, 700.0, 25],
-        ["F", 500, 534.5, 17],
+        ["H", 500, 25],
+        ["F", 500, 17],
     ]
 
 
@@ -45,14 +48,14 @@ def test_hydrate_chart_reads_direct_from_data_store():
         "id": "deaths_per_year",
         "type": "chart",
         "chart_type": "bar",
-        "source": "deaths_by_year_series",
-        "x_axis": {"key": "year",   "label": "Année"},
-        "y_axis": {"key": "deaths", "label": "Décès"},
+        "source": "serie",
+        "x_axis": {"key": "annee",    "label": "Année"},
+        "y_axis": {"key": "nb_deces", "label": "Décès"},
     }
     data_store = {
-        "deaths_by_year_series": [
-            {"year": 2019, "deaths": 10},
-            {"year": 2020, "deaths": 15},
+        "serie": [
+            {"annee": 2019, "nb_deces": 10},
+            {"annee": 2020, "nb_deces": 15},
         ],
     }
 

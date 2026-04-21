@@ -148,9 +148,19 @@ def load_plan(
         prompt, missing_narrative = _build_prompt(sec, context)
 
         # Visuals : si `source` pointe vers une clé absente du contexte, on la marque manquante.
+        # `source` peut être un sub-path pointé (ex. `segmentations.sexe`) — on résout.
         for v in (sec.visual_specs or []):
             source = v.get("source")
-            if source and source not in context:
+            if not source:
+                continue
+            root, *parts = source.split(".")
+            val = context.get(root)
+            for p in parts:
+                if not isinstance(val, dict):
+                    val = None
+                    break
+                val = val.get(p)
+            if val is None:
                 missing_narrative.append(source)
 
         missing_fields_global.update(missing_narrative)

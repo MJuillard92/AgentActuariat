@@ -33,11 +33,28 @@ _TEMPERATURE          = 0.4   # Faible : style professionnel, peu créatif
 
 # ── Hydratation des specs YAML avec données réelles ──────────────────────────
 
+def _resolve_source(source: str | None, data_store: dict):
+    """Résout une `source` de visual_spec qui peut être une clé directe
+    (`segmentations`) ou un sub-path pointé (`segmentations.sexe`)."""
+    if not source:
+        return None
+    if "." not in source:
+        return data_store.get(source)
+    root, *parts = source.split(".")
+    cur = data_store.get(root)
+    for p in parts:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(p)
+    return cur
+
+
 def _hydrate_visual_spec(spec: dict, data_store: dict) -> dict:
-    """Design 3 : `source` pointe vers une clé data_store contenant la donnée.
+    """Design 3 : `source` pointe vers une clé data_store contenant la donnée,
+    éventuellement via un sub-path pointé (ex. `segmentations.sexe`).
     Tableau → (headers, rows). Chart → (x_values, y_values)."""
     source = spec.get("source")
-    data = data_store.get(source) if source else None
+    data = _resolve_source(source, data_store)
     stype = spec.get("type")
 
     if data is None:

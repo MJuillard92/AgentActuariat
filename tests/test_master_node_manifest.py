@@ -19,12 +19,12 @@ def test_get_builder_keys_from_manifest_returns_preamble_keys():
 
     assert keys == [entry.key for entry in manifest.builder_outputs]
     assert len(keys) >= 1  # preamble a 4 clés aujourd'hui ; garde-fou anti-vide
-    # Les 4 clés preamble doivent rester présentes (sous-ensemble) :
+    # Les 4 clés preamble (noms natifs des tools existants) :
     assert {
-        "total_exposure_years",
+        "total_exposure",
         "total_deaths",
-        "portfolio_composition_by_sex",
-        "deaths_by_year_series",
+        "segmentations",
+        "serie",
     }.issubset(set(keys))
 
 
@@ -32,10 +32,10 @@ def test_preflight_writer_ready_when_all_manifest_keys_present():
     from agents.mortality.agents.master_node import _preflight_writer
 
     data_store = {
-        "total_exposure_years":          1234.5,
-        "total_deaths":                  42,
-        "portfolio_composition_by_sex":  [{"sexe": "H"}],
-        "deaths_by_year_series":         [{"year": 2020, "deaths": 10}],
+        "total_exposure":  1234.5,
+        "total_deaths":    42,
+        "segmentations":   {"sexe": [{"valeur": "H", "nb_contrats": 500}]},
+        "serie":           [{"annee": 2020, "nb_deces": 10}],
     }
 
     ready, missing = _preflight_writer(data_store)
@@ -47,7 +47,7 @@ def test_preflight_writer_ready_when_all_manifest_keys_present():
 def test_preflight_writer_missing_keys():
     from agents.mortality.agents.master_node import _preflight_writer
 
-    data_store = {"total_exposure_years": 100}
+    data_store = {"total_exposure": 100}
     ready, missing = _preflight_writer(data_store)
 
     assert ready is False

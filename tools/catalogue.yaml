@@ -436,6 +436,97 @@ tools:
       peut indiquer un démarrage de contrat en milieu d'année ou une fin de collecte. Le résultat "series" est requis pour
       graphs.analysis_plots (chart=time_series).
     exemplar_query: Comment interpréter une série temporelle avec une chute soudaine d'exposition ?
+  aggregation.rules:
+    description: 'Registre générique de règles d''agrégation. Appelable par le Builder pour pré-agréger une table avant BUILD_DONE,
+      selon la règle déclarée dans visual_specs.aggregation du YAML. Règles supportées (V1) : - none                 : retourne
+      source inchangée - fixed_width          : buckets de largeur params.width sur bucket_col - equal_count          : params.n_buckets
+      buckets équi-effectif - exposure_share_min   : buckets minimaux tels que weight_col cumulé atteigne params.min_share
+      du total'
+    domain: generic
+    params:
+      source:
+        type: table
+      rule:
+        type: dict
+      weight:
+        type: table
+        note: optionnel, utilisé par certaines règles.
+    outputs:
+      return_payload:
+        aggregated: table
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.analyze_data_and_request:
+    description: Inférences factuelles sur la période d'observation à partir d'un DataFrame de records normalisés. Un seul
+      appel retourne les 4 grandeurs consommées par le preamble via output_mapping.
+    domain: master
+    when_to_use: '- Phase master_from_data, après normalize_records.'
+    params:
+      records:
+        type: table
+        note: DataFrame normalisé avec colonnes date_sortie, cause_sortie.
+    outputs:
+      return_payload:
+        period_years: list[int]
+        first_death_year: int
+        last_death_year: int
+        n_years: int
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.classify_request:
+    description: 'Classifie une demande utilisateur en langage naturel vers un objectif méthodologique parmi une liste fermée.
+      V1 trivial : retourne toujours ''construction_table_mortalite'' (seul objectif supporté aujourd''hui).'
+    domain: master
+    when_to_use: '- Au démarrage de session Master, pour inférer study_objective.'
+    params:
+      request:
+        type: string
+        note: Demande utilisateur en langage naturel.
+    outputs:
+      return_payload:
+        objective: string
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.normalize_records:
+    description: Applique column_mapping (renommage de colonnes) et value_mapping (substitution de valeurs enum) sur un DataFrame.
+      Retourne une copie conforme au shape attendu par le YAML.
+    domain: master
+    params:
+      records:
+        type: table
+      column_mapping:
+        type: dict
+        note: '{old_name: new_name}.'
+      value_mapping:
+        type: dict
+        note: '{column: {observed: canonical}}.'
+    outputs:
+      return_payload:
+        normalized_records: table
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.suggest_value_mapping:
+    description: Pour chaque colonne enum déclarée dans enum_specs, compare les valeurs observées dans le DataFrame aux valeurs
+      autorisées. Propose un mapping via heuristique (normalisation + synonymes). Les valeurs sans correspondance évidente
+      sont remontées dans 'unmapped' pour arbitrage utilisateur.
+    domain: master
+    params:
+      records:
+        type: table
+      enum_specs:
+        type: dict
+        note: '{column_name: [allowed_values]}'
+    outputs:
+      return_payload:
+        value_mapping: dict
+        unmapped: dict
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
   graphs.report_figures:
     display_name: Graphiques rapport de mortalité
     short_description: Génère les 7 types de graphiques standards pour un rapport de mortalité.
