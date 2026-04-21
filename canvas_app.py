@@ -2064,7 +2064,10 @@ def submit_disambiguation(
             # Aucun mapping UI, mais pas encore confirmé — ne pas bloquer
             ds["column_mapping_confirmed"] = True
 
-        ds["_disambiguation_done"]     = True
+        # NE PAS poser _disambiguation_done ici : le master_node s'en charge
+        # après avoir exécuté maybe_normalize_records. Poser ce flag
+        # prématurément fait sauter la normalisation → input_records jamais
+        # stocké → branche déterministe du Builder (US-20) skippée.
         # Injecter l'agent cible directement — _run_writer_in_thread ne l'écrasera pas
         ds["_initial_active_agent"]    = target_agent
 
