@@ -1,33 +1,43 @@
 # Design — Section `data_analysis` (migration V1 → Design 3)
 
-**Date** : 2026-04-21 (v2 — rebasé sur tools génériques existants)
-**Scope** : réintroduction de la section `data_submission` du V1 archive, renommée `data_analysis`, sous deux variantes mutuellement exclusives : `data_analysis_unisex` et `data_analysis_by_sex`. Activation pilotée par une clé méthodologique `gender_segmentation`.
-**Contexte** : après le revert US-20 qui a retiré les tools `mortality.compute_*`, le préambule est rewiré sur les tools génériques (`builder.exposure`, `statistical_analysis.segmentation`, `statistical_analysis.time_series`). Cette spec réutilise ces mêmes tools, avec deux extensions ciblées.
+**Date** : 2026-04-21 (v3 — ajout retraitement `data_preprocessing`)
+**Scope** : réintroduction et extension de la section `data_submission` V1, scindée en :
+- `data_preprocessing` (toujours active) : retraitement des données aberrantes avec rapport d'exclusions ;
+- `data_analysis_unisex` / `data_analysis_by_sex` (mutex sur `gender_segmentation`) : analyse descriptive + interprétative sur la base assainie.
 
-**Versions antérieures** : une v1 (commit `ebc143b`) a été rédigée sur la base des tools `mortality.compute_*` — désormais obsolète, reposant sur des tools supprimés.
+**Contexte** : après le revert US-20 qui a retiré les tools `mortality.compute_*`, le préambule est rewiré sur les tools génériques (`builder.exposure`, `statistical_analysis.segmentation`, `statistical_analysis.time_series`). Cette spec réutilise ces mêmes tools (avec extensions ciblées) et ajoute un nouveau tool `preprocessing.clean_records`.
+
+**Versions antérieures** :
+- v1 (commit `ebc143b`) : basée sur les tools `mortality.compute_*` — obsolète, tools supprimés.
+- v2 (commit `a5cb80b`) : rebasée sur tools génériques, sans retraitement. Remplacée par v3 qui ajoute `data_preprocessing`.
 
 ---
 
 ## 1. Objectif fonctionnel
 
-La section `data_analysis` présente une analyse descriptive et interprétative de la base de données :
-- ouverture narrative factuelle (volumétrie, période),
-- tableau annuel des grandeurs clés (exposition, âge moyen, décès, taux, âge moyen au décès),
-- analyse interprétative LLM post-tableau (tendances + causes probables),
-- graphique de distribution des âges par tranches.
+La partie analyse se décompose en deux moments séquentiels :
+
+1. **`data_preprocessing`** — retraitement : identification et suppression des données aberrantes (règles figées, cf. §3.5). Produit la base assainie (`cleaned_records`) consommée par toutes les analyses en aval, ainsi qu'un rapport d'exclusions (`exclusion_report`).
+2. **`data_analysis_*`** — analyse descriptive et interprétative sur la base assainie :
+   - ouverture narrative factuelle (volumétrie, période),
+   - tableau annuel des grandeurs clés (exposition, âge moyen, décès, taux, âge moyen au décès),
+   - analyse interprétative LLM post-tableau (tendances + causes probables),
+   - graphique de distribution des âges par tranches.
 
 Selon `gender_segmentation` :
 - `unisex` → analyse agrégée (1 table + 1 chart)
 - `by_sex` → analyse ventilée H/F (2 tables + 2 charts, analyse LLM comparative)
 
+La section `data_preprocessing` est **toujours active** (pas d'activation conditionnelle), `data_analysis_*` est mutex sur `gender_segmentation`.
+
 ## 2. Réutilisation des tools existants
 
-| Tool | Rôle dans data_analysis | Statut |
+| Tool | Rôle | Statut |
 |---|---|---|
+| `preprocessing.clean_records` | Retraitement : suppression des lignes aberrantes | **À créer** (§3.5) |
 | `statistical_analysis.time_series` | Table annuelle (serie + serie_h/serie_f) | **À étendre** (§3.1) |
 | `statistical_analysis.age_distribution` | Chart distribution par tranches d'âge | **À étendre** (§3.2) |
-| `statistical_analysis.segmentation` | Déjà consommé par preamble pour `segmentations.sexe` | Inchangé |
-| `master.analyze_data_and_request` | Exposer `total_records` | **À étendre** (§3.3) |
+| `statistical_analysis.segmentation` | Déjà consommé par preamble pour `segmentations.sexe` | Inchangé (sauf inputs §3.6) |
 | `master.classify_request` | Résoudre `gender_segmentation` | **À étendre** (§3.4) |
 
 ## 3. Extensions de tools (minimales)
@@ -62,21 +72,72 @@ Ajouter aux outputs :
 
 Pas de changement fonctionnel — simple reformat de l'output existant.
 
-### 3.3 `master.analyze_data_and_request` — exposer `n_records`
+### 3.3 (supprimée)
 
-Le tool doit retourner (en plus de ses outputs actuels utilisés pour `observation_period_years`, `start_year`, `end_year`, `num_observation_years`) un champ `n_records: int` (nombre de lignes post-normalisation). Trivial : `len(records)` sur le DataFrame normalisé.
+Le besoin initial d'exposer `n_records` via `master.analyze_data_and_request` est caduc : `total_records` est désormais dérivé de `exclusion_report.final_count` (cf. §3.5), donc produit par le Builder après retraitement.
 
 ### 3.4 `master.classify_request` — exposer `gender_mode`
 
 Ajouter un output `gender_mode: "unisex" | "by_sex"` pour alimenter `gender_segmentation`. Inféré depuis la requête naturelle (ex : "construis-moi une table H/F" → `by_sex` ; "table unisex" ou défaut → `unisex`). `confirm_with_user: true` côté YAML.
 
+### 3.5 `preprocessing.clean_records` (nouveau tool)
+
+**Rôle** : premier nœud du DAG Builder. Reçoit les records normalisés par Master, applique les règles figées, produit la base assainie + le rapport d'exclusions.
+
+**Signature** : `run(df: pd.DataFrame, params: dict | None = None) -> dict`
+
+**Paramètres** : aucun (règles systématiques, non configurables).
+
+**Règles appliquées, dans l'ordre** :
+
+| id | rule_label | condition d'exclusion |
+|---|---|---|
+| `R1` | Contrats sans effet (cause de sortie "sans objet") | `cause_sortie == "sans_objet"` (après value_mapping Master) |
+| `R2` | Âge à l'entrée négatif | `age_entree < 0` |
+| `R3` | Âge à la sortie négatif | `age_sortie < 0` |
+| `R4` | Âge à l'entrée > 100 ans | `age_entree > 100` |
+| `R5` | Âge à la sortie > 100 ans | `age_sortie > 100` |
+| `R6` | Âge à la sortie < âge à l'entrée | `age_sortie < age_entree` |
+
+Les ages sont calculés à la volée depuis `date_naissance`, `date_entree`, `date_sortie` (colonnes normalisées par Master).
+
+**Output** :
+```
+cleaned_records   : pd.DataFrame  # records après exclusions cumulées
+exclusion_report  : {
+  initial_count : int,
+  final_count   : int,
+  rules         : list[{
+    rule_id    : str,   # "R1" ... "R6"
+    rule_label : str,   # label lisible humain
+    count      : int,   # nb de lignes concernées par cette règle
+    detail     : dict,  # ex pour R1 : {deaths_removed: 61}
+  }]
+}
+```
+
+**Règle d'ordre** : les règles sont cumulatives et évaluées sur les records **restants** après les règles précédentes (pour éviter le double comptage). Le `count` de chaque règle reflète donc le nombre de lignes **retirées par cette règle spécifiquement**.
+
+**Quality gates** :
+- BLOCKING : `final_count == 0` → erreur (aucune ligne ne survit au nettoyage, impossible de poursuivre).
+- NON-BLOCKING : `final_count < 0.5 × initial_count` → warning (plus de 50% exclus, signaler au client).
+
+### 3.6 Rebranchement des tools existants sur `cleaned_records`
+
+Tous les builder tools déjà consommés par le préambule doivent désormais recevoir explicitement `cleaned_records` au lieu de l'implicite `input_records`. Concrètement, dans `knowledge_base/report_template/mortality_template.yaml`, chaque `produced_by.inputs` passe de `{}` (implicite) à `{records: cleaned_records}` pour :
+
+- `builder.exposure` (produit `total_exposure`, `total_deaths`)
+- `statistical_analysis.time_series` (produit `serie`, `serie_h`, `serie_f`)
+- `statistical_analysis.segmentation` (produit `segmentations`)
+- `statistical_analysis.age_distribution` (produit `ages`)
+
+Aucun changement de signature côté tools : ils reçoivent un DataFrame, peu importe qu'il soit brut ou nettoyé. Seul le câblage dans le YAML change.
+
 ## 4. Nouveautés `data_contract`
 
 ### 4.1 `master_from_data`
 
-| Clé | Type | `produced_by.tool` | `output_mapping` |
-|---|---|---|---|
-| `total_records` | integer | `master.analyze_data_and_request` | `{n_records: total_records}` |
+Pas de nouveauté. `total_records` est désormais déclaré côté builder_outputs (§4.3), dérivé du retraitement.
 
 ### 4.2 `master_from_modeling`
 
@@ -90,9 +151,12 @@ Ajouter un output `gender_mode: "unisex" | "by_sex"` pour alimenter `gender_segm
 
 | Clé | Type | `produced_by.tool` | `produced_by.inputs` | `output_mapping` |
 |---|---|---|---|---|
-| `serie_h` | list[dict] | `statistical_analysis.time_series` | `{by_sex: true}` | `{serie_h: serie_h}` |
-| `serie_f` | list[dict] | `statistical_analysis.time_series` | `{by_sex: true}` | `{serie_f: serie_f}` |
-| `ages` | dict | `statistical_analysis.age_distribution` | `{by_sex: true}` | `{*: ages}` (racine) |
+| `cleaned_records` | DataFrame | `preprocessing.clean_records` | `{}` (implicite : records normalisés par Master) | `{cleaned_records: cleaned_records}` |
+| `exclusion_report` | dict | `preprocessing.clean_records` | `{}` | `{exclusion_report: exclusion_report}` |
+| `total_records` | integer | `preprocessing.clean_records` | `{}` | `{exclusion_report.final_count: total_records}` |
+| `serie_h` | list[dict] | `statistical_analysis.time_series` | `{records: cleaned_records, by_sex: true}` | `{serie_h: serie_h}` |
+| `serie_f` | list[dict] | `statistical_analysis.time_series` | `{records: cleaned_records, by_sex: true}` | `{serie_f: serie_f}` |
+| `ages` | dict | `statistical_analysis.age_distribution` | `{records: cleaned_records, by_sex: true}` | `{*: ages}` (racine) |
 
 **Note sur `ages`** : dict complet (avec `distribution_list`, `distribution_list_h`, `distribution_list_f`, `age_min`, `age_moyen`, etc.) stocké en data_contract ; les visual_specs accèdent aux sous-chemins (`ages.distribution_list`, `ages.distribution_list_h`, …) selon la section active.
 
@@ -106,13 +170,63 @@ Les sections `data_analysis_unisex` et `data_analysis_by_sex` pointent ensuite v
 
 ## 5. Sections YAML
 
+### 5.0 `data_preprocessing` (nouvelle section, toujours active)
+
+```yaml
+- id: data_preprocessing
+  label: "Retraitement des données"
+  required: true
+  dependencies: [preamble]
+  # pas de bloc `activation` → toujours rendue
+
+  narrative:
+    text: |
+      L'objet de cette section est de décrire les retraitements appliqués
+      à la base initiale afin de mener les travaux de certification de la
+      table d'expérience. De manière synthétique, les retraitements
+      consistent à supprimer les contrats sans effet et les données
+      aberrantes. Le détail des lignes exclues est donné ci-après.
+
+  llm_directives:
+    tone: "professionnel, actuariel, descriptif"
+    length_words: [100, 180]
+    rag_query: "retraitement données aberrantes portefeuille mortalité"
+
+    post_table_analysis:
+      instruction: >
+        À partir de la table d'exclusions, produire 2 à 4 bullets :
+        (1) identifier les règles qui ont le plus d'impact en volume ;
+        (2) si une règle exclut > 10% de la base initiale, commenter
+        spécifiquement (plausibilité actuarielle, qualité de données) ;
+        (3) conclure sur la base finale conservée.
+        Style factuel.
+      length_words: [60, 120]
+      few_shot_example: |
+        - la règle "âge à la sortie < âge à l'entrée" exclut le plus de
+          lignes, traduisant une saisie inversée récurrente ;
+        - les règles d'âges > 100 ans n'excluent aucune ligne, indiquant
+          une base cohérente sur ce critère ;
+        - la base finale conserve {{ exclusion_report.final_count }} lignes
+          sur {{ exclusion_report.initial_count }} initiales.
+
+  visual_specs:
+    - id: exclusion_table
+      type: table
+      purpose: "Détail des exclusions par règle appliquée."
+      source: exclusion_report.rules
+      columns:
+        - {key: rule_label, label: "Règle appliquée"}
+        - {key: count,      label: "Nombre de lignes supprimées", format: int}
+      highlight_rule: totals_row
+```
+
 ### 5.1 `data_analysis_unisex`
 
 ```yaml
 - id: data_analysis_unisex
   label: "Analyse des données — base agrégée"
   required: true
-  dependencies: [preamble]
+  dependencies: [data_preprocessing]
   activation:
     key: gender_segmentation
     equals: unisex
@@ -174,7 +288,7 @@ Les sections `data_analysis_unisex` et `data_analysis_by_sex` pointent ensuite v
 - id: data_analysis_by_sex
   label: "Analyse des données — ventilation par sexe"
   required: true
-  dependencies: [preamble]
+  dependencies: [data_preprocessing]
   activation:
     key: gender_segmentation
     equals: by_sex
@@ -293,9 +407,13 @@ Extensible plus tard (ajout futur de `in:`, `not_equals`, …) sans breaking cha
 
 ## 7. Ordre de rendu
 
+**`data_preprocessing`** : narrative (intro retraitement) → table `exclusion_table` → bullets LLM post-table (commentaires sur les règles dominantes).
+
 **`data_analysis_unisex`** : narrative → table `annual_statistics` → bullets LLM post-table → chart `exposure_distribution_by_age`.
 
 **`data_analysis_by_sex`** : narrative → table H → table F → bullets LLM comparative → chart H → chart F.
+
+Ordre global d'apparition dans le rapport : `preamble` → `data_preprocessing` → `data_analysis_{unisex|by_sex}`.
 
 ## 8. Hors scope
 
@@ -305,12 +423,12 @@ Extensible plus tard (ajout futur de `in:`, `not_equals`, …) sans breaking cha
 
 ## 9. Critères de done
 
-- `knowledge_base/report_template/mortality_template.yaml` : deux sections + 3 clés nouvelles data_contract.
+- `knowledge_base/report_template/mortality_template.yaml` : trois sections (`data_preprocessing`, `data_analysis_unisex`, `data_analysis_by_sex`) + nouvelles clés data_contract (`cleaned_records`, `exclusion_report`, `total_records`, `gender_segmentation`, `serie_h`, `serie_f`, `ages`) + rebranchement `inputs: {records: cleaned_records}` sur tous les builder tools consommant les records.
+- `preprocessing/clean_records.py` créé avec les 6 règles (R1–R6) figées, tests unitaires de chaque règle + cas combinés.
 - `statistical_analysis.time_series` étendu (3 nouveaux champs + param `by_sex`).
 - `statistical_analysis.age_distribution` étendu (outputs `distribution_list[_h|_f]`).
-- `master.analyze_data_and_request` expose `n_records`.
 - `master.classify_request` expose `gender_mode`.
 - `scripts/check_template.py` reconnaît `activation` et vérifie la couverture d'enum.
 - `template_loader.build_manifest()` accepte un contexte et filtre les sections inactives.
 - Tests : `pytest tests/` vert ; `python scripts/check_template.py` vert.
-- E2E (après US-26 preamble vert) : génération d'un rapport dans les deux modes `unisex` et `by_sex`.
+- E2E (après US-26 preamble vert) : génération d'un rapport dans les deux modes `unisex` et `by_sex`, avec section `data_preprocessing` rendue dans les deux cas.
