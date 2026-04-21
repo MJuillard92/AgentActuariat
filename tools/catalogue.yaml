@@ -1183,8 +1183,6 @@ tools:
         bic_poisson: float — critère BIC (si disponible)
         n_non_monotone: int — violations de monotonicité après âge 40
     quality_gates:
-      blocking:
-      - n_non_monotone > 0 après âge 40 → NON ACCEPTABLE pour un rapport final.
       non_blocking:
       - AIC/BIC disponibles → les logger pour comparaison si plusieurs méthodes
     errors:
@@ -1194,9 +1192,9 @@ tools:
     - error: 'Méthode inconnue : ''...'
       cause: Valeur de method incorrecte.
       action: 'Utiliser uniquement : whittaker, gompertz, makeham, spline.'
-    reasoning_hint: Si diagnostics indique recommendation="whittaker" et pct_low > 20%, commencer avec lambda_wh=200. Si n_non_monotone
-      > 0, doubler lambda. La monotonie est obligatoire pour une table de certification. Ne jamais valider une table avec
-      des inversions après 40 ans.
+    reasoning_hint: 'Si diagnostics indique recommendation="whittaker" et pct_low > 20%, commencer avec lambda_wh=200. Si
+      le retour contient `decision_required` (n_non_monotone > 0), ne PAS relancer automatiquement : présenter les options
+      à l''utilisateur en texte, attendre son choix, puis exécuter l''option choisie au tour suivant.'
     exemplar_query: Quel lambda Whittaker choisir quand 35% des âges sont sous le seuil de crédibilité ?
   graphs.graph_from_spec:
     display_name: Graphique depuis spec YAML

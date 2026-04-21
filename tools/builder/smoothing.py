@@ -80,11 +80,13 @@ return_payload:
 
 QUALITY GATES
 -------------
-BLOCKING:
-  - n_non_monotone > 0 après âge 40 → NON ACCEPTABLE pour un rapport final.
-    L'agent DOIT soit augmenter lambda_wh et relancer builder.smoothing,
-    soit changer de méthode. Ne pas passer à builder.validation avec une
-    table non monotone.
+DECISION_REQUIRED:
+  - n_non_monotone > 0 après âge 40 → le tool ajoute une clé decision_required
+    dans son retour avec 3 options (increase_lambda, change_method,
+    accept_with_note). Le jugement revient à l'utilisateur — l'agent ne DOIT
+    PAS enchaîner automatiquement sur builder.validation ni relancer
+    builder.smoothing sans attendre la réponse humaine (cf. règle
+    `decision_required` dans step1_planning.md + garde-fou builder_node).
 NON-BLOCKING:
   - AIC/BIC disponibles → les logger pour comparaison si plusieurs méthodes
     sont testées.
@@ -102,9 +104,10 @@ AGENT GUIDANCE
 --------------
 reasoning_hint: >
   Si diagnostics indique recommendation="whittaker" et pct_low > 20%,
-  commencer avec lambda_wh=200. Si n_non_monotone > 0, doubler lambda.
-  La monotonie est obligatoire pour une table de certification. Ne jamais
-  valider une table avec des inversions après 40 ans.
+  commencer avec lambda_wh=200. Si le retour contient `decision_required`
+  (n_non_monotone > 0), ne PAS relancer automatiquement : présenter les
+  options à l'utilisateur en texte, attendre son choix, puis exécuter
+  l'option choisie au tour suivant.
 exemplar_query: >
   Quel lambda Whittaker choisir quand 35% des âges sont sous le seuil de crédibilité ?
 
@@ -122,6 +125,45 @@ from __future__ import annotations
 
 import pandas as pd
 from tools.builder._nb_loader import load_nb
+
+
+def _build_decision_required(
+    n_non_monotone: int | None,
+    method:         str,
+    lambda_used:    float | None,
+) -> dict | None:
+    """Construit le bloc `decision_required` si des violations de monotonie
+    sont détectées après âge 40.
+
+    Retourne None si `n_non_monotone` est 0 ou absent : le résultat est
+    acceptable tel quel.
+    """
+    if not n_non_monotone:
+        return None
+
+    # Option 1 : augmenter le paramètre de lissage (Whittaker)
+    if lambda_used:
+        suggested_lambda = float(lambda_used) * 2
+        inc_label = f"Augmenter le paramètre de lissage (doubler lambda → {suggested_lambda:g})"
+    else:
+        inc_label = "Augmenter le paramètre de lissage de la méthode actuelle"
+
+    # Option 2 : changer de méthode, en suggérant les autres disponibles
+    other_methods = [m for m in ("whittaker", "gompertz", "makeham", "spline") if m != method]
+    cm_label = f"Changer de méthode (essayer : {', '.join(other_methods)})"
+
+    return {
+        "reason": (
+            f"{n_non_monotone} violation(s) de monotonie détectée(s) après l'âge 40 "
+            f"sur la méthode '{method}'. Une table non monotone n'est pas acceptable "
+            "pour un rapport de certification."
+        ),
+        "options": [
+            {"id": "increase_lambda",   "label": inc_label},
+            {"id": "change_method",     "label": cm_label},
+            {"id": "accept_with_note",  "label": "Accepter la table et mentionner explicitement les violations dans le rapport"},
+        ],
+    }
 
 
 def run(data: dict | None, params: dict | None = None) -> dict:
@@ -167,6 +209,8 @@ def run(data: dict | None, params: dict | None = None) -> dict:
     # ou {smoothed_table, ...} (DataFrame) selon la méthode.
     import numpy as np
 
+    lambda_used = params.get("lambda_wh") if method == "whittaker" else None
+
     if "ages" in result and "qx_smoothed" in result:
         # Format arrays → convertir en records [{age, q_x_lisse}, ...]
         ages_arr = np.asarray(result["ages"]).astype(int)
@@ -175,21 +219,31 @@ def run(data: dict | None, params: dict | None = None) -> dict:
             {"age": int(a), "q_x_lisse": float(q) if not np.isnan(q) else None}
             for a, q in zip(ages_arr, qx_arr)
         ]
-        return {
+        n_non_monotone = result.get("n_non_monotone_after_40")
+        out: dict = {
             "smoothed_table": records,
-            "method": method,
-            "n_non_monotone": result.get("n_non_monotone_after_40"),
+            "method":         method,
+            "n_non_monotone": n_non_monotone,
         }
+        dr = _build_decision_required(n_non_monotone, method, lambda_used)
+        if dr:
+            out["decision_required"] = dr
+        return out
 
     smoothed_df = result.get("smoothed_table") or result.get("result")
     if smoothed_df is None:
         return {"erreur": f"Le smoother '{method}' n'a pas retourné de table lissée."}
 
     records = smoothed_df.where(pd.notnull(smoothed_df), None).to_dict(orient="records")
-    return {
+    n_non_monotone = result.get("n_non_monotone")
+    out = {
         "smoothed_table": records,
-        "method": method,
-        "aic_poisson": result.get("aic_poisson"),
-        "bic_poisson": result.get("bic_poisson"),
-        "n_non_monotone": result.get("n_non_monotone"),
+        "method":         method,
+        "aic_poisson":    result.get("aic_poisson"),
+        "bic_poisson":    result.get("bic_poisson"),
+        "n_non_monotone": n_non_monotone,
     }
+    dr = _build_decision_required(n_non_monotone, method, lambda_used)
+    if dr:
+        out["decision_required"] = dr
+    return out
