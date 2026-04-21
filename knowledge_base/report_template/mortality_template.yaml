@@ -141,10 +141,15 @@ sections:
         soit {{ num_observation_years }} années. L'étude porte sur une
         exposition totale de {{ total_exposure_years }} années-personne
         et {{ total_deaths }} décès observés.
+        
+        D'une manière synthétique,l'étude réalisée peut se résumer de la 
+        sorte : analyse statistique du portefeuille assuré, calcul des taux 
+        bruts par application de la méthologie de Kaplan Meier, lissage des
+        taux bruts puis backetsting du niveau global de pruduence.
 
     llm_directives:
       tone: "neutre, descriptif, factuel"
-      length_words: [200, 300]
+      length_words: [300, 400]
       rag_query: "formulation préambule table mortalité portefeuille"
 
     visual_specs:
