@@ -3,8 +3,7 @@ agents/report/pipeline/run_pipeline.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Chef d'orchestre du pipeline de génération de rapport.
 
-Enchaîne les 6 étapes dans l'ordre et gère :
-  - Le retour au MasterAgent si 02 détecte des données manquantes
+Enchaîne les étapes dans l'ordre et gère :
   - Le retry ciblé si 06 détecte des anomalies mineures (max 1 fois)
   - La livraison avec flag si 06 détecte des anomalies majeures
 
@@ -56,25 +55,7 @@ def run(
     log.info("[pipeline] plan chargé : %d/%d sections prêtes",
              plan.n_ready, plan.n_total)
 
-    # ── Étape 2 — Validation du plan ──────────────────────────────────────────
-    log.info("[pipeline] étape 2 — validate_plan")
-    from agents.report.pipeline._02_validation_plan import validate_plan
-    validation = validate_plan(plan, data_store)
-
-    if not validation.all_valid:
-        log.warning("[pipeline] données insuffisantes — retour au MasterAgent : %s",
-                    validation.ko_fields)
-        return PipelineResult(
-            status       = "need_data",
-            output_path  = "",
-            need_data    = validation.ko_fields,
-            anomalies    = [],
-            validation_summary = (
-                f"Données insuffisantes pour {len(validation.ko_sections)} section(s) : "
-                + ", ".join(validation.ko_sections)
-            ),
-            nb_sections  = 0,
-        )
+    # US-25: validation step removed; delegated to check_template + template_loader
 
     # Persister template_context pour les étapes 4, 5, 6 (validation et rédaction)
     data_store["template_context"] = plan.context
