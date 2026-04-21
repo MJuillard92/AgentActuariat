@@ -54,7 +54,7 @@ def _get_builder_keys() -> list[str]:
     """Retourne la liste des clés `builder_outputs` du manifest YAML."""
     from knowledge_base.report_template.template_loader import build_manifest
     manifest = build_manifest()
-    return [k.key for k in manifest.builder_outputs]
+    return [entry.key for entry in manifest.builder_outputs]
 
 
 def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None) -> dict:
@@ -69,12 +69,10 @@ def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None)
     builder_keys = _get_builder_keys()
     has_data  = bool(dataset_ref or data_store.get("_dataset_ref"))
     has_calcs = all(data_store.get(k) for k in builder_keys)
-    has_all   = all(data_store.get(k) for k in builder_keys)
 
     context = (
         f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
-        f"Calculs de base effectués : {'oui' if has_calcs else 'non'}. "
-        f"Calculs complets (prêt pour rapport) : {'oui' if has_all else 'non'}."
+        f"Calculs complets (prêt pour rapport) : {'oui' if has_calcs else 'non'}."
     )
 
     prompt = (
@@ -108,7 +106,7 @@ def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None)
 def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
     """
     Vérifie que toutes les données nécessaires au WriterAgent sont présentes.
-    Retourne (prêt, liste des labels manquants).
+    Retourne (prêt, liste des clés manquantes).
     """
     missing = [key for key in _get_builder_keys() if not data_store.get(key)]
     return (len(missing) == 0, missing)

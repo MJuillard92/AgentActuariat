@@ -10,17 +10,22 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 def test_get_builder_keys_from_manifest_returns_preamble_keys():
-    """La fonction helper doit renvoyer les 4 clés builder_outputs du preamble."""
+    """_get_builder_keys doit être une projection fidèle de build_manifest().builder_outputs."""
     from agents.mortality.agents.master_node import _get_builder_keys
+    from knowledge_base.report_template.template_loader import build_manifest
 
     keys = _get_builder_keys()
+    manifest = build_manifest()
 
-    assert set(keys) == {
+    assert keys == [entry.key for entry in manifest.builder_outputs]
+    assert len(keys) >= 1  # preamble a 4 clés aujourd'hui ; garde-fou anti-vide
+    # Les 4 clés preamble doivent rester présentes (sous-ensemble) :
+    assert {
         "total_exposure_years",
         "total_deaths",
         "portfolio_composition_by_sex",
         "deaths_by_year_series",
-    }
+    }.issubset(set(keys))
 
 
 def test_preflight_writer_ready_when_all_manifest_keys_present():
