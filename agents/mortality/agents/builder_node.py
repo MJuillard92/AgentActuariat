@@ -121,6 +121,54 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
     return base
 
 
+def _execute_manifest_dag(data_store: dict) -> dict | None:
+    """Exécute en une passe le DAG `builder_outputs` du manifest YAML.
+
+    Retourne les updates à appliquer au data_store, ou None si pas de
+    records exploitables.
+    """
+    import pandas as pd
+    if not isinstance(data_store.get("input_records"), (pd.DataFrame, list, dict)):
+        return None
+
+    from knowledge_base.report_template.template_loader import build_manifest
+    import importlib
+
+    manifest = build_manifest()
+    produced: dict = dict(data_store)  # résolution des inputs au fil de l'eau
+    updates:  dict = {}
+
+    for call in manifest.dag:
+        tool_name      = call["tool"]            # ex: "master.analyze_data_and_request"
+        inputs_spec    = call.get("inputs", {})  # {local_name: data_store_key_or_literal}
+        output_mapping = call.get("output_mapping", {})  # {tool_output: canonical_key}
+
+        # Résolution des inputs
+        tool_inputs: dict = {}
+        for local_name, ref in inputs_spec.items():
+            if isinstance(ref, str) and ref in produced:
+                tool_inputs[local_name] = produced[ref]
+            else:
+                tool_inputs[local_name] = ref  # littéral (list, dict, scalar)
+
+        # Import dynamique et appel
+        module_path = "tools." + tool_name
+        try:
+            mod = importlib.import_module(module_path)
+            result = mod.run(tool_inputs, {})
+        except Exception as exc:
+            print(f"[BuilderAgent] tool {tool_name} a échoué: {exc}", file=sys.stderr)
+            continue
+
+        # Application de l'output_mapping
+        for tool_out, canonical in (output_mapping or {}).items():
+            if tool_out in (result or {}):
+                produced[canonical] = result[tool_out]
+                updates[canonical]  = result[tool_out]
+
+    return updates or None
+
+
 def builder_node(state: "AgentState") -> dict:
     """
     Nœud BuilderAgent : orchestration des calculs actuariels.
@@ -128,6 +176,28 @@ def builder_node(state: "AgentState") -> dict:
     """
     import openai
     from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
+
+    data_store = state.get("data_store") or {}
+
+    # ── Branche déterministe : exécute le DAG du manifest (US-20) ────────────
+    dag_updates = _execute_manifest_dag(data_store)
+    if dag_updates:
+        data_store.update(dag_updates)
+        from knowledge_base.report_template.template_loader import build_manifest
+        needed = [k.key for k in build_manifest().builder_outputs]
+        if all(data_store.get(k) is not None for k in needed):
+            from langchain_core.messages import AIMessage
+            return {
+                "messages":         [AIMessage(content="Calculs preamble terminés. <BUILD_DONE>")],
+                "events":           [
+                    {"type": "agent_switch", "agent": "BuilderAgent"},
+                    {"type": "message", "content": "Preamble calculé (4 clés). <BUILD_DONE>"},
+                ],
+                "active_agent":     "master",
+                "data_store":       data_store,
+                "plan_established": True,
+            }
+    # ── Fallback LLM (legacy) ────────────────────────────────────────────────
 
     level = _get_catalogue_level(state)
     system_prompt = _build_system_prompt(state, level)
@@ -196,7 +266,6 @@ def builder_node(state: "AgentState") -> dict:
         "n_tool_calls":       len(msg_obj.tool_calls or []),
     })
 
-    data_store = state.get("data_store") or {}
     data_store["_builder_turns"] = data_store.get("_builder_turns", 0) + 1
 
     if choice.finish_reason != "tool_calls":
