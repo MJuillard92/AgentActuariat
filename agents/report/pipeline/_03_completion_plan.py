@@ -41,47 +41,17 @@ _RAG_PRIORITY_SECTIONS = {
 
 # ── Query RAG par section ─────────────────────────────────────────────────────
 
-_SECTION_QUERIES: dict[str, str] = {
-    "preamble": (
-        "comment rédiger l'introduction d'un rapport de certification "
-        "de table de mortalité d'expérience"
-    ),
-    "data_submission": (
-        "comment présenter les données transmises, les statistiques descriptives "
-        "et la distribution de l'exposition par âge et sexe"
-    ),
-    "construction": (
-        "justification du choix de la méthode de lissage whittaker henderson "
-        "pour la construction d'une table de mortalité"
-    ),
-    "obs_vs_modeled": (
-        "comment interpréter et commenter la comparaison entre décès observés "
-        "et décès modélisés avec intervalles de confiance"
-    ),
-    "prior_comparison": (
-        "comment présenter la comparaison entre une table d'expérience courante "
-        "et une table précédente, évolution de la prudence"
-    ),
-    "regulatory_positioning": (
-        "comment commenter le positionnement d'une table d'expérience par rapport "
-        "aux tables réglementaires TH TF, abattements et régression logit"
-    ),
-    "conclusion": (
-        "formulation de la conclusion d'un rapport de certification de table "
-        "de mortalité, recommandations d'usage et prudence actuarielle"
-    ),
-    "annex": (
-        "présentation de la table de mortalité finale en annexe d'un rapport actuariel"
-    ),
-}
-
-
 def _query_for_section(section_id: str, label: str) -> str:
-    """Retourne la query RAG pour une section donnée."""
-    return _SECTION_QUERIES.get(section_id) or (
-        f"rédaction professionnelle de la section '{label}' "
-        "d'un rapport de certification de table de mortalité"
-    )
+    """Retourne la query RAG depuis llm_directives.rag_query du YAML."""
+    try:
+        from knowledge_base.report_template.template_loader import load_section
+        sec = load_section(section_id)
+        q = (sec.llm_directives or {}).get("rag_query")
+        if q:
+            return q
+    except Exception:
+        pass
+    return f"rédaction professionnelle de la section '{label}' d'un rapport actuariel"
 
 
 # ── Appel search_exemplars ────────────────────────────────────────────────────

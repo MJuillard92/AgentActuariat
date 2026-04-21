@@ -67,3 +67,9 @@ def test_section_plan_not_ready_on_missing_placeholder():
     plan = load_plan(ds)
     assert plan.sections[0].ready is False
     assert "total_deaths" in plan.missing_fields
+
+
+def test_completion_plan_reads_rag_query_from_yaml():
+    from agents.report.pipeline._03_completion_plan import _query_for_section
+    q = _query_for_section("preamble", "Préambule")
+    assert q == "formulation préambule table mortalité portefeuille"
