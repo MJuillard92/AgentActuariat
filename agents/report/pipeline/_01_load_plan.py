@@ -12,7 +12,6 @@ Interface publique :
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,7 +42,7 @@ class ReportPlan:
     yaml_path:      str
 
 
-_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+from knowledge_base.report_template.template_loader import _PLACEHOLDER_RE  # noqa: E402
 
 
 def _extract_placeholder_keys(text: str) -> list[str]:
@@ -55,7 +54,7 @@ def _resolve_or_placeholder(text: str, context: dict) -> tuple[str, list[str]]:
     Les clés manquantes sont remplacées par '—' pour garder le prompt lisible."""
     missing: list[str] = []
 
-    def _sub(m: re.Match) -> str:
+    def _sub(m) -> str:
         key = m.group(1)
         val = context.get(key)
         if val in (None, "", []):
