@@ -123,22 +123,35 @@ def load_plan(
     data_store: dict,
     study_plan: dict | None = None,
     yaml_path:  str | Path | None = None,
+    context:    dict | None = None,
 ) -> ReportPlan:
-    """Charge le YAML Design 3 et assemble un ReportPlan."""
+    """Charge le YAML Design 3 et assemble un ReportPlan.
+
+    Args:
+        data_store: données produites par le BuilderAgent.
+        study_plan: paramètres complémentaires (fusionnés dans context).
+        yaml_path:  chemin vers le YAML du template (défaut : DEFAULT_TEMPLATE).
+        context:    dict de filtrage pour l'activation des sections (ex.
+                    {"gender_segmentation": "unisex"}). Si None, extraction
+                    automatique depuis data_store (compat ascendante).
+    """
     from knowledge_base.report_template.template_loader import (
-        DEFAULT_TEMPLATE, load_section,
+        DEFAULT_TEMPLATE, build_manifest, load_section,
     )
-    import yaml as _yaml
 
     yaml_path = Path(yaml_path) if yaml_path else DEFAULT_TEMPLATE
 
-    context: dict = dict(data_store or {})
+    context_merged: dict = dict(data_store or {})
     if study_plan:
-        context.update(study_plan)
+        context_merged.update(study_plan)
 
-    with open(yaml_path, encoding="utf-8") as f:
-        tpl = _yaml.safe_load(f) or {}
-    active_section_ids = [s["id"] for s in (tpl.get("sections") or []) if "id" in s]
+    # context=None → compat ascendante : pas de filtrage (toutes les sections retournées).
+    # context explicite (même vide) → filtrage des sections par activation.
+    manifest = build_manifest(yaml_path, context=context)
+    active_section_ids = [s["id"] for s in manifest.sections if "id" in s]
+
+    # context local pour la résolution des placeholders = data_store + study_plan
+    context = context_merged
 
     sections: list[SectionPlan] = []
     missing_fields_global: set[str] = set()
