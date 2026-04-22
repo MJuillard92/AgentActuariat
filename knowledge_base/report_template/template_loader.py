@@ -75,6 +75,7 @@ class Manifest:
     builder_outputs: list[KeySpec]
     aggregations: list[Aggregation]
     dag: list[dict]
+    sections: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -152,6 +153,18 @@ def _build_dag(all_entries: list[KeySpec], pre_existing: set[str]) -> list[dict]
     return dag
 
 
+def _is_active(section: dict, context: dict) -> bool:
+    """Retourne True si la section est active dans le contexte donné.
+
+    Une section sans champ `activation` est toujours active.
+    Sinon, elle est active ssi context[activation.key] == activation.equals.
+    """
+    act = section.get("activation")
+    if act is None:
+        return True
+    return context.get(act["key"]) == act["equals"]
+
+
 def _collect_aggregations(tpl: dict) -> list[Aggregation]:
     aggs: list[Aggregation] = []
     for section in tpl.get("sections") or []:
@@ -174,8 +187,15 @@ def _collect_aggregations(tpl: dict) -> list[Aggregation]:
 
 # ───────────────── API publique ─────────────────
 
-def build_manifest(yaml_path: Path = DEFAULT_TEMPLATE) -> Manifest:
-    """Usage Master : projection de data_contract en manifest + DAG."""
+def build_manifest(
+    yaml_path: Path = DEFAULT_TEMPLATE,
+    context: dict | None = None,
+) -> Manifest:
+    """Usage Master : projection de data_contract en manifest + DAG.
+
+    Si `context` est fourni, filtre les sections dont l'activation n'est pas
+    satisfaite. Sans `context`, toutes les sections sont retenues (rétro-compat).
+    """
     tpl = _load_yaml(Path(yaml_path))
     dc = tpl.get("data_contract") or {}
 
@@ -186,12 +206,17 @@ def build_manifest(yaml_path: Path = DEFAULT_TEMPLATE) -> Manifest:
     pre_existing = _collect_session_input_keys(tpl)
     dag = _build_dag(mfd + mfm + bo, pre_existing)
 
+    raw_sections = tpl.get("sections") or []
+    if context is not None:
+        raw_sections = [s for s in raw_sections if _is_active(s, context)]
+
     return Manifest(
         master_from_data=mfd,
         master_from_modeling=mfm,
         builder_outputs=bo,
         aggregations=_collect_aggregations(tpl),
         dag=dag,
+        sections=raw_sections,
     )
 
 

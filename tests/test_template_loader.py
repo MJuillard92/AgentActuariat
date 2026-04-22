@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -132,3 +133,67 @@ def test_load_enum_specs_ignores_non_enum_fields():
     assert "date_naissance" not in specs
     assert "date_entree" not in specs
     assert "date_sortie" not in specs
+
+
+# ───────────────── build_manifest context filter (US-36) ─────────────────
+
+def _make_activation_tpl() -> dict:
+    return {
+        "session_inputs": [],
+        "data_contract": {
+            "master_from_data": [],
+            "master_from_modeling": [
+                {
+                    "key": "gender_segmentation",
+                    "type": "enum",
+                    "allowed": ["unisex", "by_sex"],
+                    "description": "",
+                    "produced_by": {
+                        "tool": "master.classify_request",
+                        "inputs": {},
+                        "output_mapping": {},
+                    },
+                    "confirm_with_user": True,
+                }
+            ],
+            "builder_outputs": [],
+        },
+        "sections": [
+            {
+                "id": "a",
+                "label": "A",
+                "required": True,
+                "dependencies": [],
+                "activation": {"key": "gender_segmentation", "equals": "unisex"},
+                "narrative": {"text": ""},
+                "llm_directives": {"tone": "", "length_words": [1, 2], "rag_query": ""},
+                "visual_specs": [],
+            },
+            {
+                "id": "b",
+                "label": "B",
+                "required": True,
+                "dependencies": [],
+                "activation": {"key": "gender_segmentation", "equals": "by_sex"},
+                "narrative": {"text": ""},
+                "llm_directives": {"tone": "", "length_words": [1, 2], "rag_query": ""},
+                "visual_specs": [],
+            },
+        ],
+    }
+
+
+def test_build_manifest_filters_inactive_sections(tmp_path):
+    path = tmp_path / "t.yaml"
+    path.write_text(yaml.safe_dump(_make_activation_tpl()))
+    manifest = build_manifest(path, context={"gender_segmentation": "unisex"})
+    ids = [s["id"] for s in manifest.sections]
+    assert ids == ["a"]
+
+
+def test_build_manifest_without_context_keeps_all_sections(tmp_path):
+    path = tmp_path / "t.yaml"
+    path.write_text(yaml.safe_dump(_make_activation_tpl()))
+    manifest = build_manifest(path)
+    ids = [s["id"] for s in manifest.sections]
+    assert set(ids) == {"a", "b"}
