@@ -30,7 +30,7 @@ session_inputs:
       - {key: date_naissance, type: date, format: "YYYY-MM-DD"}
       - {key: date_entree,    type: date, format: "YYYY-MM-DD"}
       - {key: date_sortie,    type: date, format: "YYYY-MM-DD"}
-      - {key: cause_sortie,   type: enum, allowed: [deces, autre]}
+      - {key: cause_sortie,   type: enum, allowed: [deces, autre, sans_objet]}
       - {key: sexe,           type: enum, allowed: [H, F]}
 
 
@@ -87,16 +87,50 @@ data_contract:
         output_mapping: {objective: study_objective}
       confirm_with_user: false
 
+    - key: gender_segmentation
+      type: enum
+      allowed: [unisex, by_sex]
+      description: "Table unisex agrégée vs tables séparées H/F."
+      produced_by:
+        tool: master.classify_request
+        inputs: {request: raw_user_request}
+        output_mapping: {gender_mode: gender_segmentation}
+      confirm_with_user: true
+
 
   # ─── Clés consommées par le Writer (produites par des tools existants) ─
   builder_outputs:
+    - key: cleaned_records
+      type: table
+      description: "Records après retraitement (R1–R6)."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {cleaned_records: cleaned_records}
+
+    - key: exclusion_report
+      type: dict
+      description: "Rapport des exclusions : initial_count, final_count, rules."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {exclusion_report: exclusion_report}
+
+    - key: total_records
+      type: integer
+      description: "Nombre de lignes post-retraitement (= exclusion_report.final_count)."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {total_records: total_records}
+
     - key: total_exposure
       type: number
       unit: "années-personne"
       description: "Exposition totale sommée sur la période d'observation."
       produced_by:
         tool: builder.exposure
-        inputs: {}
+        inputs: {records: cleaned_records}
         output_mapping: {total_exposure: total_exposure}
 
     - key: total_deaths
@@ -104,7 +138,7 @@ data_contract:
       description: "Nombre total de décès observés sur la période."
       produced_by:
         tool: builder.exposure
-        inputs: {}
+        inputs: {records: cleaned_records}
         output_mapping: {total_deaths: total_deaths}
 
     - key: segmentations
@@ -116,7 +150,7 @@ data_contract:
         Le visual_spec preamble extrait la clé 'sexe' via sub-path.
       produced_by:
         tool: statistical_analysis.segmentation
-        inputs: {}
+        inputs: {records: cleaned_records}
         output_mapping: {segmentations: segmentations}
 
     - key: serie
@@ -126,8 +160,34 @@ data_contract:
         exposition_pa}] produite par statistical_analysis.time_series.
       produced_by:
         tool: statistical_analysis.time_series
-        inputs: {}
+        inputs: {records: cleaned_records, by_sex: true}
         output_mapping: {serie: serie}
+
+    - key: serie_h
+      type: list[dict]
+      description: "Série temporelle ventilée — hommes."
+      produced_by:
+        tool: statistical_analysis.time_series
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {serie_h: serie_h}
+
+    - key: serie_f
+      type: list[dict]
+      description: "Série temporelle ventilée — femmes."
+      produced_by:
+        tool: statistical_analysis.time_series
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {serie_f: serie_f}
+
+    - key: ages
+      type: dict
+      description: >
+        Résultat complet age_distribution (age_min, age_max, distribution_list,
+        distribution_list_h, distribution_list_f, …).
+      produced_by:
+        tool: statistical_analysis.age_distribution
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {ages: ages}
 
 
 # ─────────────────────────────────────────────────────────────────────────

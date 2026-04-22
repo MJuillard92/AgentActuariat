@@ -29,9 +29,9 @@ TEMPLATE = _PROJECT_ROOT / "knowledge_base" / "report_template" / "mortality_tem
 def test_manifest_has_three_data_contract_blocks():
     m = build_manifest(TEMPLATE)
     assert isinstance(m, Manifest)
-    assert len(m.master_from_data) == 4       # period, start, end, num_years
-    assert len(m.master_from_modeling) == 1   # study_objective
-    assert len(m.builder_outputs) == 4        # exposure, deaths, composition, timeseries
+    assert len(m.master_from_data) == 4        # period, start, end, num_years
+    assert len(m.master_from_modeling) == 2    # study_objective, gender_segmentation
+    assert len(m.builder_outputs) == 10        # 3 preprocessing + exposure, deaths, segmentations, serie, serie_h, serie_f, ages
 
 
 def test_manifest_keyspec_has_core_fields():
@@ -122,7 +122,7 @@ def test_load_enum_specs_from_preamble():
     """Extrait {column: [allowed]} depuis session_inputs.input_records.shape."""
     specs = load_enum_specs(TEMPLATE)
     assert specs == {
-        "cause_sortie": ["deces", "autre"],
+        "cause_sortie": ["deces", "autre", "sans_objet"],
         "sexe": ["H", "F"],
     }
 

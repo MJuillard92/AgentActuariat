@@ -35,8 +35,15 @@ Note: reçoit df (DataFrame) directement.
 
 INPUTS
 ------
-params: {}
-  Note: aucun paramètre requis.
+params:
+  records:
+    type    : table
+    note    : DataFrame assaini produit par preprocessing.clean_records.
+  by_sex:
+    type    : bool
+    values  : true | false
+    default : false
+    note    : Si true, produit aussi serie_h et serie_f ventilées par sexe.
 
 OUTPUTS
 -------
@@ -48,6 +55,8 @@ return_payload:
   annee_max : int
   nb_annees : int
   anomalies : list[str] — années avec données manquantes ou exposition faible
+  serie_h   : list[dict] — série annuelle filtrée hommes (si by_sex=True)
+  serie_f   : list[dict] — série annuelle filtrée femmes (si by_sex=True)
 
 QUALITY GATES
 -------------

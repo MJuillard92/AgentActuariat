@@ -30,7 +30,8 @@ params:
 OUTPUTS
 -------
 return_payload:
-  objective : string
+  objective    : string
+  gender_mode  : string — unisex | by_sex
 """
 # TODO: V2 — classification LLM multi-classes (provisionnement, tarification,
 # best estimate, ...). Élargir l'enum `allowed` du YAML en conséquence.

@@ -42,6 +42,10 @@ OUTPUTS
 data_store_keys_written:
   - cleaned_records : DataFrame — records après exclusions
   - exclusion_report : dict — initial_count, final_count, rules
+return_payload:
+  cleaned_records  : table — records après retraitement (R1–R6)
+  exclusion_report : dict — initial_count, final_count, rules
+  total_records    : integer — nombre de lignes post-retraitement (exclusion_report.final_count)
 
 QUALITY GATES
 -------------

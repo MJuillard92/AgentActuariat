@@ -37,6 +37,9 @@ Note: reçoit df (DataFrame) directement.
 INPUTS
 ------
 params:
+  records:
+    type    : table
+    note    : DataFrame assaini produit par preprocessing.clean_records.
   columns:
     type    : list[string]
     values  : noms exacts des colonnes CSV

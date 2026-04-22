@@ -35,6 +35,9 @@ Note: reçoit df (DataFrame) directement.
 INPUTS
 ------
 params:
+  records:
+    type    : table
+    note    : DataFrame assaini produit par preprocessing.clean_records.
   by_sex:
     type    : bool
     values  : true | false
@@ -52,11 +55,13 @@ OUTPUTS
 data_store_keys_written:
   - ages : dict — résultat complet (age_min, age_max, age_median, age_moyen, distribution)
 return_payload:
-  age_min      : float
-  age_max      : float
-  age_median   : float
-  age_moyen    : float
-  distribution : dict — {tranche: nb_contrats}
+  age_min           : float
+  age_max           : float
+  age_median        : float
+  age_moyen         : float
+  distribution      : dict — {tranche: nb_contrats}
+  distribution_list : list[dict] — [{tranche, nb_contrats}]
+  ages              : dict — résultat complet (age_min, age_max, distribution_list, ...)
 
 QUALITY GATES
 -------------
