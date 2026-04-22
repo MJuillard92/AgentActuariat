@@ -19,6 +19,7 @@ def _preamble_data_store():
         "num_observation_years":  3,
         "total_exposure":         1234.5,
         "total_deaths":           42,
+        "total_records":          950,
         "segmentations":          {
             "sexe": [
                 {"valeur": "H", "nb_contrats": 500, "nb_deces": 25,
@@ -32,6 +33,23 @@ def _preamble_data_store():
             {"annee": 2020, "nb_deces": 15},
             {"annee": 2021, "nb_deces": 17},
         ],
+        # US-39 : série H/F requis par la section data_analysis_by_sex
+        "serie_h":                [
+            {"annee": 2019, "nb_deces": 7},
+            {"annee": 2020, "nb_deces": 10},
+            {"annee": 2021, "nb_deces": 11},
+        ],
+        "serie_f":                [
+            {"annee": 2019, "nb_deces": 3},
+            {"annee": 2020, "nb_deces": 5},
+            {"annee": 2021, "nb_deces": 6},
+        ],
+        # US-39 : ages requis par les sections data_analysis_*
+        "ages":                   {
+            "distribution_list":   [{"tranche": "20-30", "nb_contrats": 100}],
+            "distribution_list_h": [{"tranche": "20-30", "nb_contrats": 60}],
+            "distribution_list_f": [{"tranche": "20-30", "nb_contrats": 40}],
+        },
         # US-38 : exclusion_report requis par la section data_preprocessing
         "exclusion_report":       {
             "initial_count": 1000,
@@ -47,8 +65,8 @@ def _preamble_data_store():
 def test_load_plan_returns_one_section_for_preamble_yaml():
     plan = load_plan(_preamble_data_store())
     assert isinstance(plan, ReportPlan)
-    # US-38 : data_preprocessing s'est ajouté après preamble → 2 sections actives
-    assert len(plan.sections) == 2
+    # US-39 : data_analysis_{unisex,by_sex} s'ajoutent après data_preprocessing → 4 sections
+    assert len(plan.sections) == 4
     assert plan.sections[0].section_id == "preamble"
     assert plan.sections[1].section_id == "data_preprocessing"
 

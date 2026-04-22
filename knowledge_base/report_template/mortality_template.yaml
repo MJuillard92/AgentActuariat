@@ -284,6 +284,144 @@ sections:
           - {key: count,      label: "Nombre de lignes supprimées", format: int}
         highlight_rule: totals_row
 
+  - id: data_analysis_unisex
+    label: "Analyse des données — base agrégée"
+    required: true
+    dependencies: [data_preprocessing]
+    activation:
+      key: gender_segmentation
+      equals: unisex
+
+    narrative:
+      text: |
+        La base de données utilisée regroupe {{ total_records }} lignes,
+        réparties sur {{ num_observation_years }} années d'observation,
+        conduisant à {{ total_exposure }} années-personne. Une analyse
+        statistique annuelle est présentée ci-après.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [120, 200]
+      rag_query: "présentation base données mortalité effectifs observation"
+
+      post_table_analysis:
+        instruction: >
+          À partir du tableau annuel, produire 3 à 5 bullets analysant
+          l'évolution. Pour chaque bullet : (1) constater la tendance
+          avec valeurs saillantes ; (2) proposer une explication probable,
+          métier (montée en puissance, changement de cible) ou statistique
+          (faiblesse des effectifs, variance). Style actuariel, factuel.
+        length_words: [80, 150]
+        few_shot_example: |
+          - forte croissance de l'exposition, traduisant une montée en
+            puissance de la commercialisation ;
+          - taux de décès annuel très volatil, s'expliquant par la faiblesse
+            de l'effectif sur les premières années ;
+          - âge moyen à l'entrée relativement stable ;
+          - âge moyen au décès volatil.
+
+    visual_specs:
+      - id: annual_statistics
+        type: table
+        purpose: "Statistiques annuelles agrégées."
+        source: serie
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: exposure_distribution_by_age
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges à l'entrée par tranches."
+        source: ages.distribution_list
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
+
+  - id: data_analysis_by_sex
+    label: "Analyse des données — ventilation par sexe"
+    required: true
+    dependencies: [data_preprocessing]
+    activation:
+      key: gender_segmentation
+      equals: by_sex
+
+    narrative:
+      text: |
+        La base de données utilisée regroupe {{ total_records }} lignes,
+        réparties sur {{ num_observation_years }} années d'observation,
+        conduisant à {{ total_exposure }} années-personne. L'étude étant
+        conduite par sexe, les statistiques annuelles et la distribution
+        des âges sont présentées séparément pour les hommes et les femmes.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [150, 250]
+      rag_query: "analyse par sexe mortalité effectifs portefeuille"
+
+      post_table_analysis:
+        instruction: >
+          À partir des deux tableaux annuels (H et F), produire 4 à 6 bullets
+          analysant l'évolution pour chaque sexe ET comparant les tendances
+          entre sexes. Pour chaque constat : (1) valeur saillante ;
+          (2) explication probable (métier ou statistique). Mettre en
+          évidence les écarts H/F significatifs.
+        length_words: [120, 200]
+        few_shot_example: |
+          - exposition masculine en forte croissance, exposition féminine
+            stable, traduisant une cible commerciale majoritairement masculine ;
+          - taux de décès systématiquement supérieur chez les hommes
+            (ratio ~2:1), cohérent avec la littérature actuarielle ;
+          - âge moyen au décès plus élevé chez les femmes ;
+          - volatilité des taux comparable entre sexes sur la période.
+
+    visual_specs:
+      - id: annual_statistics_male
+        type: table
+        purpose: "Statistiques annuelles — hommes."
+        source: serie_h
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: annual_statistics_female
+        type: table
+        purpose: "Statistiques annuelles — femmes."
+        source: serie_f
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: exposure_distribution_male
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges — hommes."
+        source: ages.distribution_list_h
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
+
+      - id: exposure_distribution_female
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges — femmes."
+        source: ages.distribution_list_f
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sections à réintroduire après E2E preamble vert (US-26+).
