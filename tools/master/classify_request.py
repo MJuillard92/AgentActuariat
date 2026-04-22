@@ -39,7 +39,13 @@ from __future__ import annotations
 
 _ALLOWED = ("construction_table_mortalite",)
 
+_BY_SEX_PATTERNS = ("h/f", "h / f", "par sexe", "par genre", "masculin et féminin")
+
 
 def run(data: dict, params: dict) -> dict:
-    _ = data.get("request", "")
-    return {"objective": _ALLOWED[0]}
+    request = str(data.get("request", "")).lower()
+    gender_mode = "by_sex" if any(p in request for p in _BY_SEX_PATTERNS) else "unisex"
+    return {
+        "objective":   _ALLOWED[0],
+        "gender_mode": gender_mode,
+    }
