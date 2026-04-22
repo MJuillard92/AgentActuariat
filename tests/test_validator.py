@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -277,3 +278,104 @@ def test_unused_key_produces_warning(tmp_path, registry):
     rep = validate_template(_write(tmp_path, bad), registry)
     assert rep.ok, f"Expected ok but got errors: {rep.errors}"
     assert any("orphan_key" in w.message for w in rep.warnings)
+
+
+# ───────────────── US-35 : activation ─────────────────
+
+# Registry minimal pour les tests activation (pas de tool, on n'en a pas besoin
+# puisque le YAML minimal n'a qu'un seul produced_by simple).
+_ACTIVATION_REGISTRY = {
+    "master.classify_request": {
+        "inputs":  {"request": "string"},
+        "outputs": {"objective": "string"},
+        "path": "/fake/master/classify.py",
+    },
+}
+
+
+def _validate(path: Path) -> list[str]:
+    """Helper : retourne la liste des messages d'erreur (strings)."""
+    rep = validate_template(path, _ACTIVATION_REGISTRY)
+    return [e.message for e in rep.errors]
+
+
+@pytest.fixture
+def minimal_template() -> dict:
+    """Template Design-3 minimal, valide, utilisé par les tests activation."""
+    return {
+        "session_inputs": [
+            {"key": "raw_user_request", "type": "string", "required": True},
+        ],
+        "data_contract": {
+            "master_from_data": [],
+            "master_from_modeling": [
+                {
+                    "key": "study_objective",
+                    "type": "enum",
+                    "allowed": ["construction_table_mortalite"],
+                    "description": "Objectif de l'étude.",
+                    "produced_by": {
+                        "tool": "master.classify_request",
+                        "inputs": {"request": "raw_user_request"},
+                        "output_mapping": {"objective": "study_objective"},
+                    },
+                    "confirm_with_user": True,
+                },
+            ],
+            "builder_outputs": [],
+        },
+        "sections": [
+            {
+                "id": "preamble",
+                "label": "Préambule",
+                "required": True,
+                "dependencies": [],
+                "narrative": {"text": "Objectif : {{ study_objective }}."},
+                "llm_directives": {"tone": "neutre", "length_words": [50, 150], "rag_query": ""},
+                "visual_specs": [],
+            },
+        ],
+    }
+
+
+def test_activation_field_is_recognized(tmp_path, minimal_template):
+    minimal_template["sections"][0]["activation"] = {"key": "study_objective", "equals": "construction_table_mortalite"}
+    tpl = tmp_path / "t.yaml"
+    tpl.write_text(yaml.safe_dump(minimal_template))
+    errors = _validate(tpl)
+    assert errors == []
+
+
+def test_activation_key_must_reference_enum_in_data_contract(tmp_path, minimal_template):
+    minimal_template["sections"][0]["activation"] = {"key": "nonexistent_key", "equals": "foo"}
+    tpl = tmp_path / "t.yaml"
+    tpl.write_text(yaml.safe_dump(minimal_template))
+    errors = _validate(tpl)
+    assert any("nonexistent_key" in e for e in errors)
+
+
+def test_activation_coverage_must_be_exhaustive(tmp_path, minimal_template):
+    # Deux sections avec activation sur gender_segmentation (enum [unisex, by_sex])
+    # mais seule unisex est couverte.
+    minimal_template["data_contract"]["master_from_modeling"].append({
+        "key": "gender_segmentation",
+        "type": "enum",
+        "allowed": ["unisex", "by_sex"],
+        "description": "...",
+        "produced_by": {"tool": "master.classify_request", "inputs": {"request": "raw_user_request"}, "output_mapping": {"objective": "gender_segmentation"}},
+        "confirm_with_user": True,
+    })
+    minimal_template["sections"].append({
+        "id": "variant_unisex",
+        "label": "U",
+        "required": True,
+        "dependencies": [],
+        "activation": {"key": "gender_segmentation", "equals": "unisex"},
+        "narrative": {"text": ""},
+        "llm_directives": {"tone": "", "length_words": [1, 2], "rag_query": ""},
+        "visual_specs": [],
+    })
+    tpl = tmp_path / "t.yaml"
+    tpl.write_text(yaml.safe_dump(minimal_template))
+    errors = _validate(tpl)
+    assert any("by_sex" in e for e in errors)

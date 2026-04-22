@@ -106,6 +106,9 @@ def validate_template(
     # Check 9 : dependencies
     _check_dependencies(doc, report)
 
+    # Check 11 : activation (syntaxe + couverture enum)
+    _validate_activation(doc, report)
+
     # Warning : clés jamais consommées
     _warn_unused_keys(doc, produced_keys, report)
 
@@ -358,6 +361,56 @@ def _check_dependencies(doc: dict, report: ValidationReport) -> None:
                     f"sections.{sid}.dependencies",
                     f"section inconnue : '{d}'",
                 )
+
+
+# ───────────────── Check 11 : activation ─────────────────
+
+def _validate_activation(template: dict, errors: ValidationReport) -> None:
+    """Vérifie la syntaxe et la couverture d'enum des champs `activation`."""
+    # Index des enums dans master_from_data + master_from_modeling
+    enums: dict[str, list[str]] = {}
+    for group in ("master_from_data", "master_from_modeling"):
+        for entry in template.get("data_contract", {}).get(group) or []:
+            if isinstance(entry, dict) and entry.get("type") == "enum":
+                enums[entry["key"]] = entry.get("allowed") or []
+
+    # Collecter les activations par clé référencée
+    covered: dict[str, set[str]] = {}
+    for section in template.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        act = section.get("activation")
+        if act is None:
+            continue
+        sid = section.get("id", "?")
+        if not isinstance(act, dict) or "key" not in act or "equals" not in act:
+            errors.add_error(
+                f"sections.{sid}.activation",
+                f"Section {sid} : activation doit être un dict {{key, equals}}",
+            )
+            continue
+        key = act["key"]
+        if key not in enums:
+            errors.add_error(
+                f"sections.{sid}.activation",
+                f"Section {sid} : activation.key '{key}' absent des enums master_*",
+            )
+            continue
+        if act["equals"] not in enums[key]:
+            errors.add_error(
+                f"sections.{sid}.activation",
+                f"Section {sid} : activation.equals '{act['equals']}' absent de allowed={enums[key]}",
+            )
+            continue
+        covered.setdefault(key, set()).add(act["equals"])
+
+    for key, seen in covered.items():
+        missing = set(enums[key]) - seen
+        if missing:
+            errors.add_error(
+                "data_contract",
+                f"Enum '{key}' : valeurs sans section activable {sorted(missing)}",
+            )
 
 
 # ───────────────── Warning : clés jamais consommées ─────────────────
