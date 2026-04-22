@@ -30,7 +30,7 @@ session_inputs:
       - {key: date_naissance, type: date, format: "YYYY-MM-DD"}
       - {key: date_entree,    type: date, format: "YYYY-MM-DD"}
       - {key: date_sortie,    type: date, format: "YYYY-MM-DD"}
-      - {key: cause_sortie,   type: enum, allowed: [deces, autre]}
+      - {key: cause_sortie,   type: enum, allowed: [deces, autre, sans_objet]}
       - {key: sexe,           type: enum, allowed: [H, F]}
 
 
@@ -87,41 +87,107 @@ data_contract:
         output_mapping: {objective: study_objective}
       confirm_with_user: false
 
+    - key: gender_segmentation
+      type: enum
+      allowed: [unisex, by_sex]
+      description: "Table unisex agrégée vs tables séparées H/F."
+      produced_by:
+        tool: master.classify_request
+        inputs: {request: raw_user_request}
+        output_mapping: {gender_mode: gender_segmentation}
+      confirm_with_user: true
 
-  # ─── Calculs Builder (DAG exécuté après GO_BUILD) ─────────────────────
+
+  # ─── Clés consommées par le Writer (produites par des tools existants) ─
   builder_outputs:
-    - key: total_exposure_years
+    - key: cleaned_records
+      type: table
+      description: "Records après retraitement (R1–R6)."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {cleaned_records: cleaned_records}
+
+    - key: exclusion_report
+      type: dict
+      description: "Rapport des exclusions : initial_count, final_count, rules."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {exclusion_report: exclusion_report}
+
+    - key: total_records
+      type: integer
+      description: "Nombre de lignes post-retraitement (= exclusion_report.final_count)."
+      produced_by:
+        tool: preprocessing.clean_records
+        inputs: {}
+        output_mapping: {total_records: total_records}
+
+    - key: total_exposure
       type: number
       unit: "années-personne"
       description: "Exposition totale sommée sur la période d'observation."
       produced_by:
-        tool: mortality.compute_exposure
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {cumulative_exposure: total_exposure_years}
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {total_exposure: total_exposure}
 
     - key: total_deaths
       type: integer
       description: "Nombre total de décès observés sur la période."
       produced_by:
-        tool: mortality.compute_deaths
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {death_count: total_deaths}
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {total_deaths: total_deaths}
 
-    - key: portfolio_composition_by_sex
-      type: table
-      description: "Composition du portefeuille par sexe : n_lives, exposure, deaths."
+    - key: segmentations
+      type: dict
+      description: >
+        Résultat complet de statistical_analysis.segmentation : dict keyé par
+        variable catégorielle (sexe, produit, cause_sortie…), chaque valeur est
+        une list[{valeur, nb_contrats, nb_deces, pct_contrats, pct_deces}].
+        Le visual_spec preamble extrait la clé 'sexe' via sub-path.
       produced_by:
-        tool: mortality.compute_composition
-        inputs: {records: input_records, group_by: [sexe]}
-        output_mapping: {composition_table: portfolio_composition_by_sex}
+        tool: statistical_analysis.segmentation
+        inputs: {records: cleaned_records}
+        output_mapping: {segmentations: segmentations}
 
-    - key: deaths_by_year_series
+    - key: serie
       type: list[dict]
-      description: "Série temporelle des décès par année sur la période."
+      description: >
+        Série temporelle annuelle : list[{annee, nb_entres, nb_deces,
+        exposition_pa}] produite par statistical_analysis.time_series.
       produced_by:
-        tool: mortality.compute_deaths_timeseries
-        inputs: {records: input_records, period: observation_period_years}
-        output_mapping: {series: deaths_by_year_series}
+        tool: statistical_analysis.time_series
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {serie: serie}
+
+    - key: serie_h
+      type: list[dict]
+      description: "Série temporelle ventilée — hommes."
+      produced_by:
+        tool: statistical_analysis.time_series
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {serie_h: serie_h}
+
+    - key: serie_f
+      type: list[dict]
+      description: "Série temporelle ventilée — femmes."
+      produced_by:
+        tool: statistical_analysis.time_series
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {serie_f: serie_f}
+
+    - key: ages
+      type: dict
+      description: >
+        Résultat complet age_distribution (age_min, age_max, distribution_list,
+        distribution_list_h, distribution_list_f, …).
+      produced_by:
+        tool: statistical_analysis.age_distribution
+        inputs: {records: cleaned_records, by_sex: true}
+        output_mapping: {ages: ages}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -139,33 +205,222 @@ sections:
         Ce rapport présente {{ study_objective }} construite à partir
         d'un portefeuille observé de {{ start_year }} à {{ end_year }},
         soit {{ num_observation_years }} années. L'étude porte sur une
-        exposition totale de {{ total_exposure_years }} années-personne
+        exposition totale de {{ total_exposure }} années-personne
         et {{ total_deaths }} décès observés.
+
+        D'une manière synthétique,l'étude réalisée peut se résumer de la
+        sorte : analyse statistique du portefeuille assuré, calcul des taux
+        bruts par application de la méthologie de Kaplan Meier, lissage des
+        taux bruts puis backetsting du niveau global de pruduence.
 
     llm_directives:
       tone: "neutre, descriptif, factuel"
-      length_words: [200, 300]
+      length_words: [300, 400]
       rag_query: "formulation préambule table mortalité portefeuille"
 
     visual_specs:
       - id: portfolio_composition
         type: table
         purpose: "Décrire la composition du portefeuille observé par sexe."
-        source: portfolio_composition_by_sex
+        source: segmentations.sexe   # sub-path dans le dict `segmentations`
         columns:
-          - {key: sexe,     label: "Sexe"}
-          - {key: n_lives,  label: "Nombre de vies", format: int}
-          - {key: exposure, label: "Exposition",     format: float2, unit: "années-personne"}
-          - {key: deaths,   label: "Décès",          format: int}
-        highlight_rule: totals_row
+          - {key: valeur,         label: "Sexe"}
+          - {key: nb_contrats,    label: "Nombre de vies",   format: int}
+          - {key: nb_deces,       label: "Décès",            format: int}
+          - {key: pct_contrats,   label: "Part du portefeuille (%)", format: float2}
+          - {key: pct_deces,      label: "Part des décès (%)",       format: float2}
 
       - id: deaths_per_year
         type: chart
         chart_type: bar
         purpose: "Nombre de décès observés par année calendaire."
-        source: deaths_by_year_series
-        x_axis: {key: year,   label: "Année"}
-        y_axis: {key: deaths, label: "Décès"}
+        source: serie
+        x_axis: {key: annee,    label: "Année"}
+        y_axis: {key: nb_deces, label: "Décès"}
+
+  - id: data_preprocessing
+    label: "Retraitement des données"
+    required: true
+    dependencies: [preamble]
+    # pas de bloc `activation` → toujours rendue
+
+    narrative:
+      text: |
+        L'objet de cette section est de décrire les retraitements appliqués
+        à la base initiale afin de mener les travaux de certification de la
+        table d'expérience. De manière synthétique, les retraitements
+        consistent à supprimer les contrats sans effet et les données
+        aberrantes. Le détail des lignes exclues est donné ci-après.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [100, 180]
+      rag_query: "retraitement données aberrantes portefeuille mortalité"
+
+      post_table_analysis:
+        instruction: >
+          À partir de la table d'exclusions, produire 2 à 4 bullets :
+          (1) identifier les règles qui ont le plus d'impact en volume ;
+          (2) si une règle exclut > 10% de la base initiale, commenter
+          spécifiquement (plausibilité actuarielle, qualité de données) ;
+          (3) conclure sur la base finale conservée.
+          Style factuel.
+        length_words: [60, 120]
+        few_shot_example: |
+          - la règle "âge à la sortie < âge à l'entrée" exclut le plus de
+            lignes, traduisant une saisie inversée récurrente ;
+          - les règles d'âges > 100 ans n'excluent aucune ligne, indiquant
+            une base cohérente sur ce critère ;
+          - la base finale conserve {{ exclusion_report.final_count }} lignes
+            sur {{ exclusion_report.initial_count }} initiales.
+
+    visual_specs:
+      - id: exclusion_table
+        type: table
+        purpose: "Détail des exclusions par règle appliquée."
+        source: exclusion_report.rules
+        columns:
+          - {key: rule_label, label: "Règle appliquée"}
+          - {key: count,      label: "Nombre de lignes supprimées", format: int}
+        highlight_rule: totals_row
+
+  - id: data_analysis_unisex
+    label: "Analyse des données — base agrégée"
+    required: true
+    dependencies: [data_preprocessing]
+    activation:
+      key: gender_segmentation
+      equals: unisex
+
+    narrative:
+      text: |
+        La base de données utilisée regroupe {{ total_records }} lignes,
+        réparties sur {{ num_observation_years }} années d'observation,
+        conduisant à {{ total_exposure }} années-personne. Une analyse
+        statistique annuelle est présentée ci-après.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [120, 200]
+      rag_query: "présentation base données mortalité effectifs observation"
+
+      post_table_analysis:
+        instruction: >
+          À partir du tableau annuel, produire 3 à 5 bullets analysant
+          l'évolution. Pour chaque bullet : (1) constater la tendance
+          avec valeurs saillantes ; (2) proposer une explication probable,
+          métier (montée en puissance, changement de cible) ou statistique
+          (faiblesse des effectifs, variance). Style actuariel, factuel.
+        length_words: [80, 150]
+        few_shot_example: |
+          - forte croissance de l'exposition, traduisant une montée en
+            puissance de la commercialisation ;
+          - taux de décès annuel très volatil, s'expliquant par la faiblesse
+            de l'effectif sur les premières années ;
+          - âge moyen à l'entrée relativement stable ;
+          - âge moyen au décès volatil.
+
+    visual_specs:
+      - id: annual_statistics
+        type: table
+        purpose: "Statistiques annuelles agrégées."
+        source: serie
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: exposure_distribution_by_age
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges à l'entrée par tranches."
+        source: ages.distribution_list
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
+
+  - id: data_analysis_by_sex
+    label: "Analyse des données — ventilation par sexe"
+    required: true
+    dependencies: [data_preprocessing]
+    activation:
+      key: gender_segmentation
+      equals: by_sex
+
+    narrative:
+      text: |
+        La base de données utilisée regroupe {{ total_records }} lignes,
+        réparties sur {{ num_observation_years }} années d'observation,
+        conduisant à {{ total_exposure }} années-personne. L'étude étant
+        conduite par sexe, les statistiques annuelles et la distribution
+        des âges sont présentées séparément pour les hommes et les femmes.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [150, 250]
+      rag_query: "analyse par sexe mortalité effectifs portefeuille"
+
+      post_table_analysis:
+        instruction: >
+          À partir des deux tableaux annuels (H et F), produire 4 à 6 bullets
+          analysant l'évolution pour chaque sexe ET comparant les tendances
+          entre sexes. Pour chaque constat : (1) valeur saillante ;
+          (2) explication probable (métier ou statistique). Mettre en
+          évidence les écarts H/F significatifs.
+        length_words: [120, 200]
+        few_shot_example: |
+          - exposition masculine en forte croissance, exposition féminine
+            stable, traduisant une cible commerciale majoritairement masculine ;
+          - taux de décès systématiquement supérieur chez les hommes
+            (ratio ~2:1), cohérent avec la littérature actuarielle ;
+          - âge moyen au décès plus élevé chez les femmes ;
+          - volatilité des taux comparable entre sexes sur la période.
+
+    visual_specs:
+      - id: annual_statistics_male
+        type: table
+        purpose: "Statistiques annuelles — hommes."
+        source: serie_h
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: annual_statistics_female
+        type: table
+        purpose: "Statistiques annuelles — femmes."
+        source: serie_f
+        columns:
+          - {key: annee,            label: "Année",                        format: int}
+          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
+          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
+          - {key: nb_deces,         label: "Nombre de décès",              format: int}
+          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
+          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+        highlight_rule: totals_row
+
+      - id: exposure_distribution_male
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges — hommes."
+        source: ages.distribution_list_h
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
+
+      - id: exposure_distribution_female
+        type: chart
+        chart_type: bar
+        purpose: "Distribution des âges — femmes."
+        source: ages.distribution_list_f
+        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        y_axis: {key: nb_contrats, label: "Effectif"}
 
 
 # ─────────────────────────────────────────────────────────────────────────

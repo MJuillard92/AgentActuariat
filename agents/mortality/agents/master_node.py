@@ -50,16 +50,11 @@ def _build_system_prompt() -> str:
         return fallback.read_text(encoding="utf-8") if fallback.exists() else ""
 
 
-# Données minimales que le Builder doit produire avant que le Writer puisse tourner
-_ALL_BUILDER_KEYS: dict[str, str] = {
-    "exposure_table": "exposition centrale",
-    "qx_table":       "taux bruts q_x",
-    "smoothed_table": "table lissée",
-    "diagnostics":    "diagnostics de crédibilité",
-    "validation":     "validation statistique",
-    "benchmarking":   "benchmarking réglementaire",
-}
-_MINIMUM_BUILDER_KEYS = ["exposure_table", "smoothed_table"]
+def _get_builder_keys() -> list[str]:
+    """Retourne la liste des clés `builder_outputs` du manifest YAML."""
+    from knowledge_base.report_template.template_loader import build_manifest
+    manifest = build_manifest()
+    return [entry.key for entry in manifest.builder_outputs]
 
 
 def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None) -> dict:
@@ -71,14 +66,13 @@ def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None)
     import openai
     from agents.mortality.agents._utils import call_with_retry
 
+    builder_keys = _get_builder_keys()
     has_data  = bool(dataset_ref or data_store.get("_dataset_ref"))
-    has_calcs = all(data_store.get(k) for k in _MINIMUM_BUILDER_KEYS)
-    has_all   = all(data_store.get(k) for k in _ALL_BUILDER_KEYS)
+    has_calcs = all(data_store.get(k) for k in builder_keys)
 
     context = (
         f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
-        f"Calculs de base effectués : {'oui' if has_calcs else 'non'}. "
-        f"Calculs complets (prêt pour rapport) : {'oui' if has_all else 'non'}."
+        f"Calculs complets (prêt pour rapport) : {'oui' if has_calcs else 'non'}."
     )
 
     prompt = (
@@ -112,9 +106,9 @@ def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None)
 def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
     """
     Vérifie que toutes les données nécessaires au WriterAgent sont présentes.
-    Retourne (prêt, liste des labels manquants).
+    Retourne (prêt, liste des clés manquantes).
     """
-    missing = [label for key, label in _ALL_BUILDER_KEYS.items() if not data_store.get(key)]
+    missing = [key for key in _get_builder_keys() if not data_store.get(key)]
     return (len(missing) == 0, missing)
 
 
@@ -194,16 +188,14 @@ def _augment_with_data_store(prompt: str, data_store: dict, dataset_ref: str | N
             summary_lines.append(f"✓ Colonnes mappées : {list(data_store['column_mapping'].values())}")
 
     key_labels = {
-        "exposure_table":  "✓ Exposition calculée",
-        "qx_table":        "✓ Taux bruts calculés",
-        "smoothed_table":  "✓ Table lissée",
-        "diagnostics":     "✓ Diagnostics crédibilité",
-        "validation":      "✓ Validation statistique",
-        "benchmarking":    "✓ Benchmarking référence",
-        "cox_regression":  "✓ Régression Cox H/F",
-        "logit_regression":"✓ Régression logit",
-        "series":          "✓ Séries temporelles",
-        "section_outputs": "✓ Sections rapport en cours",
+        "total_exposure_years":         "✓ Exposition totale (années-personne)",
+        "total_deaths":                 "✓ Décès observés",
+        "portfolio_composition_by_sex": "✓ Composition par sexe",
+        "deaths_by_year_series":        "✓ Décès par année",
+        "cox_regression":               "✓ Régression Cox H/F",
+        "logit_regression":             "✓ Régression logit",
+        "series":                       "✓ Séries temporelles",
+        "section_outputs":              "✓ Sections rapport en cours",
     }
     computed = [label for key, label in key_labels.items() if data_store.get(key)]
     if computed:
@@ -289,7 +281,7 @@ def master_node(state: "AgentState") -> dict:
          or "<HANDOFF_WRITER>" in (getattr(m, "content", "") or "")),
         False,
     )
-    if last_build_done and all(data_store.get(k) for k in _MINIMUM_BUILDER_KEYS):
+    if last_build_done and all(data_store.get(k) for k in _get_builder_keys()):
         data_store.pop("_need_data_attempts", None)
         intent = data_store.get("_intent", "build_and_write")
         if intent in ("build_and_write", "write_only"):
@@ -321,7 +313,7 @@ def master_node(state: "AgentState") -> dict:
         builder_fields = [f for f in need_data_fields if f not in _STUDY_PLAN_FIELDS]
         attempts = data_store.get("_need_data_attempts", 0)
         if builder_fields and attempts < 2:
-            already_done = [k for k in _ALL_BUILDER_KEYS if data_store.get(k)]
+            already_done = [k for k in _get_builder_keys() if data_store.get(k)]
             from langchain_core.messages import HumanMessage
             instr = (
                 f"Le WriterAgent manque des données : {builder_fields}. "
@@ -432,10 +424,11 @@ def master_node(state: "AgentState") -> dict:
     from langchain_core.messages import HumanMessage, AIMessage as LCAIMessage
 
     if intent in ("build_only", "build_and_write"):
-        missing_min = [k for k in _MINIMUM_BUILDER_KEYS if not data_store.get(k)]
+        builder_keys = _get_builder_keys()
+        missing_min = [k for k in builder_keys if not data_store.get(k)]
         if missing_min:
             data_store["_builder_turns"] = 0  # reset compteur safety
-            already_done = [k for k in _ALL_BUILDER_KEYS if data_store.get(k)]
+            already_done = [k for k in builder_keys if data_store.get(k)]
             instr = (
                 "Lance l'ensemble des calculs actuariels : "
                 "exposure, crude_rates, smoothing, diagnostics, validation, benchmarking. "
@@ -472,7 +465,7 @@ def master_node(state: "AgentState") -> dict:
             }
         # Données incomplètes → upgrader en build_and_write
         data_store["_intent"] = "build_and_write"
-        already_done = [k for k in _ALL_BUILDER_KEYS if data_store.get(k)]
+        already_done = [k for k in _get_builder_keys() if data_store.get(k)]
         instr = (
             f"Avant le rapport, il faut calculer : {missing_labels}. "
             + (f"Déjà calculés, NE PAS refaire : {already_done}. " if already_done else "")

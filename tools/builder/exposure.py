@@ -37,6 +37,9 @@ Note: reçoit df (DataFrame) directement, pas de données du data_store.
 INPUTS
 ------
 params:
+  records:
+    type    : table
+    note    : DataFrame assaini produit par preprocessing.clean_records.
   age_min:
     type    : int
     values  : 0–120

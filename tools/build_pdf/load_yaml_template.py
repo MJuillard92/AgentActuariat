@@ -140,18 +140,9 @@ _PLACEHOLDER_MAP: dict[str, tuple[str, str]] = {
     "rate_ratio_current_vs_prior":   ("derived", "rate_ratio_vs_prior()"),
 }
 
-# Sections et leurs champs requis (subset critique)
-_SECTION_REQUIRED: dict[str, list[str]] = {
-    # observation_start_date est optionnel — on peut rédiger sans dates exactes
-    "preamble":          ["total_exposure_years", "total_deaths"],
-    "data_submission":   ["initial_record_count"],
-    "construction":      ["cohort_min_age", "cohort_max_age"],
-    # ci_lower_by_age est optionnel — si absent, section rédigée sans IC
-    "analysis":          ["observed_deaths_by_age"],
-    # avg_prudence_ratio est optionnel — peut être absent si benchmarking non fait
-    "conclusion":        ["total_exposure_years", "total_deaths"],
-    "annex":             ["final_mortality_table_by_age", "cohort_min_age", "cohort_max_age"],
-}
+# _SECTION_REQUIRED supprimé (US-25) : le statut "ready" d'une section
+# est désormais dérivé des placeholders effectivement résolus via le
+# template_loader (Design 3).
 
 
 def _extract_section_specs(section_yaml: dict) -> dict:
@@ -490,7 +481,7 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
     for sec in processing_seq:
         sec_id = sec.get("section_id", sec.get("section_number", ""))
         label  = sec.get("label", str(sec_id))
-        required_keys = _SECTION_REQUIRED.get(str(sec_id), [])
+        required_keys = []
         sec_missing = [k for k in required_keys if k in missing]
         ready = len(sec_missing) == 0
         if ready:

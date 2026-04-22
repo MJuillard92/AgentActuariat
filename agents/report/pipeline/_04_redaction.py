@@ -33,14 +33,59 @@ _TEMPERATURE          = 0.4   # Faible : style professionnel, peu créatif
 
 # ── Hydratation des specs YAML avec données réelles ──────────────────────────
 
-def _hydrate_table_spec(spec: dict, context: dict) -> dict:
-    """
-    Injecte des lignes dans un spec table vide pour le rendu automatique.
-    Les specs YAML définissent uniquement les colonnes — les lignes sont
-    construites ici depuis le contexte pour les IDs connus.
+def _resolve_source(source: str | None, data_store: dict):
+    """Résout une `source` de visual_spec qui peut être une clé directe
+    (`segmentations`) ou un sub-path pointé (`segmentations.sexe`)."""
+    if not source:
+        return None
+    if "." not in source:
+        return data_store.get(source)
+    root, *parts = source.split(".")
+    cur = data_store.get(root)
+    for p in parts:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(p)
+    return cur
 
-    MORTALITY : les branches `sid` ci-dessous sont domaine-spécifiques et
-    seront déplacées dans le plugin lors du strangler.
+
+def _hydrate_visual_spec(spec: dict, data_store: dict) -> dict:
+    """Design 3 : `source` pointe vers une clé data_store contenant la donnée,
+    éventuellement via un sub-path pointé (ex. `segmentations.sexe`).
+    Tableau → (headers, rows). Chart → (x_values, y_values)."""
+    source = spec.get("source")
+    data = _resolve_source(source, data_store)
+    stype = spec.get("type")
+
+    if data is None:
+        return {**spec, "error": f"source '{source}' absente du data_store"}
+
+    if stype == "table":
+        columns = spec.get("columns", [])
+        headers = [c.get("label", c.get("key", "")) for c in columns]
+        rows    = [[row.get(c["key"]) for c in columns] for row in (data or [])]
+        return {**spec, "headers": headers, "rows": rows, "error": None}
+
+    if stype == "chart":
+        x_key = (spec.get("x_axis") or {}).get("key")
+        y_key = (spec.get("y_axis") or {}).get("key")
+        return {
+            **spec,
+            "x_values": [row.get(x_key) for row in (data or [])],
+            "y_values": [row.get(y_key) for row in (data or [])],
+            "x_label":  (spec.get("x_axis") or {}).get("label", x_key),
+            "y_label":  (spec.get("y_axis") or {}).get("label", y_key),
+            "error":    None,
+        }
+
+    return {**spec, "error": f"type non supporté: {stype}"}
+
+
+def _hydrate_table_spec_LEGACY_DESIGN1(spec: dict, context: dict) -> dict:
+    """
+    LEGACY Design 1 — conservé temporairement pour éviter les régressions sur
+    le code historique. N'est plus appelé par le pipeline Design 3 (US-24).
+    TODO(US-27): supprimer après cutover complet.
     """
     import copy
     spec = copy.deepcopy(spec)
@@ -245,29 +290,24 @@ def _enrich_graph_context(ctx: dict) -> dict:
 
 def _run_tables(section, data_store: dict) -> list[dict]:
     """
-    Appelle table_renderer pour chaque spec tableau de la section.
-    Retourne la liste des résultats (html + rows).
-    Ne lève pas d'exception — erreurs loggées et ignorées.
+    Design 3 (US-24) : itère sur section.visual_specs et ne retient que les
+    specs de type `table`. Hydratation directe via _hydrate_visual_spec.
     """
     results = []
-    if not section.table_specs:
-        return results
-
-    try:
-        from tools.build_pdf.table_renderer import render_table_from_spec
-    except ImportError:
-        log.warning("[04_redaction] table_renderer indisponible")
-        return results
-
-    context = {**data_store, **(section.context_snapshot or {})}
-
-    for spec in section.table_specs:
+    for spec in (section.visual_specs or []):
+        if spec.get("type") != "table":
+            continue
         try:
-            hydrated = _hydrate_table_spec(spec, context)
-            _, html, rows = render_table_from_spec(hydrated, context)
+            hydrated = _hydrate_visual_spec(spec, data_store)
+            if hydrated.get("error"):
+                log.warning("[04_redaction] tableau '%s' : %s",
+                            spec.get("id", "?"), hydrated["error"])
+                continue
+            headers = hydrated.get("headers", [])
+            body    = hydrated.get("rows", [])
+            rows    = ([headers] + body) if headers else body
             if rows:
-                results.append({"spec": spec, "html": html, "rows": rows})
-                # Stocker pour write_section
+                results.append({"spec": spec, "html": "", "rows": rows})
                 data_store["_last_table_rows"] = rows
                 log.info("[04_redaction] tableau '%s' rendu (%d lignes)",
                          spec.get("id", "?"), len(rows))
@@ -279,68 +319,33 @@ def _run_tables(section, data_store: dict) -> list[dict]:
 
 def _run_stats(section, data_store: dict) -> list[dict]:
     """
-    Appelle render_statistical_output pour chaque spec stat de la section.
+    Design 3 : plus de stat_specs au niveau preamble. No-op conservé pour
+    compatibilité avec les appelants historiques.
     """
-    results = []
-    if not section.stat_specs:
-        return results
-
-    try:
-        from tools.build_pdf.table_renderer import render_statistical_output
-    except ImportError:
-        log.warning("[04_redaction] render_statistical_output indisponible")
-        return results
-
-    context = {**data_store, **(section.context_snapshot or {})}
-
-    for spec in section.stat_specs:
-        try:
-            # Injection du `type` manquant depuis mapping id → stat_type.
-            sid = spec.get("id", "")
-            if not spec.get("type") and sid in _STAT_TYPE_BY_ID:
-                spec = {**spec, "type": _STAT_TYPE_BY_ID[sid]}
-
-            _, html, rows = render_statistical_output(spec, context)
-            if rows:
-                results.append({"spec": spec, "html": html, "rows": rows})
-                data_store["_last_table_rows"] = rows
-                log.info("[04_redaction] stat '%s' rendu", spec.get("type", "?"))
-        except Exception as exc:
-            log.warning("[04_redaction] stat '%s' échoué : %s", spec.get("type", "?"), exc)
-
-    return results
+    return []
 
 
 def _run_graphs(section, data_store: dict) -> list[str]:
     """
-    Appelle graph_from_spec pour chaque spec graphique de la section.
-    Retourne la liste des chemins PNG générés.
+    Design 3 (US-24) : itère sur section.visual_specs et ne retient que les
+    specs de type `chart`. L'appel au renderer graph_from_spec n'est pas
+    encore aligné sur la forme Design 3 — on skippe pour l'instant en
+    loggant pour debug.
+    TODO(US-25/US-27) : adapter tools/graphs/graph_from_spec.py à la forme
+    {x_values, y_values, chart_type, x_label, y_label} hydratée.
     """
-    paths = []
-    if not section.graph_specs:
-        return paths
-
-    try:
-        from tools.graphs.graph_from_spec import generate_graph_from_spec
-    except ImportError:
-        log.warning("[04_redaction] graph_from_spec indisponible")
-        return paths
-
-    context = {**data_store, **(section.context_snapshot or {})}
-    context = _enrich_graph_context(context)
-
-    for spec in section.graph_specs:
-        try:
-            path = generate_graph_from_spec(spec, context)
-            if path:
-                paths.append(path)
-                data_store["_last_graph_path"] = path
-                log.info("[04_redaction] graphique '%s' généré : %s",
-                         spec.get("id", "?"), path)
-        except Exception as exc:
-            log.warning("[04_redaction] graphique '%s' échoué : %s",
-                        spec.get("id", "?"), exc)
-
+    paths: list[str] = []
+    for spec in (section.visual_specs or []):
+        if spec.get("type") != "chart":
+            continue
+        hydrated = _hydrate_visual_spec(spec, data_store)
+        if hydrated.get("error"):
+            log.warning("[04_redaction] graphique '%s' : %s",
+                        spec.get("id", "?"), hydrated["error"])
+            continue
+        # TODO: adapt graph_from_spec to Design 3 (x_values/y_values payload).
+        log.info("[04_redaction] graphique '%s' hydraté mais rendu reporté (US-25/27)",
+                 spec.get("id", "?"))
     return paths
 
 

@@ -121,6 +121,18 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
     return base
 
 
+def _has_pending_decision(messages: list) -> bool:
+    """Retourne True si le dernier ToolMessage contient un marqueur
+    `decision_required`. Sert de garde-fou : quand un tool a demandé une
+    décision utilisateur, le LLM ne doit PAS enchaîner d'autres tool_calls.
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            content = str(getattr(msg, "content", "") or "")
+            return "decision_required" in content
+    return False
+
+
 def builder_node(state: "AgentState") -> dict:
     """
     Nœud BuilderAgent : orchestration des calculs actuariels.
@@ -128,6 +140,8 @@ def builder_node(state: "AgentState") -> dict:
     """
     import openai
     from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
+
+    data_store = state.get("data_store") or {}
 
     level = _get_catalogue_level(state)
     system_prompt = _build_system_prompt(state, level)
@@ -183,6 +197,23 @@ def builder_node(state: "AgentState") -> dict:
     msg_obj  = choice.message
     lc_msg   = _from_openai_response(msg_obj)
 
+    # ── Garde-fou decision_required ──────────────────────────────────────────
+    # Si un tool précédent a retourné un marqueur `decision_required`, on ne
+    # laisse PAS le LLM enchaîner des tool_calls : il doit poser la question
+    # à l'utilisateur en texte et rendre la main. S'il a émis du content ET
+    # des tool_calls (désobéissance au system prompt), on écrase les tool_calls.
+    if _has_pending_decision(raw_msgs):
+        lc_tool_calls = getattr(lc_msg, "tool_calls", None)
+        content = getattr(lc_msg, "content", None) or ""
+        if content and lc_tool_calls:
+            new_events.append({
+                "type":    "message",
+                "content": "[garde-fou] Décision utilisateur en attente — tool_calls supprimés.",
+            })
+            lc_msg.tool_calls = []
+            if hasattr(msg_obj, "tool_calls"):
+                msg_obj.tool_calls = []
+
     # ── Event : réponse de l'API ──────────────────────────────────────────────
     usage = response.usage
     new_events.append({
@@ -196,7 +227,6 @@ def builder_node(state: "AgentState") -> dict:
         "n_tool_calls":       len(msg_obj.tool_calls or []),
     })
 
-    data_store = state.get("data_store") or {}
     data_store["_builder_turns"] = data_store.get("_builder_turns", 0) + 1
 
     if choice.finish_reason != "tool_calls":

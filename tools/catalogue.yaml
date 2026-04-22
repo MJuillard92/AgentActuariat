@@ -202,6 +202,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       by_sex:
         type: bool
         values: true | false
@@ -221,6 +224,8 @@ tools:
         age_median: float
         age_moyen: float
         distribution: 'dict — {tranche: nb_contrats}'
+        distribution_list: list[dict] — [{tranche, nb_contrats}]
+        ages: dict — résultat complet (age_min, age_max, distribution_list, ...)
     quality_gates:
       blocking:
       - Colonnes date_entree ou date_naissance absentes → retourne erreur.
@@ -368,6 +373,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       columns:
         type: list[string]
         values: noms exacts des colonnes CSV
@@ -411,6 +419,15 @@ tools:
       required_tools: []
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
+    params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
+      by_sex:
+        type: bool
+        values: true | false
+        default: 'false'
+        note: Si true, produit aussi serie_h et serie_f ventilées par sexe.
     outputs:
       data_store_keys_written:
       - 'series : dict — résultat complet (serie, annee_min, annee_max, nb_annees, anomalies)'
@@ -420,6 +437,8 @@ tools:
         annee_max: int
         nb_annees: int
         anomalies: list[str] — années avec données manquantes ou exposition faible
+        serie_h: list[dict] — série annuelle filtrée hommes (si by_sex=True)
+        serie_f: list[dict] — série annuelle filtrée femmes (si by_sex=True)
     quality_gates:
       blocking:
       - Colonne date_entree absente → retourne erreur.
@@ -436,6 +455,98 @@ tools:
       peut indiquer un démarrage de contrat en milieu d'année ou une fin de collecte. Le résultat "series" est requis pour
       graphs.analysis_plots (chart=time_series).
     exemplar_query: Comment interpréter une série temporelle avec une chute soudaine d'exposition ?
+  aggregation.rules:
+    description: 'Registre générique de règles d''agrégation. Appelable par le Builder pour pré-agréger une table avant BUILD_DONE,
+      selon la règle déclarée dans visual_specs.aggregation du YAML. Règles supportées (V1) : - none                 : retourne
+      source inchangée - fixed_width          : buckets de largeur params.width sur bucket_col - equal_count          : params.n_buckets
+      buckets équi-effectif - exposure_share_min   : buckets minimaux tels que weight_col cumulé atteigne params.min_share
+      du total'
+    domain: generic
+    params:
+      source:
+        type: table
+      rule:
+        type: dict
+      weight:
+        type: table
+        note: optionnel, utilisé par certaines règles.
+    outputs:
+      return_payload:
+        aggregated: table
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.analyze_data_and_request:
+    description: Inférences factuelles sur la période d'observation à partir d'un DataFrame de records normalisés. Un seul
+      appel retourne les 4 grandeurs consommées par le preamble via output_mapping.
+    domain: master
+    when_to_use: '- Phase master_from_data, après normalize_records.'
+    params:
+      records:
+        type: table
+        note: DataFrame normalisé avec colonnes date_sortie, cause_sortie.
+    outputs:
+      return_payload:
+        period_years: list[int]
+        first_death_year: int
+        last_death_year: int
+        n_years: int
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.classify_request:
+    description: 'Classifie une demande utilisateur en langage naturel vers un objectif méthodologique parmi une liste fermée.
+      V1 trivial : retourne toujours ''construction_table_mortalite'' (seul objectif supporté aujourd''hui).'
+    domain: master
+    when_to_use: '- Au démarrage de session Master, pour inférer study_objective.'
+    params:
+      request:
+        type: string
+        note: Demande utilisateur en langage naturel.
+    outputs:
+      return_payload:
+        objective: string
+        gender_mode: string — unisex | by_sex
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.normalize_records:
+    description: Applique column_mapping (renommage de colonnes) et value_mapping (substitution de valeurs enum) sur un DataFrame.
+      Retourne une copie conforme au shape attendu par le YAML.
+    domain: master
+    params:
+      records:
+        type: table
+      column_mapping:
+        type: dict
+        note: '{old_name: new_name}.'
+      value_mapping:
+        type: dict
+        note: '{column: {observed: canonical}}.'
+    outputs:
+      return_payload:
+        normalized_records: table
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
+  master.suggest_value_mapping:
+    description: Pour chaque colonne enum déclarée dans enum_specs, compare les valeurs observées dans le DataFrame aux valeurs
+      autorisées. Propose un mapping via heuristique (normalisation + synonymes). Les valeurs sans correspondance évidente
+      sont remontées dans 'unmapped' pour arbitrage utilisateur.
+    domain: master
+    params:
+      records:
+        type: table
+      enum_specs:
+        type: dict
+        note: '{column_name: [allowed_values]}'
+    outputs:
+      return_payload:
+        value_mapping: dict
+        unmapped: dict
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-04-20'
   graphs.report_figures:
     display_name: Graphiques rapport de mortalité
     short_description: Génère les 7 types de graphiques standards pour un rapport de mortalité.
@@ -568,6 +679,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement, pas de données du data_store.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       age_min:
         type: int
         values: 0–120
@@ -1092,8 +1206,6 @@ tools:
         bic_poisson: float — critère BIC (si disponible)
         n_non_monotone: int — violations de monotonicité après âge 40
     quality_gates:
-      blocking:
-      - n_non_monotone > 0 après âge 40 → NON ACCEPTABLE pour un rapport final.
       non_blocking:
       - AIC/BIC disponibles → les logger pour comparaison si plusieurs méthodes
     errors:
@@ -1103,9 +1215,9 @@ tools:
     - error: 'Méthode inconnue : ''...'
       cause: Valeur de method incorrecte.
       action: 'Utiliser uniquement : whittaker, gompertz, makeham, spline.'
-    reasoning_hint: Si diagnostics indique recommendation="whittaker" et pct_low > 20%, commencer avec lambda_wh=200. Si n_non_monotone
-      > 0, doubler lambda. La monotonie est obligatoire pour une table de certification. Ne jamais valider une table avec
-      des inversions après 40 ans.
+    reasoning_hint: 'Si diagnostics indique recommendation="whittaker" et pct_low > 20%, commencer avec lambda_wh=200. Si
+      le retour contient `decision_required` (n_non_monotone > 0), ne PAS relancer automatiquement : présenter les options
+      à l''utilisateur en texte, attendre son choix, puis exécuter l''option choisie au tour suivant.'
     exemplar_query: Quel lambda Whittaker choisir quand 35% des âges sont sous le seuil de crédibilité ?
   graphs.graph_from_spec:
     display_name: Graphique depuis spec YAML
@@ -1132,6 +1244,41 @@ tools:
       return_payload:
         path: str  — absolute path to PNG file
         warning: str  — populated if graph could not be generated
+  preprocessing.clean_records:
+    display_name: Retraitement des données aberrantes
+    short_description: Applique 6 règles de retraitement et produit un rapport d'exclusions.
+    description: Premier nœud du DAG Builder. Applique 6 règles figées de retraitement (R1 contrats sans effet, R2–R5 âges
+      aberrants, R6 sortie < entrée), produit la base assainie et un rapport d'exclusions détaillé.
+    domain: preprocessing
+    capability_group: preprocessing
+    depends_on:
+    - master.normalize_records
+    required_by:
+    - builder.exposure
+    - statistical_analysis.time_series
+    - statistical_analysis.age_distribution
+    - statistical_analysis.segmentation
+    client_visible: true
+    when_to_use: Systématiquement, avant tout tool statistical_analysis.* ou builder.* consommant des records. Les tools en
+      aval reçoivent cleaned_records, jamais input_records brut.
+    when_not_to_use: N/A — toujours appelé.
+    prerequisites:
+      required_tools: []
+      required_data_store_keys: []
+      note: reçoit df (DataFrame) déjà normalisé par Master (column_mapping,
+    outputs:
+      data_store_keys_written:
+      - 'cleaned_records : DataFrame — records après exclusions'
+      - 'exclusion_report : dict — initial_count, final_count, rules'
+      return_payload:
+        cleaned_records: table — records après retraitement (R1–R6)
+        exclusion_report: dict — initial_count, final_count, rules
+        total_records: integer — nombre de lignes post-retraitement (exclusion_report.final_count)
+    quality_gates:
+      blocking:
+      - final_count == 0 → retourne erreur.
+      non_blocking:
+      - final_count < 0.5 × initial_count → warning.
   builder.benchmarking:
     display_name: Benchmarking vs table de référence
     short_description: Calcule facteurs d'abattement et SMR par rapport à une table réglementaire.

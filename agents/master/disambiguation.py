@@ -541,7 +541,10 @@ def run_disambiguation(
                     "value_mapping_suggestion": vm["suggestion"],
                     "form_fields":             [],
                 }
-            # stage == "skip" : rien à mapper, on poursuit
+            # stage == "skip" : rien à mapper, on marque comme confirmé pour
+            # débloquer maybe_normalize_records en aval (sinon input_records
+            # n'est jamais stocké → branche déterministe du Builder skippée).
+            data_store["value_mapping_confirmed"] = True
 
     # 2. Vérification des prérequis
     prereq_check = check_prerequisites(task_type, df_json, data_store)

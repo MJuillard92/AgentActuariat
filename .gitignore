@@ -79,3 +79,6 @@ base_de_connaissance/
 *.out
 *.toc
 *.synctex.gz
+
+# Git worktrees locaux (isolation parallel work)
+.worktrees/
