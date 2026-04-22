@@ -92,47 +92,16 @@ import numpy as np
 from agents.mortality.dictionary.column_schema import find_col as _find_col, COLUMN_SCHEMA as _CS
 
 
-def run(df: pd.DataFrame, params: dict | None = None) -> dict:
+def _compute_annual(valid: pd.DataFrame, df: pd.DataFrame, exit_col: str | None,
+                    year_min: int, year_max: int) -> list[dict]:
     """
-    Construit une série temporelle annuelle :
-      - nb_contrats_entres : contrats dont la date d'entrée est dans l'année
-      - nb_deces           : décès survenus dans l'année
-      - exposition_pa      : personne-années d'exposition dans l'année (approx.)
-
-    Détecte aussi les années avec données manquantes ou volumes anormalement bas.
+    Calcule la série annuelle pour le sous-ensemble `valid` de `df`.
+    `valid` peut être un filtre par sexe ou la totalité des lignes valides.
+    `df` est toujours le DataFrame complet (pour date_naissance via index).
     """
-    entry_col  = _find_col(df, _CS["date_entree"]["candidates"])
-    exit_col   = _find_col(df, _CS["date_sortie"]["candidates"])
-    death_col  = _find_col(df, _CS["cause_sortie"]["candidates"])
-
-    if not entry_col:
-        return {"erreur": "Colonne date d'entrée introuvable. Colonnes : " + str(list(df.columns))}
-
-    # Parsing des dates
-    df = df.copy()
-    df["_entree"] = pd.to_datetime(df[entry_col], format="mixed", dayfirst=True, errors="coerce")
-    if exit_col:
-        df["_sortie"] = pd.to_datetime(df[exit_col], format="mixed", dayfirst=True, errors="coerce")
-    else:
-        df["_sortie"] = pd.NaT
-
-    if death_col:
-        col = df[death_col].astype(str).str.lower().str.strip()
-        df["_is_dead"] = col.isin(["deces", "décès", "decede", "décédé", "d", "1", "true", "mort", "dead", "dcd"])
-    else:
-        df["_is_dead"] = False
-
-    valid = df.dropna(subset=["_entree"])
-    if len(valid) == 0:
-        return {"erreur": "Aucune date d'entrée valide."}
-
-    year_min = int(valid["_entree"].dt.year.min())
-    year_max = int(valid["_sortie"].dt.year.max()) if exit_col and valid["_sortie"].notna().any() \
-               else int(valid["_entree"].dt.year.max())
-
+    dn_col = _find_col(df, _CS["date_naissance"]["candidates"])
     rows = []
     for year in range(year_min, year_max + 1):
-        # Contrats actifs dans l'année (entrée avant fin d'année, sortie après début)
         start = pd.Timestamp(year, 1, 1)
         end   = pd.Timestamp(year, 12, 31)
 
@@ -165,8 +134,7 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             expo = len(actifs)  # approximation : 1 personne-année par contrat actif
 
         # Âge moyen à l'entrée pour les contrats entrés dans l'année
-        if len(entres) > 0:
-            dn_col = _find_col(df, _CS["date_naissance"]["candidates"])
+        if len(entres) > 0 and dn_col:
             ent_dn = pd.to_datetime(df.loc[entres.index, dn_col],
                                     format="mixed", dayfirst=True, errors="coerce")
             ages_entres = (entres["_entree"] - ent_dn).dt.days / 365.25
@@ -175,9 +143,8 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             age_moyen_entres = None
 
         # Âge moyen au décès pour les décès survenus dans l'année
-        if nb_deces > 0 and exit_col:
+        if nb_deces > 0 and exit_col and dn_col:
             deces_mask = valid["_is_dead"] & (valid["_sortie"].dt.year == year)
-            dn_col = _find_col(df, _CS["date_naissance"]["candidates"])
             dec_dn = pd.to_datetime(df.loc[valid[deces_mask].index, dn_col],
                                     format="mixed", dayfirst=True, errors="coerce")
             ages_deces = (valid.loc[deces_mask, "_sortie"] - dec_dn).dt.days / 365.25
@@ -200,7 +167,53 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             "taux_deces":        taux_deces,
         })
 
-    series = pd.DataFrame(rows).set_index("annee")
+    return rows
+
+
+def run(df: pd.DataFrame, params: dict | None = None) -> dict:
+    """
+    Construit une série temporelle annuelle :
+      - nb_contrats_entres : contrats dont la date d'entrée est dans l'année
+      - nb_deces           : décès survenus dans l'année
+      - exposition_pa      : personne-années d'exposition dans l'année (approx.)
+
+    Détecte aussi les années avec données manquantes ou volumes anormalement bas.
+    Si params["by_sex"] est True, produit aussi serie_h et serie_f.
+    """
+    p = params or {}
+    by_sex = bool(p.get("by_sex", False))
+
+    entry_col  = _find_col(df, _CS["date_entree"]["candidates"])
+    exit_col   = _find_col(df, _CS["date_sortie"]["candidates"])
+    death_col  = _find_col(df, _CS["cause_sortie"]["candidates"])
+
+    if not entry_col:
+        return {"erreur": "Colonne date d'entrée introuvable. Colonnes : " + str(list(df.columns))}
+
+    # Parsing des dates
+    df = df.copy()
+    df["_entree"] = pd.to_datetime(df[entry_col], format="mixed", dayfirst=True, errors="coerce")
+    if exit_col:
+        df["_sortie"] = pd.to_datetime(df[exit_col], format="mixed", dayfirst=True, errors="coerce")
+    else:
+        df["_sortie"] = pd.NaT
+
+    if death_col:
+        col = df[death_col].astype(str).str.lower().str.strip()
+        df["_is_dead"] = col.isin(["deces", "décès", "decede", "décédé", "d", "1", "true", "mort", "dead", "dcd"])
+    else:
+        df["_is_dead"] = False
+
+    valid = df.dropna(subset=["_entree"])
+    if len(valid) == 0:
+        return {"erreur": "Aucune date d'entrée valide."}
+
+    year_min = int(valid["_entree"].dt.year.min())
+    year_max = int(valid["_sortie"].dt.year.max()) if exit_col and valid["_sortie"].notna().any() \
+               else int(valid["_entree"].dt.year.max())
+
+    global_rows = _compute_annual(valid, df, exit_col, year_min, year_max)
+    series = pd.DataFrame(global_rows).set_index("annee")
 
     # Détection d'anomalies
     anomalies = []
@@ -211,13 +224,24 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         elif mean_expo > 0 and row["exposition_pa"] < 0.1 * mean_expo:
             anomalies.append(f"{year} : exposition anormalement faible ({row['exposition_pa']:.0f} PA)")
 
-    result = {
-        "serie": series.reset_index().to_dict(orient="records"),
+    result: dict = {
+        "serie":     series.reset_index().to_dict(orient="records"),
         "annee_min": year_min,
         "annee_max": year_max,
         "nb_annees": year_max - year_min + 1,
     }
     if anomalies:
         result["anomalies"] = anomalies
+
+    if by_sex:
+        sexe_col = _find_col(df, _CS["sexe"]["candidates"])
+        if sexe_col:
+            sexe = df[sexe_col].astype(str).str.upper().str.strip()
+            mask_h = sexe.isin(["H", "M", "HOMME", "MALE", "1"])
+            mask_f = sexe.isin(["F", "FEMME", "FEMALE", "2"])
+            valid_h = valid[mask_h.reindex(valid.index, fill_value=False)]
+            valid_f = valid[mask_f.reindex(valid.index, fill_value=False)]
+            result["serie_h"] = _compute_annual(valid_h, df, exit_col, year_min, year_max)
+            result["serie_f"] = _compute_annual(valid_f, df, exit_col, year_min, year_max)
 
     return result

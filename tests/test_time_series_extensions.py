@@ -31,3 +31,20 @@ def test_series_includes_taux_deces():
         if row["exposition_pa"] > 0:
             expected = row["nb_deces"] / row["exposition_pa"] * 1000
             assert abs(row["taux_deces"] - expected) < 1e-6
+
+
+def test_by_sex_produces_serie_h_and_serie_f():
+    result = run(_fixture_df(), params={"by_sex": True})
+    assert "serie_h" in result
+    assert "serie_f" in result
+    # H : 2 contrats (sexe=H), F : 1 contrat (sexe=F)
+    total_entres_h = sum(r["nb_entres"] for r in result["serie_h"])
+    total_entres_f = sum(r["nb_entres"] for r in result["serie_f"])
+    assert total_entres_h == 2
+    assert total_entres_f == 1
+
+
+def test_by_sex_false_omits_sex_keys():
+    result = run(_fixture_df(), params={"by_sex": False})
+    assert "serie_h" not in result
+    assert "serie_f" not in result
