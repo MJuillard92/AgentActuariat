@@ -32,14 +32,25 @@ def _preamble_data_store():
             {"annee": 2020, "nb_deces": 15},
             {"annee": 2021, "nb_deces": 17},
         ],
+        # US-38 : exclusion_report requis par la section data_preprocessing
+        "exclusion_report":       {
+            "initial_count": 1000,
+            "final_count":   950,
+            "rules": [
+                {"rule_label": "Âge à la sortie < âge à l'entrée", "count": 30},
+                {"rule_label": "Données manquantes",                "count": 20},
+            ],
+        },
     }
 
 
 def test_load_plan_returns_one_section_for_preamble_yaml():
     plan = load_plan(_preamble_data_store())
     assert isinstance(plan, ReportPlan)
-    assert len(plan.sections) == 1
+    # US-38 : data_preprocessing s'est ajouté après preamble → 2 sections actives
+    assert len(plan.sections) == 2
     assert plan.sections[0].section_id == "preamble"
+    assert plan.sections[1].section_id == "data_preprocessing"
 
 
 def test_section_plan_has_resolved_narrative():

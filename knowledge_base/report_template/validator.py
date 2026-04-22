@@ -434,7 +434,7 @@ def _warn_unused_keys(
             if isinstance(v, str):
                 consumed.add(v)
 
-    # visual_specs.source
+    # visual_specs.source (support sub-paths like "exclusion_report.rules")
     for section in doc.get("sections") or []:
         if not isinstance(section, dict):
             continue
@@ -443,6 +443,10 @@ def _warn_unused_keys(
                 src = spec.get("source")
                 if isinstance(src, str):
                     consumed.add(src)
+                    # also mark the base key consumed for sub-paths (e.g. "foo.bar" → "foo")
+                    base = src.split(".")[0]
+                    if base != src:
+                        consumed.add(base)
 
     for key, (block, idx) in produced_keys.items():
         if key not in consumed:

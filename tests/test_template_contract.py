@@ -142,3 +142,20 @@ def test_cli_exits_one_on_invalid(fake_repo):
     )
     assert result.returncode == 1
     assert "inexistant" in result.stdout or "inexistant" in result.stderr
+
+
+# ───────────────── US-38 : section data_preprocessing ─────────────────
+
+def test_data_preprocessing_section_exists():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    ids = [s["id"] for s in tpl["sections"]]
+    assert "data_preprocessing" in ids
+
+
+def test_data_preprocessing_has_exclusion_table():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    section = next(s for s in tpl["sections"] if s["id"] == "data_preprocessing")
+    vs_ids = [v["id"] for v in section["visual_specs"]]
+    assert "exclusion_table" in vs_ids

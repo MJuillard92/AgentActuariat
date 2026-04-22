@@ -207,9 +207,9 @@ sections:
         soit {{ num_observation_years }} années. L'étude porte sur une
         exposition totale de {{ total_exposure }} années-personne
         et {{ total_deaths }} décès observés.
-        
-        D'une manière synthétique,l'étude réalisée peut se résumer de la 
-        sorte : analyse statistique du portefeuille assuré, calcul des taux 
+
+        D'une manière synthétique,l'étude réalisée peut se résumer de la
+        sorte : analyse statistique du portefeuille assuré, calcul des taux
         bruts par application de la méthologie de Kaplan Meier, lissage des
         taux bruts puis backetsting du niveau global de pruduence.
 
@@ -237,6 +237,52 @@ sections:
         source: serie
         x_axis: {key: annee,    label: "Année"}
         y_axis: {key: nb_deces, label: "Décès"}
+
+  - id: data_preprocessing
+    label: "Retraitement des données"
+    required: true
+    dependencies: [preamble]
+    # pas de bloc `activation` → toujours rendue
+
+    narrative:
+      text: |
+        L'objet de cette section est de décrire les retraitements appliqués
+        à la base initiale afin de mener les travaux de certification de la
+        table d'expérience. De manière synthétique, les retraitements
+        consistent à supprimer les contrats sans effet et les données
+        aberrantes. Le détail des lignes exclues est donné ci-après.
+
+    llm_directives:
+      tone: "professionnel, actuariel, descriptif"
+      length_words: [100, 180]
+      rag_query: "retraitement données aberrantes portefeuille mortalité"
+
+      post_table_analysis:
+        instruction: >
+          À partir de la table d'exclusions, produire 2 à 4 bullets :
+          (1) identifier les règles qui ont le plus d'impact en volume ;
+          (2) si une règle exclut > 10% de la base initiale, commenter
+          spécifiquement (plausibilité actuarielle, qualité de données) ;
+          (3) conclure sur la base finale conservée.
+          Style factuel.
+        length_words: [60, 120]
+        few_shot_example: |
+          - la règle "âge à la sortie < âge à l'entrée" exclut le plus de
+            lignes, traduisant une saisie inversée récurrente ;
+          - les règles d'âges > 100 ans n'excluent aucune ligne, indiquant
+            une base cohérente sur ce critère ;
+          - la base finale conserve {{ exclusion_report.final_count }} lignes
+            sur {{ exclusion_report.initial_count }} initiales.
+
+    visual_specs:
+      - id: exclusion_table
+        type: table
+        purpose: "Détail des exclusions par règle appliquée."
+        source: exclusion_report.rules
+        columns:
+          - {key: rule_label, label: "Règle appliquée"}
+          - {key: count,      label: "Nombre de lignes supprimées", format: int}
+        highlight_rule: totals_row
 
 
 # ─────────────────────────────────────────────────────────────────────────
