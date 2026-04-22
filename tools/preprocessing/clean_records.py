@@ -1,10 +1,64 @@
 """
 TOOL CONTRACT — preprocessing.clean_records
-═══════════════════════════════════════════
+════════════════════════════════════════════════════════════════
 
-Premier nœud du DAG Builder. Reçoit les records normalisés par Master,
-applique les règles de retraitement figées, produit la base assainie
-et le rapport d'exclusions consommé par la section data_preprocessing.
+IDENTITY
+--------
+name          : preprocessing.clean_records
+domain        : preprocessing
+version       : 1.0.0
+author        : Marc Juillard
+last_updated  : 2026-04-21
+
+DESCRIPTION
+-----------
+Premier nœud du DAG Builder. Applique 6 règles figées de retraitement
+(R1 contrats sans effet, R2–R5 âges aberrants, R6 sortie < entrée),
+produit la base assainie et un rapport d'exclusions détaillé.
+
+WHEN TO USE
+-----------
+Systématiquement, avant tout tool statistical_analysis.* ou builder.*
+consommant des records. Les tools en aval reçoivent cleaned_records,
+jamais input_records brut.
+
+WHEN NOT TO USE
+---------------
+N/A — toujours appelé.
+
+PREREQUISITES
+-------------
+required_tools: [master.normalize_records]
+required_data_store_keys: []
+Note: reçoit df (DataFrame) déjà normalisé par Master (column_mapping,
+value_mapping appliqués).
+
+INPUTS
+------
+params: {}
+
+OUTPUTS
+-------
+data_store_keys_written:
+  - cleaned_records : DataFrame — records après exclusions
+  - exclusion_report : dict — initial_count, final_count, rules
+
+QUALITY GATES
+-------------
+BLOCKING:
+  - final_count == 0 → retourne erreur.
+NON-BLOCKING:
+  - final_count < 0.5 × initial_count → warning.
+
+CATALOGUE METADATA
+------------------
+display_name      : Retraitement des données aberrantes
+short_description : Applique 6 règles de retraitement et produit un rapport d'exclusions.
+domain            : preprocessing
+capability_group  : preprocessing
+depends_on        : [master.normalize_records]
+required_by       : [builder.exposure, statistical_analysis.time_series, statistical_analysis.age_distribution, statistical_analysis.segmentation]
+client_visible    : true
 """
 from __future__ import annotations
 import pandas as pd

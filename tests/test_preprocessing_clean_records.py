@@ -104,3 +104,15 @@ def test_rules_are_cumulative_no_double_counting():
     assert r1["count"] == 1
     assert r4["count"] == 0  # déjà retirée par R1
     assert result["exclusion_report"]["final_count"] == 1
+
+
+import yaml
+from pathlib import Path
+
+
+def test_tool_registered_in_catalogue():
+    catalogue = yaml.safe_load(Path("tools/catalogue.yaml").read_text())
+    assert "preprocessing.clean_records" in catalogue["tools"]
+    entry = catalogue["tools"]["preprocessing.clean_records"]
+    assert entry["domain"] == "preprocessing"
+    assert entry["client_visible"] is True

@@ -1221,6 +1221,37 @@ tools:
       return_payload:
         path: str  — absolute path to PNG file
         warning: str  — populated if graph could not be generated
+  preprocessing.clean_records:
+    display_name: Retraitement des données aberrantes
+    short_description: Applique 6 règles de retraitement et produit un rapport d'exclusions.
+    description: Premier nœud du DAG Builder. Applique 6 règles figées de retraitement (R1 contrats sans effet, R2–R5 âges
+      aberrants, R6 sortie < entrée), produit la base assainie et un rapport d'exclusions détaillé.
+    domain: preprocessing
+    capability_group: preprocessing
+    depends_on:
+    - master.normalize_records
+    required_by:
+    - builder.exposure
+    - statistical_analysis.time_series
+    - statistical_analysis.age_distribution
+    - statistical_analysis.segmentation
+    client_visible: true
+    when_to_use: Systématiquement, avant tout tool statistical_analysis.* ou builder.* consommant des records. Les tools en
+      aval reçoivent cleaned_records, jamais input_records brut.
+    when_not_to_use: N/A — toujours appelé.
+    prerequisites:
+      required_tools: []
+      required_data_store_keys: []
+      note: reçoit df (DataFrame) déjà normalisé par Master (column_mapping,
+    outputs:
+      data_store_keys_written:
+      - 'cleaned_records : DataFrame — records après exclusions'
+      - 'exclusion_report : dict — initial_count, final_count, rules'
+    quality_gates:
+      blocking:
+      - final_count == 0 → retourne erreur.
+      non_blocking:
+      - final_count < 0.5 × initial_count → warning.
   builder.benchmarking:
     display_name: Benchmarking vs table de référence
     short_description: Calcule facteurs d'abattement et SMR par rapport à une table réglementaire.
