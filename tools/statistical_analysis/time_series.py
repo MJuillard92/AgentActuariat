@@ -164,11 +164,40 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         else:
             expo = len(actifs)  # approximation : 1 personne-année par contrat actif
 
+        # Âge moyen à l'entrée pour les contrats entrés dans l'année
+        if len(entres) > 0:
+            dn_col = _find_col(df, _CS["date_naissance"]["candidates"])
+            ent_dn = pd.to_datetime(df.loc[entres.index, dn_col],
+                                    format="mixed", dayfirst=True, errors="coerce")
+            ages_entres = (entres["_entree"] - ent_dn).dt.days / 365.25
+            age_moyen_entres = round(float(ages_entres.mean()), 2) if ages_entres.notna().any() else None
+        else:
+            age_moyen_entres = None
+
+        # Âge moyen au décès pour les décès survenus dans l'année
+        if nb_deces > 0 and exit_col:
+            deces_mask = valid["_is_dead"] & (valid["_sortie"].dt.year == year)
+            dn_col = _find_col(df, _CS["date_naissance"]["candidates"])
+            dec_dn = pd.to_datetime(df.loc[valid[deces_mask].index, dn_col],
+                                    format="mixed", dayfirst=True, errors="coerce")
+            ages_deces = (valid.loc[deces_mask, "_sortie"] - dec_dn).dt.days / 365.25
+            age_moyen_deces = round(float(ages_deces.mean()), 2) if ages_deces.notna().any() else None
+        else:
+            age_moyen_deces = None
+
+        expo_pa = round(float(expo), 1)
+
+        # Taux de décès (‰ PA) — calculé sur expo_pa pour cohérence avec la valeur stockée
+        taux_deces = nb_deces / expo_pa * 1000 if expo_pa > 0 else 0.0
+
         rows.append({
-            "annee":        year,
-            "nb_entres":    nb_entres,
-            "nb_deces":     nb_deces,
-            "exposition_pa": round(float(expo), 1),
+            "annee":             year,
+            "nb_entres":         nb_entres,
+            "nb_deces":          nb_deces,
+            "exposition_pa":     expo_pa,
+            "age_moyen_entres":  age_moyen_entres,
+            "age_moyen_deces":   age_moyen_deces,
+            "taux_deces":        taux_deces,
         })
 
     series = pd.DataFrame(rows).set_index("annee")
