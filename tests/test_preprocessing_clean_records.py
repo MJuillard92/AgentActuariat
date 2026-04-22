@@ -33,3 +33,49 @@ def test_r1_removes_sans_objet_contracts():
     r1 = next(r for r in report["rules"] if r["rule_id"] == "R1")
     assert r1["count"] == 1
     assert r1["rule_label"] == "Contrats sans effet (cause de sortie \u00ab\u00a0sans objet\u00a0\u00bb)"
+
+
+def _row(dn, de, ds, cs="autre", sx="H"):
+    return {"date_naissance": dn, "date_entree": de, "date_sortie": ds,
+            "cause_sortie": cs, "sexe": sx}
+
+
+def test_r2_removes_negative_entry_age():
+    df = pd.DataFrame([
+        _row("2015-01-01", "2010-01-01", "2020-01-01"),  # âge entrée < 0
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    assert result["exclusion_report"]["final_count"] == 1
+    r2 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R2")
+    assert r2["count"] == 1
+
+
+def test_r3_removes_negative_exit_age():
+    df = pd.DataFrame([
+        _row("1970-01-01", "2010-01-01", "1960-01-01"),  # âge sortie < 0
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    r3 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R3")
+    assert r3["count"] == 1
+
+
+def test_r4_removes_entry_age_over_100():
+    df = pd.DataFrame([
+        _row("1900-01-01", "2020-01-01", "2021-01-01"),  # 120 ans à l'entrée
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    r4 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R4")
+    assert r4["count"] == 1
+
+
+def test_r5_removes_exit_age_over_100():
+    df = pd.DataFrame([
+        _row("1900-01-01", "1950-01-01", "2005-01-01"),  # 105 à la sortie
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    r5 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R5")
+    assert r5["count"] == 1
