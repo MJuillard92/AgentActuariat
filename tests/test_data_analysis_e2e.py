@@ -1,4 +1,4 @@
-"""E2E rendering : mode unisex (US-40)."""
+"""E2E rendering : modes unisex (US-40) et by_sex (US-41)."""
 from __future__ import annotations
 
 import sys
@@ -46,6 +46,18 @@ def _data_store_unisex() -> dict:
     }
 
 
+def _data_store_by_sex() -> dict:
+    base = _data_store_unisex()
+    base["gender_segmentation"] = "by_sex"
+    base["serie_h"] = [{"annee": 2019, "nb_entres": 180, "nb_deces": 6, "exposition_pa": 540.0,
+                        "age_moyen_entres": 45.1, "age_moyen_deces": 62.3, "taux_deces": 11.11}]
+    base["serie_f"] = [{"annee": 2019, "nb_entres": 120, "nb_deces": 4, "exposition_pa": 360.0,
+                        "age_moyen_entres": 43.2, "age_moyen_deces": 64.1, "taux_deces": 11.11}]
+    base["ages"]["distribution_list_h"] = [{"tranche": "30-34", "nb_contrats": 30}]
+    base["ages"]["distribution_list_f"] = [{"tranche": "30-34", "nb_contrats": 20}]
+    return base
+
+
 def test_unisex_manifest_activates_correct_sections():
     from knowledge_base.report_template.template_loader import build_manifest
     context = {"gender_segmentation": "unisex"}
@@ -68,3 +80,24 @@ def test_unisex_preprocessing_renders_exclusion_table():
     assert len(tables) == 1
     # rows[0] = header, rows[1:] = data (1 par règle)
     assert len(tables[0]["rows"]) == 7  # 1 header + 6 rules
+
+
+def test_by_sex_manifest_activates_correct_sections():
+    from knowledge_base.report_template.template_loader import build_manifest
+    context = {"gender_segmentation": "by_sex"}
+    manifest = build_manifest(TEMPLATE, context=context)
+    ids = [s["id"] for s in manifest.sections]
+    assert "data_analysis_by_sex" in ids
+    assert "data_analysis_unisex" not in ids
+
+
+def test_by_sex_section_has_four_visuals():
+    from agents.report.pipeline._01_load_plan import load_plan
+    context = {"gender_segmentation": "by_sex"}
+    plan = load_plan(_data_store_by_sex(), context=context)
+    by_sex_section = next(s for s in plan.sections if s.section_id == "data_analysis_by_sex")
+    vs = by_sex_section.visual_specs
+    # visual_specs sont des dicts YAML bruts (pas des dataclasses)
+    vs_ids = [v["id"] for v in vs]
+    assert vs_ids == ["annual_statistics_male", "annual_statistics_female",
+                      "exposure_distribution_male", "exposure_distribution_female"]
