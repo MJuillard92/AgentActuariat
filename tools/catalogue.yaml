@@ -202,6 +202,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       by_sex:
         type: bool
         values: true | false
@@ -221,6 +224,8 @@ tools:
         age_median: float
         age_moyen: float
         distribution: 'dict — {tranche: nb_contrats}'
+        distribution_list: list[dict] — [{tranche, nb_contrats}]
+        ages: dict — résultat complet (age_min, age_max, distribution_list, ...)
     quality_gates:
       blocking:
       - Colonnes date_entree ou date_naissance absentes → retourne erreur.
@@ -368,6 +373,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       columns:
         type: list[string]
         values: noms exacts des colonnes CSV
@@ -411,6 +419,15 @@ tools:
       required_tools: []
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement.
+    params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
+      by_sex:
+        type: bool
+        values: true | false
+        default: 'false'
+        note: Si true, produit aussi serie_h et serie_f ventilées par sexe.
     outputs:
       data_store_keys_written:
       - 'series : dict — résultat complet (serie, annee_min, annee_max, nb_annees, anomalies)'
@@ -420,6 +437,8 @@ tools:
         annee_max: int
         nb_annees: int
         anomalies: list[str] — années avec données manquantes ou exposition faible
+        serie_h: list[dict] — série annuelle filtrée hommes (si by_sex=True)
+        serie_f: list[dict] — série annuelle filtrée femmes (si by_sex=True)
     quality_gates:
       blocking:
       - Colonne date_entree absente → retourne erreur.
@@ -487,6 +506,7 @@ tools:
     outputs:
       return_payload:
         objective: string
+        gender_mode: string — unisex | by_sex
     version: 1.0.0
     author: Marc Juillard
     last_updated: '2026-04-20'
@@ -659,6 +679,9 @@ tools:
       required_data_store_keys: []
       note: reçoit df (DataFrame) directement, pas de données du data_store.
     params:
+      records:
+        type: table
+        note: DataFrame assaini produit par preprocessing.clean_records.
       age_min:
         type: int
         values: 0–120
@@ -1247,6 +1270,10 @@ tools:
       data_store_keys_written:
       - 'cleaned_records : DataFrame — records après exclusions'
       - 'exclusion_report : dict — initial_count, final_count, rules'
+      return_payload:
+        cleaned_records: table — records après retraitement (R1–R6)
+        exclusion_report: dict — initial_count, final_count, rules
+        total_records: integer — nombre de lignes post-retraitement (exclusion_report.final_count)
     quality_gates:
       blocking:
       - final_count == 0 → retourne erreur.
