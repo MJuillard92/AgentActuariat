@@ -142,3 +142,38 @@ def test_cli_exits_one_on_invalid(fake_repo):
     )
     assert result.returncode == 1
     assert "inexistant" in result.stdout or "inexistant" in result.stderr
+
+
+# ───────────────── US-38 : section data_preprocessing ─────────────────
+
+def test_data_preprocessing_section_exists():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    ids = [s["id"] for s in tpl["sections"]]
+    assert "data_preprocessing" in ids
+
+
+def test_data_preprocessing_has_exclusion_table():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    section = next(s for s in tpl["sections"] if s["id"] == "data_preprocessing")
+    vs_ids = [v["id"] for v in section["visual_specs"]]
+    assert "exclusion_table" in vs_ids
+
+
+# ───────────────── US-39 : sections data_analysis_unisex + data_analysis_by_sex ─────────────────
+
+def test_data_analysis_unisex_and_by_sex_exist():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    ids = [s["id"] for s in tpl["sections"]]
+    assert "data_analysis_unisex" in ids
+    assert "data_analysis_by_sex" in ids
+
+
+def test_data_analysis_sections_have_activation():
+    import yaml
+    tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
+    for sid in ("data_analysis_unisex", "data_analysis_by_sex"):
+        section = next(s for s in tpl["sections"] if s["id"] == sid)
+        assert section["activation"]["key"] == "gender_segmentation"

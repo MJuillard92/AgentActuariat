@@ -35,6 +35,9 @@ Note: reçoit df (DataFrame) directement.
 INPUTS
 ------
 params:
+  records:
+    type    : table
+    note    : DataFrame assaini produit par preprocessing.clean_records.
   by_sex:
     type    : bool
     values  : true | false
@@ -52,11 +55,13 @@ OUTPUTS
 data_store_keys_written:
   - ages : dict — résultat complet (age_min, age_max, age_median, age_moyen, distribution)
 return_payload:
-  age_min      : float
-  age_max      : float
-  age_median   : float
-  age_moyen    : float
-  distribution : dict — {tranche: nb_contrats}
+  age_min           : float
+  age_max           : float
+  age_median        : float
+  age_moyen         : float
+  distribution      : dict — {tranche: nb_contrats}
+  distribution_list : list[dict] — [{tranche, nb_contrats}]
+  ages              : dict — résultat complet (age_min, age_max, distribution_list, ...)
 
 QUALITY GATES
 -------------
@@ -149,6 +154,10 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         "distribution": _dist(ages),
     }
 
+    result["distribution_list"] = [
+        {"tranche": k, "nb_contrats": v} for k, v in result["distribution"].items()
+    ]
+
     if by_sex:
         sexe_col = _find_col(df, _CS["sexe"]["candidates"])
         if sexe_col:
@@ -157,8 +166,14 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             mask_f = sexe.isin(["F", "FEMME", "FEMALE", "2"])
             if mask_h.any():
                 result["distribution_h"] = _dist(ages[mask_h.values])
+                result["distribution_list_h"] = [
+                    {"tranche": k, "nb_contrats": v} for k, v in result["distribution_h"].items()
+                ]
             if mask_f.any():
                 result["distribution_f"] = _dist(ages[mask_f.values])
+                result["distribution_list_f"] = [
+                    {"tranche": k, "nb_contrats": v} for k, v in result["distribution_f"].items()
+                ]
         else:
             result["avertissement"] = "Colonne sexe non trouvée — distribution globale uniquement."
 

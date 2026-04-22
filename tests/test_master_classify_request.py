@@ -33,3 +33,18 @@ def test_contract_discoverable_by_registry():
     spec = registry["master.classify_request"]
     assert "request" in spec["inputs"]
     assert "objective" in spec["outputs"]
+
+
+def test_classify_detects_by_sex_mode():
+    result = run({"request": "Construis-moi une table H/F"}, {})
+    assert result["gender_mode"] == "by_sex"
+
+
+def test_classify_detects_unisex_mode_by_default():
+    result = run({"request": "Construis-moi une table de mortalité sur mon portefeuille"}, {})
+    assert result["gender_mode"] == "unisex"
+
+
+def test_classify_detects_unisex_explicit():
+    result = run({"request": "Je veux une table unisex"}, {})
+    assert result["gender_mode"] == "unisex"

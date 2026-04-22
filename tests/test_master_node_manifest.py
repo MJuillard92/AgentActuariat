@@ -32,10 +32,18 @@ def test_preflight_writer_ready_when_all_manifest_keys_present():
     from agents.mortality.agents.master_node import _preflight_writer
 
     data_store = {
+        # preprocessing outputs
+        "cleaned_records":  [{"id": 1}],   # non-empty list (falsy [] would fail)
+        "exclusion_report": {"initial_count": 50, "final_count": 48, "rules": []},
+        "total_records":    48,
+        # builder outputs
         "total_exposure":  1234.5,
         "total_deaths":    42,
         "segmentations":   {"sexe": [{"valeur": "H", "nb_contrats": 500}]},
         "serie":           [{"annee": 2020, "nb_deces": 10}],
+        "serie_h":         [{"annee": 2020, "nb_deces": 6}],
+        "serie_f":         [{"annee": 2020, "nb_deces": 4}],
+        "ages":            {"age_min": 25.0, "age_max": 80.0},
     }
 
     ready, missing = _preflight_writer(data_store)
@@ -51,4 +59,5 @@ def test_preflight_writer_missing_keys():
     ready, missing = _preflight_writer(data_store)
 
     assert ready is False
-    assert len(missing) == 3
+    # 10 builder_outputs keys minus total_exposure = 9 missing
+    assert len(missing) == 9
