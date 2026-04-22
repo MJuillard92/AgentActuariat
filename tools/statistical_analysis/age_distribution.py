@@ -149,6 +149,10 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         "distribution": _dist(ages),
     }
 
+    result["distribution_list"] = [
+        {"tranche": k, "nb_contrats": v} for k, v in result["distribution"].items()
+    ]
+
     if by_sex:
         sexe_col = _find_col(df, _CS["sexe"]["candidates"])
         if sexe_col:
@@ -157,8 +161,14 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             mask_f = sexe.isin(["F", "FEMME", "FEMALE", "2"])
             if mask_h.any():
                 result["distribution_h"] = _dist(ages[mask_h.values])
+                result["distribution_list_h"] = [
+                    {"tranche": k, "nb_contrats": v} for k, v in result["distribution_h"].items()
+                ]
             if mask_f.any():
                 result["distribution_f"] = _dist(ages[mask_f.values])
+                result["distribution_list_f"] = [
+                    {"tranche": k, "nb_contrats": v} for k, v in result["distribution_f"].items()
+                ]
         else:
             result["avertissement"] = "Colonne sexe non trouvée — distribution globale uniquement."
 
