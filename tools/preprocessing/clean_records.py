@@ -50,6 +50,9 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     ae, as_ = _ages(current)
     _apply(as_ > 100, "R5", "Âge à la sortie supérieur à 100 ans")
 
+    ae, as_ = _ages(current)
+    _apply(as_ < ae, "R6", "Âge à la sortie inférieur à l'âge à l'entrée")
+
     return {
         "cleaned_records": current.reset_index(drop=True),
         "exclusion_report": {

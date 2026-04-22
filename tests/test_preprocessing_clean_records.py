@@ -79,3 +79,28 @@ def test_r5_removes_exit_age_over_100():
     result = run(df)
     r5 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R5")
     assert r5["count"] == 1
+
+
+def test_r6_removes_exit_before_entry():
+    df = pd.DataFrame([
+        _row("1970-01-01", "2020-01-01", "2010-01-01"),  # sortie < entrée
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    r6 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R6")
+    assert r6["count"] == 1
+
+
+def test_rules_are_cumulative_no_double_counting():
+    # Une ligne violait plusieurs règles : ne doit être comptée que dans la 1ère déclenchée.
+    df = pd.DataFrame([
+        # ligne aberrante : sans_objet ET âge entrée > 100
+        _row("1900-01-01", "2020-01-01", "2021-01-01", cs="sans_objet"),
+        _row("1970-01-01", "2010-01-01", "2020-01-01"),  # ok
+    ])
+    result = run(df)
+    r1 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R1")
+    r4 = next(r for r in result["exclusion_report"]["rules"] if r["rule_id"] == "R4")
+    assert r1["count"] == 1
+    assert r4["count"] == 0  # déjà retirée par R1
+    assert result["exclusion_report"]["final_count"] == 1
