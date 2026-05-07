@@ -57,50 +57,189 @@ def _get_builder_keys() -> list[str]:
     return [entry.key for entry in manifest.builder_outputs]
 
 
+# ── Helpers report_mode → sections → clés requises ──────────────────────────
+
+def _sections_for_mode(
+    report_mode: str,
+    gender_segmentation: str | None = None,
+) -> list[str]:
+    """Retourne les section ids actifs pour un `report_mode` donné.
+
+    Lit le YAML via `build_manifest(context=...)`. Si `gender_segmentation` est
+    fourni, on filtre aussi les sections sex-specific (unisex vs by_sex).
+    """
+    from knowledge_base.report_template.template_loader import build_manifest
+    ctx: dict = {"report_mode": report_mode}
+    if gender_segmentation:
+        ctx["gender_segmentation"] = gender_segmentation
+    manifest = build_manifest(context=ctx)
+    return [s["id"] for s in manifest.sections if s.get("id")]
+
+
+def _keys_for_sections(section_ids: list[str]) -> list[str]:
+    """Collecte les clés data_store consommées par les sections données.
+
+    Parcours : pour chaque section active, extraire
+      - les placeholders `{{ key }}` de narrative.text / text_default /
+        text_raw_rates + post_table_analysis.few_shot_example
+      - les racines de `visual_specs[*].source` (sub-path `a.b.c` → on retient `a`)
+    """
+    import re
+    import yaml as _yaml
+    from knowledge_base.report_template.template_loader import DEFAULT_TEMPLATE
+
+    placeholder_re = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+    with open(DEFAULT_TEMPLATE, encoding="utf-8") as f:
+        tpl = _yaml.safe_load(f) or {}
+
+    keys: set[str] = set()
+    for section in (tpl.get("sections") or []):
+        if section.get("id") not in section_ids:
+            continue
+
+        # narrative + variantes
+        narrative = section.get("narrative") or {}
+        for field in ("text", "text_default", "text_raw_rates"):
+            text = narrative.get(field) or ""
+            keys.update(placeholder_re.findall(text))
+
+        # llm_directives.post_table_analysis.few_shot_example
+        directives = section.get("llm_directives") or {}
+        pta = directives.get("post_table_analysis") or {}
+        fse = pta.get("few_shot_example") or ""
+        keys.update(placeholder_re.findall(fse))
+
+        # visual_specs.source (on prend la racine du sub-path)
+        for v in (section.get("visual_specs") or []):
+            src = v.get("source") or ""
+            root = src.split(".")[0] if src else ""
+            if root:
+                keys.add(root)
+
+    # On ne retient que les clés effectivement dans builder_outputs
+    # (les placeholders peuvent référencer des master_from_data aussi, qu'on
+    # laisse gérer au Master — mais pour le pilotage Builder on ne pousse que
+    # les builder_outputs manquantes).
+    builder_outputs_keys = set(_get_builder_keys())
+    return sorted(keys & builder_outputs_keys)
+
+
+def _get_required_keys_for_current_mode(data_store: dict) -> list[str]:
+    """API utilisée par graph.py pour savoir si le Builder a terminé.
+
+    Lit `data_store["report_mode"]` et `data_store["study_plan"]["gender_segmentation"]`,
+    dérive les sections actives, retourne la liste des clés builder_outputs
+    requises.
+    """
+    mode = data_store.get("report_mode", "full_report")
+    sp = data_store.get("study_plan") or {}
+    gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
+    sections = _sections_for_mode(mode, gender)
+    return _keys_for_sections(sections)
+
+
 def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None) -> dict:
     """
-    Classifie l'intention de l'utilisateur via un appel JSON structuré.
-    Retourne {"intent": str, "reply": str}.
-    Intents : build_only | write_only | build_and_write | question
+    Classifie la demande sur 3 axes orthogonaux via un appel JSON structuré.
+
+    Retourne {"kind", "write", "report_mode", "reply"} :
+      - kind        : "task" | "question"
+      - write       : "yes" | "no" | "ask"   (mot 'rapport'/'PDF' explicite pour yes ;
+                                              refus explicite pour no ; sinon ask)
+      - report_mode : "full_report" | "raw_rates" | "description"
+      - reply       : confirmation 1-2 phrases
+
+    Anciens intents (build_only / write_only / build_and_write / question) ne sont
+    plus retournés — la branche Master utilise kind+write. Pour rétro-compat, on
+    calcule un `intent` équivalent à partir de (kind, write).
     """
     import openai
     from agents.mortality.agents._utils import call_with_retry
 
     builder_keys = _get_builder_keys()
     has_data  = bool(dataset_ref or data_store.get("_dataset_ref"))
-    has_calcs = all(data_store.get(k) for k in builder_keys)
+    # Note : on utilise `is not None` plutôt que la véracité brute car
+    # certaines builder_outputs peuvent être des DataFrames (ex: cleaned_records),
+    # et `bool(df)` lève ValueError côté pandas.
+    has_calcs = bool(builder_keys) and all(data_store.get(k) is not None for k in builder_keys)
 
-    context = (
+    ctx = (
         f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
         f"Calculs complets (prêt pour rapport) : {'oui' if has_calcs else 'non'}."
     )
 
     prompt = (
-        "Tu es un routeur d'intention pour un système actuariel. "
-        "Classifie la demande en une catégorie :\n"
-        "- build_only : calculs uniquement (exposition, taux, lissage…)\n"
-        "- write_only : rapport uniquement (les calculs sont supposés faits)\n"
-        "- build_and_write : calculs ET rapport\n"
-        "- question : question, explication, hors calculs/rapport\n\n"
-        f"Contexte : {context}\n"
+        "Tu es un routeur pour un système actuariel. Classifie la demande en 3 axes :\n\n"
+        "Axe 1 — kind :\n"
+        "  - task      : calculs / rapport\n"
+        "  - question  : explication, conversation hors calculs et hors rapport\n\n"
+        "Axe 2 — write (uniquement si kind=task) — RÈGLE STRICTE :\n"
+        "  - yes : le mot 'rapport', 'PDF' ou 'document' apparaît explicitement dans la demande\n"
+        "          (ex: 'fais-moi le rapport', 'génère un rapport', 'je veux un PDF')\n"
+        "  - no  : refus explicite du rapport ('sans rapport', 'pas de PDF', 'juste les calculs')\n"
+        "  - ask : AUCUN mot-clé explicite (défaut). 'construis une table' ou 'fais-moi une analyse'\n"
+        "          ne suffisent PAS pour yes — on posera la question avant de lancer les calculs.\n"
+        "  Si l'utilisateur répond à une question précédente sur le rapport (ex: 'oui', 'non',\n"
+        "  'oui je veux un rapport', 'non merci'), classifie 'yes' ou 'no' en conséquence.\n\n"
+        "Axe 3 — report_mode (uniquement si kind=task) :\n"
+        "  - full_report : pipeline complet avec lissage (défaut)\n"
+        "  - raw_rates   : 'taux bruts', 'sans lissage', 'brut', 'non lissé'\n"
+        "  - description : 'description', 'analyse descriptive', 'résumé du portefeuille'\n\n"
+        f"Contexte : {ctx}\n"
         f"Demande : {last_human[:500]}\n\n"
         "Réponds UNIQUEMENT en JSON :\n"
-        '{"intent": "...", "reply": "confirmation courte en français (1-2 phrases max)"}'
+        '{"kind": "...", "write": "...", "report_mode": "...", '
+        '"reply": "confirmation courte en français (1-2 phrases max)"}'
     )
 
     try:
+        from agents.mortality.agents.llm_config import get_llm_config
+        cfg = get_llm_config("master.classify_intent")
         client = openai.OpenAI()
         resp = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=200,
+            max_tokens=cfg.get("max_tokens", 200),
+            temperature=cfg.get("temperature", 0.0),
         )
-        return json.loads(resp.choices[0].message.content or "{}")
+        parsed = json.loads(resp.choices[0].message.content or "{}")
     except Exception as exc:
         print(f"[MasterAgent] _classify_intent error: {exc}", file=sys.stderr)
-        return {"intent": "unclear", "reply": "Je n'ai pas compris votre demande. Pouvez-vous préciser ?"}
+        return {
+            "kind":        "task",
+            "write":       "ask",
+            "report_mode": "full_report",
+            "intent":      "unclear",  # rétro-compat pour test legacy
+            "reply":       "Je n'ai pas compris votre demande. Pouvez-vous préciser ?",
+        }
+
+    # Défauts tolérants
+    kind        = parsed.get("kind", "task")
+    write       = parsed.get("write", "ask")
+    report_mode = parsed.get("report_mode", "full_report")
+    reply       = parsed.get("reply", "")
+
+    # Rétro-compat : dériver un `intent` legacy pour le code Master qui le consomme
+    # encore. Cet alias sera retiré une fois toutes les branches migrées.
+    if kind == "question":
+        legacy_intent = "question"
+    elif write == "yes":
+        legacy_intent = "build_and_write"
+    elif write == "no":
+        legacy_intent = "build_only"
+    else:  # ask
+        legacy_intent = "build_and_write"  # pessimiste : on prépare un rapport
+
+    return {
+        "kind":        kind,
+        "write":       write,
+        "report_mode": report_mode,
+        "intent":      legacy_intent,
+        "reply":       reply,
+    }
 
 
 def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
@@ -154,13 +293,16 @@ def _extract_study_plan_from_history(messages: list) -> dict:
     )
 
     try:
+        from agents.mortality.agents.llm_config import get_llm_config
+        cfg = get_llm_config("master.extract_study_plan")
         client = openai.OpenAI()
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=400,
+            max_tokens=cfg.get("max_tokens", 400),
+            temperature=cfg.get("temperature", 0.0),
         )
         raw = response.choices[0].message.content or "{}"
         return json.loads(raw)
@@ -267,10 +409,148 @@ def master_node(state: "AgentState") -> dict:
     if last_write_done:
         data_store.pop("_intent", None)
         data_store.pop("_need_data_attempts", None)
+        # Nettoyage des compteurs de cycle pour ne pas polluer une demande
+        # future (sinon la préservation _write se déclencherait à tort).
+        data_store.pop("_master_builder_cycles", None)
+        data_store.pop("_write_question_asked", None)
+        data_store.pop("_questions_asked_this_cycle", None)
         return {
             "messages": [],
             "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
                          {"type": "done"}],
+            "data_store": data_store,
+        }
+
+    # ── 1b. Accumuler les messages user dans data_store["_user_messages"] ────
+    # Sert de source de vérité pour le filtre question_filter (Niveau 2).
+    # Ne stocke QUE les vrais HumanMessages user — pas les synthétiques émis
+    # par le Master (marqués via additional_kwargs.source="master_synthetic").
+    last_real_human = next(
+        (m for m in reversed(messages_list)
+         if getattr(m, "type", "") == "human"
+         and (getattr(m, "additional_kwargs", None) or {}).get("source") != "master_synthetic"),
+        None,
+    )
+    if last_real_human is not None:
+        history = data_store.setdefault("_user_messages", [])
+        content = getattr(last_real_human, "content", "") or ""
+        if content and (not history or history[-1] != content):
+            history.append(content)
+
+    # ── 1c. Branche : need_user_input émis par le Builder ────────────────────
+    # Le Builder peut émettre un AIMessage avec un marqueur additional_kwargs.
+    # need_user_input. Master applique alors le filtre 3-niveaux : study_plan
+    # → LLM mini → forward au user.
+    from langchain_core.messages import AIMessage as _AIMsg, HumanMessage as _HMsg
+    last_ai = next(
+        (m for m in reversed(messages_list) if isinstance(m, _AIMsg)),
+        None,
+    )
+    if last_ai is not None:
+        from agents.master.question_filter import (
+            detect_need_in_message, resolve_builder_question,
+        )
+        need = detect_need_in_message(last_ai)
+        if need:
+            # Garde-fou : limite de questions par cycle
+            asked = data_store.get("_questions_asked_this_cycle", 0)
+            MAX_QUESTIONS = 3
+            if asked >= MAX_QUESTIONS:
+                default_val = need.get("default")
+                sp = data_store.setdefault("study_plan", {})
+                sp[need["context_key"]] = default_val
+                instr = _HMsg(
+                    content=(
+                        f"[Master] Limite de {MAX_QUESTIONS} questions atteinte dans ce cycle. "
+                        f"Application du default pour '{need.get('context_key')}' : {default_val}."
+                    ),
+                    additional_kwargs={"source": "master_synthetic"},
+                )
+                return {
+                    "messages":     [instr],
+                    "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
+                                     {"type": "message",
+                                      "content": f"Question '{need.get('context_key')}' "
+                                                 f"forcée au default ({default_val}) — "
+                                                 f"limite de {MAX_QUESTIONS} questions atteinte."}],
+                    "active_agent": "builder",
+                    "data_store":   data_store,
+                }
+
+            user_msgs = data_store.get("_user_messages") or []
+            resolution = resolve_builder_question(need, data_store, user_msgs)
+            data_store["_questions_asked_this_cycle"] = asked + 1
+
+            if resolution.decision == "answered":
+                # Cache + injection dans Builder
+                sp = data_store.setdefault("study_plan", {})
+                sp[need["context_key"]] = resolution.value
+                instr = _HMsg(
+                    content=(
+                        f"[Master] Réponse à ta question '{need.get('context_key')}' : "
+                        f"{resolution.value} (source: {resolution.source})."
+                    ),
+                    additional_kwargs={"source": "master_synthetic"},
+                )
+                return {
+                    "messages":     [instr],
+                    "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
+                                     {"type": "message",
+                                      "content": f"Question '{need.get('context_key')}' "
+                                                 f"résolue automatiquement (source: {resolution.source})."}],
+                    "active_agent": "builder",
+                    "data_store":   data_store,
+                }
+            else:  # forward
+                data_store["_pending_need"] = need
+                question_msg = _AIMsg(content=need.get("question", "Précision nécessaire."))
+                return {
+                    "messages":     [question_msg],
+                    "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
+                                     {"type": "message", "content": need.get("question", "")}],
+                    "data_store":   data_store,
+                }
+
+    # ── 1d. Si une question pendante existe et user vient de répondre ────────
+    # IMPORTANT : tant que _pending_need est set, Master ne doit PAS classifier
+    # le message user comme une nouvelle intention. Soit on extrait la réponse,
+    # soit on re-pose la question avec un hint. Jamais de fallthrough.
+    pending = data_store.get("_pending_need")
+    if pending and last_real_human is not None:
+        from agents.master.question_filter import extract_user_answer
+        last_text = getattr(last_real_human, "content", "") or ""
+        value = extract_user_answer(last_text, pending)
+        if value is not None:
+            sp = data_store.setdefault("study_plan", {})
+            sp[pending["context_key"]] = value
+            data_store.pop("_pending_need", None)
+            instr = _HMsg(
+                content=(
+                    f"[Master] L'utilisateur a répondu '{pending.get('context_key')}' = {value}."
+                ),
+                additional_kwargs={"source": "master_synthetic"},
+            )
+            return {
+                "messages":     [instr],
+                "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
+                                 {"type": "message",
+                                  "content": f"Réponse '{pending.get('context_key')}' enregistrée : {value}."}],
+                "active_agent": "builder",
+                "data_store":   data_store,
+            }
+        # Extract a échoué — re-poser la question avec un hint sans classify
+        options = pending.get("options") or []
+        options_str = " ou ".join(repr(o) for o in options) if options else "une réponse claire"
+        ctx_key = pending.get("context_key", "?")
+        question_msg = _AIMsg(content=(
+            f"Je n'ai pas bien compris votre réponse '{last_text}'. "
+            f"Pour la question sur '{ctx_key}', "
+            f"merci de répondre par {options_str}."
+        ))
+        return {
+            "messages":   [question_msg],
+            "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                           {"type": "message", "content": question_msg.content}],
             "data_store": data_store,
         }
 
@@ -281,10 +561,13 @@ def master_node(state: "AgentState") -> dict:
          or "<HANDOFF_WRITER>" in (getattr(m, "content", "") or "")),
         False,
     )
-    if last_build_done and all(data_store.get(k) for k in _get_builder_keys()):
+    # On vérifie les clés attendues pour le mode courant (pas les 10 clés totales).
+    _required = _get_required_keys_for_current_mode(data_store) or _get_builder_keys()
+    if last_build_done and all(data_store.get(k) for k in _required):
         data_store.pop("_need_data_attempts", None)
-        intent = data_store.get("_intent", "build_and_write")
-        if intent in ("build_and_write", "write_only"):
+        data_store.pop("_master_builder_cycles", None)
+        write = data_store.get("_write", "yes")
+        if write == "yes":
             return {
                 "messages": [],
                 "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
@@ -293,11 +576,13 @@ def master_node(state: "AgentState") -> dict:
                 "active_agent": "writer",
                 "data_store":   data_store,
             }
-        # build_only : données prêtes, on termine
+        # write=no (ou fallback d'un ask non résolu) : données prêtes, on termine.
         return {
             "messages": [],
             "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
-                         {"type": "message", "content": "Calculs actuariels terminés."},
+                         {"type": "message",
+                          "content": "Calculs terminés. Résultats en mémoire — "
+                                     "dis-moi si tu veux un rapport."},
                          {"type": "done"}],
             "data_store": data_store,
         }
@@ -322,7 +607,7 @@ def master_node(state: "AgentState") -> dict:
             )
             data_store["_need_data_attempts"] = attempts + 1
             return {
-                "messages":     [HumanMessage(content=instr)],
+                "messages":     [HumanMessage(content=instr, additional_kwargs={"source": "master_synthetic"})],
                 "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                  {"type": "message",
                                   "content": f"[MasterAgent] Données manquantes : {builder_fields} "
@@ -401,9 +686,34 @@ def master_node(state: "AgentState") -> dict:
         return {"messages": [], "events": [], "data_store": data_store}
 
     classification = _classify_intent(last_human, data_store, dataset_ref)
-    intent = classification.get("intent", "unclear")
-    reply  = classification.get("reply", "")
-    data_store["_intent"] = intent
+    intent       = classification.get("intent", "unclear")
+    reply        = classification.get("reply", "")
+    kind         = classification.get("kind", "task")
+    write        = classification.get("write", "ask")
+    report_mode  = classification.get("report_mode", "full_report")
+
+    # Stocker les 3 axes + l'alias legacy
+    # Préservation des axes _write et report_mode contre une rétrogradation
+    # accidentelle en milieu de cycle (ex: user répond "ok", classify
+    # retourne write=ask + report_mode=full_report par défaut, alors que
+    # l'utilisateur avait précédemment précisé yes/raw_rates).
+    # Règle : si un cycle est en cours et que la nouvelle classification est
+    # AMBIGUË (write=ask), on conserve les axes antérieurs. Les changements
+    # EXPLICITES (write=yes/no) restent toujours pris en compte.
+    prev_write = data_store.get("_write")
+    prev_report_mode = data_store.get("report_mode")
+    cycle_in_progress = data_store.get("_master_builder_cycles", 0) >= 1
+    classify_ambiguous = (write == "ask")
+    if classify_ambiguous and cycle_in_progress:
+        if prev_write in ("yes", "no"):
+            write = prev_write
+        if prev_report_mode in ("full_report", "raw_rates", "description"):
+            report_mode = prev_report_mode
+
+    data_store["_intent"]      = intent
+    data_store["_kind"]        = kind
+    data_store["_write"]       = write
+    data_store["report_mode"]  = report_mode
 
     # Extraire study_plan si pas encore fait
     if not data_store.get("study_plan"):
@@ -420,63 +730,107 @@ def master_node(state: "AgentState") -> dict:
     if reply:
         new_events.append({"type": "message", "content": reply})
 
-    # ── 6. Routing déterministe basé sur intent + data_store ─────────────────
+    # ── 6. Routing déterministe basé sur kind + write + report_mode ─────────
     from langchain_core.messages import HumanMessage, AIMessage as LCAIMessage
 
+    # Branche "question" : conversation, aucun agent
+    if kind == "question":
+        # (suit le bloc historique `elif intent == "question"` ci-dessous)
+        intent = "question"
+
     if intent in ("build_only", "build_and_write"):
-        builder_keys = _get_builder_keys()
-        missing_min = [k for k in builder_keys if not data_store.get(k)]
-        if missing_min:
-            data_store["_builder_turns"] = 0  # reset compteur safety
-            already_done = [k for k in builder_keys if data_store.get(k)]
+        # ── Désambiguation write=ask AVANT de lancer le Builder ──────────────
+        # Objectif : ne pas exécuter un pipeline coûteux si l'utilisateur n'est
+        # pas sûr de vouloir un rapport. On pose la question UNE FOIS.
+        if write == "ask" and not data_store.get("_write_question_asked"):
+            data_store["_write_question_asked"] = True
+            q = "Voulez-vous que je génère un rapport PDF à la fin des calculs ?"
+            return {
+                "messages":     [LCAIMessage(content=q)],
+                "events":       new_events + [{"type": "message", "content": q}],
+                "data_store":   data_store,
+            }
+
+        # ── Désambiguation gender_segmentation AVANT le Builder ─────────────
+        # Master doit savoir si l'analyse est unisex (table agrégée) ou by_sex
+        # (tables H/F séparées). Si la valeur n'est pas dans study_plan, on
+        # demande à l'user via le pattern need_user_input.
+        sp = data_store.get("study_plan") or {}
+        gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
+        if gender is None and not data_store.get("_pending_need"):
+            data_store["_pending_need"] = {
+                "context_key": "gender_segmentation",
+                "question":    "Voulez-vous une table agrégée (unisex) ou des tables séparées par sexe (H/F) ?",
+                "options":     ["unisex", "by_sex"],
+                "default":     "unisex",
+            }
+            q_msg = LCAIMessage(content=data_store["_pending_need"]["question"])
+            return {
+                "messages":     [q_msg],
+                "events":       new_events + [{"type": "message",
+                                                "content": data_store["_pending_need"]["question"]}],
+                "data_store":   data_store,
+            }
+
+        # ── Sections actives dérivées de report_mode + gender_segmentation ──
+        active_sections = _sections_for_mode(report_mode, gender)
+        required_keys = _keys_for_sections(active_sections)
+        already_done = [k for k in required_keys if data_store.get(k)]
+        missing_keys = [k for k in required_keys if not data_store.get(k)]
+
+        # ── Compteur cumulatif Master ↔ Builder (filet anti-boucle) ─────────
+        if missing_keys:
+            cycles = data_store.get("_master_builder_cycles", 0) + 1
+            data_store["_master_builder_cycles"] = cycles
+            if cycles > 3:
+                new_events.append({
+                    "type":    "message",
+                    "content": (f"[MasterAgent] {cycles} cycles sans convergence — arrêt. "
+                                f"Manquantes : {missing_keys}"),
+                })
+                new_events.append({"type": "done"})
+                return {"messages": [], "events": new_events, "data_store": data_store}
+
+            # Détecter si l'intention de l'utilisateur est suffisamment
+            # explicite pour skipper la phase de confirmation (cf. step3_client_
+            # communication.md). Critère : write=yes ET report_mode posé.
+            intent_explicit = (write == "yes" and report_mode in ("full_report", "raw_rates", "description"))
+            skip_confirm_line = (
+                "L'utilisateur a déjà été explicite : NE demande PAS confirmation, "
+                "lance directement les tools nécessaires.\n"
+                if intent_explicit else ""
+            )
             instr = (
-                "Lance l'ensemble des calculs actuariels : "
-                "exposure, crude_rates, smoothing, diagnostics, validation, benchmarking. "
-                + (f"Déjà calculés, NE PAS refaire : {already_done}. " if already_done else "")
-                + "Émet <BUILD_DONE> quand tous les calculs sont terminés."
+                f"Mode de rapport : {report_mode}\n"
+                f"Sections actives : {active_sections}\n"
+                f"Déjà produit (NE PAS relancer) : {already_done}\n"
+                f"Reste à produire : {missing_keys}\n"
+                + skip_confirm_line
+                + "Émets <BUILD_DONE> quand toutes les clés ci-dessus sont dans le data_store."
             )
             return {
-                "messages":     [HumanMessage(content=instr)],
+                "messages":     [HumanMessage(content=instr, additional_kwargs={"source": "master_synthetic"})],
                 "events":       new_events,
                 "active_agent": "builder",
                 "data_store":   data_store,
             }
-        elif intent == "build_and_write":
-            # Données déjà complètes → Writer directement
-            return {
-                "messages":     [],
-                "events":       new_events,
-                "active_agent": "writer",
-                "data_store":   data_store,
-            }
-        else:
-            # build_only + données déjà là
-            new_events.append({"type": "done"})
-            return {"messages": [], "events": new_events, "data_store": data_store}
 
-    elif intent == "write_only":
-        ready, missing_labels = _preflight_writer(data_store)
-        if ready:
+        # ── Toutes les clés sont présentes : route selon write ──────────────
+        if write == "yes":
             return {
                 "messages":     [],
                 "events":       new_events,
                 "active_agent": "writer",
                 "data_store":   data_store,
             }
-        # Données incomplètes → upgrader en build_and_write
-        data_store["_intent"] = "build_and_write"
-        already_done = [k for k in _get_builder_keys() if data_store.get(k)]
-        instr = (
-            f"Avant le rapport, il faut calculer : {missing_labels}. "
-            + (f"Déjà calculés, NE PAS refaire : {already_done}. " if already_done else "")
-            + "Lance les outils manquants puis émet <BUILD_DONE>."
-        )
-        return {
-            "messages":     [HumanMessage(content=instr)],
-            "events":       new_events,
-            "active_agent": "builder",
-            "data_store":   data_store,
-        }
+        # write == "no" → done. L'utilisateur peut demander un rapport plus tard,
+        # le data_store est persisté et Master routera direct vers le Writer.
+        new_events.append({
+            "type":    "message",
+            "content": "Calculs terminés. Résultats en mémoire — dis-moi si tu veux un rapport.",
+        })
+        new_events.append({"type": "done"})
+        return {"messages": [], "events": new_events, "data_store": data_store}
 
     elif intent == "question":
         # Appel LLM conversationnel — seul cas où le LLM rédige la réponse
@@ -490,9 +844,17 @@ def master_node(state: "AgentState") -> dict:
         messages += [_to_openai_dict(m) for m in raw_msgs]
         messages = sanitize_openai_messages(messages)
         try:
+            from agents.mortality.agents.llm_config import get_llm_config
+            cfg = get_llm_config("master.conversation")
             client = openai.OpenAI()
-            response = call_with_retry(client, model="gpt-4o", messages=messages,
-                                       tools=None, max_tokens=1500)
+            response = call_with_retry(
+                client,
+                model=cfg["model"],
+                messages=messages,
+                tools=None,
+                max_tokens=cfg.get("max_tokens", 1500),
+                temperature=cfg.get("temperature", 0.3),
+            )
             lc_msg = _from_openai_response(response.choices[0].message)
             content = response.choices[0].message.content or ""
             if content:

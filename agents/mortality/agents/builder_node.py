@@ -28,7 +28,14 @@ if TYPE_CHECKING:
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 # Tools accessibles au BuilderAgent (identique au MortalityAgent)
-BUILDER_TOOLS = {"builder", "statistical_analysis", "graphs", "reasoning", "build_pdf"}
+BUILDER_TOOLS = {
+    "builder",
+    "preprocessing",        # tools/preprocessing/clean_records (R1-R6)
+    "statistical_analysis",
+    "graphs",
+    "reasoning",
+    "build_pdf",
+}
 
 
 def _get_catalogue_level(state: "AgentState") -> str:
@@ -102,13 +109,28 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
             label = param_labels.get(k, k)
             base += f"- **{label}** : `{v}`\n"
 
-    # Instructions sur <BUILD_DONE>
+    # Bloc exhaustif "capacités par section" dérivé du YAML (US report_mode).
+    # Master indique dans son HumanMessage quelles sections sont actives pour
+    # la session courante. Tu ne produis QUE les clés de ces sections.
+    try:
+        base += "\n\n" + _capabilities_block()
+    except Exception as exc:
+        print(f"[BuilderAgent] _capabilities_block error: {exc}", file=sys.stderr)
+
+    # Règles de pilotage par sections actives + report_mode
     base += (
-        "\n\n## Signal de fin de calculs\n\n"
-        "Quand les calculs actuariels sont terminés et qu'un rapport est demandé, "
-        "émettre **exactement** le signal `<BUILD_DONE>` dans ta réponse. "
-        "Le MasterAgent prendra le relais pour router vers le WriterAgent.\n"
-        "Tu peux aussi utiliser `<HANDOFF_WRITER>` (équivalent legacy)."
+        "\n\n## Règle de session\n\n"
+        "Le MasterAgent t'envoie un HumanMessage listant `Sections actives` et "
+        "`Reste à produire` (les clés manquantes dans le data_store). Tu dois :\n"
+        "  1. Produire UNIQUEMENT les clés listées dans `Reste à produire`.\n"
+        "  2. NE PAS relancer les tools pour les clés listées dans `Déjà produit`.\n"
+        "  3. Émettre **exactement** `<BUILD_DONE>` une fois toutes les clés produites.\n"
+        "  4. Si `report_mode == 'raw_rates'`, NE PAS appeler `builder.smoothing` — "
+        "la clé `smoothed_table` est produite par assimilation automatique des taux bruts "
+        "par une branche déterministe du nœud Builder.\n"
+        "  5. Si `report_mode == 'description'`, ne PAS appeler `builder.crude_rates`, "
+        "`builder.smoothing`, `builder.validation`, `builder.benchmarking` — seules "
+        "`builder.exposure` et les tools `statistical_analysis.*` sont requis.\n"
     )
 
     # Documents de contexte
@@ -119,6 +141,70 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
             base += f"### {doc['name']}\n\n```\n{doc['content']}\n```\n\n"
 
     return base
+
+
+def _capabilities_block() -> str:
+    """Génère la table 'section → clés → tools' exhaustive depuis le YAML.
+
+    Le Builder reçoit ainsi, dans son system prompt, une carte complète de ce
+    qu'il peut produire et pour quelle section. Master indique ensuite les
+    sections actives via son HumanMessage d'invocation.
+    """
+    import re
+    import yaml as _yaml
+    from knowledge_base.report_template.template_loader import (
+        build_manifest, DEFAULT_TEMPLATE,
+    )
+
+    placeholder_re = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+    manifest = build_manifest()
+    # Index clé -> tool via produced_by (toutes catégories confondues)
+    tool_for_key: dict[str, str] = {}
+    for entry in (manifest.master_from_data + manifest.master_from_modeling
+                  + manifest.builder_outputs):
+        tool = (entry.produced_by or {}).get("tool")
+        if tool:
+            tool_for_key[entry.key] = tool
+
+    with open(DEFAULT_TEMPLATE, encoding="utf-8") as f:
+        tpl = _yaml.safe_load(f) or {}
+
+    builder_outputs_keys = {e.key for e in manifest.builder_outputs}
+
+    lines = ["## Capacités disponibles (par section du rapport)\n"]
+    for section in (tpl.get("sections") or []):
+        sid = section.get("id", "?")
+        keys: set[str] = set()
+
+        narrative = section.get("narrative") or {}
+        for field in ("text", "text_default", "text_raw_rates"):
+            text = narrative.get(field) or ""
+            keys.update(placeholder_re.findall(text))
+
+        directives = section.get("llm_directives") or {}
+        pta = directives.get("post_table_analysis") or {}
+        fse = pta.get("few_shot_example") or ""
+        keys.update(placeholder_re.findall(fse))
+
+        for v in (section.get("visual_specs") or []):
+            src = v.get("source") or ""
+            root = src.split(".")[0] if src else ""
+            if root:
+                keys.add(root)
+
+        # Ne garder que les clés produites par le Builder (builder_outputs)
+        builder_keys_for_section = sorted(keys & builder_outputs_keys)
+        tools_for_section = sorted({
+            tool_for_key[k] for k in builder_keys_for_section if k in tool_for_key
+        })
+
+        lines.append(f"### Section : {sid}")
+        lines.append(f"  Clés à produire : {builder_keys_for_section}")
+        lines.append(f"  Tools à appeler : {tools_for_section}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def _has_pending_decision(messages: list) -> bool:
@@ -142,6 +228,18 @@ def builder_node(state: "AgentState") -> dict:
     from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
 
     data_store = state.get("data_store") or {}
+
+    # ── Bloc C' : assimilation déterministe en mode raw_rates ───────────────
+    # Si qx_table est présent et report_mode == "raw_rates", on copie les taux
+    # bruts dans smoothed_table sans appeler builder.smoothing. Le LLM Builder
+    # ne doit alors pas relancer le lissage (règle explicite dans son prompt).
+    if (data_store.get("report_mode") == "raw_rates"
+            and data_store.get("qx_table")
+            and not data_store.get("smoothed_table")):
+        data_store["smoothed_table"] = [
+            {"age": r.get("age"), "q_x_lisse": r.get("q_x_brut")}
+            for r in (data_store["qx_table"] or []) if r.get("age") is not None
+        ]
 
     level = _get_catalogue_level(state)
     system_prompt = _build_system_prompt(state, level)
@@ -169,25 +267,30 @@ def builder_node(state: "AgentState") -> dict:
         (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
+    from agents.mortality.agents.llm_config import get_llm_config
+    _builder_cfg_for_event = get_llm_config("builder.llm")
     new_events.append({
         "type":        "llm_input",
         "agent":       "BuilderAgent",
-        "model":       "gpt-4o",
+        "model":       _builder_cfg_for_event.get("model", "?"),
         "n_messages":  len(messages),
-        "max_tokens":  4000,
+        "max_tokens":  _builder_cfg_for_event.get("max_tokens", 4000),
         "has_tools":   bool(tools),
         "last_user":   str(last_user)[:400],
         "system_head": system_prompt[:300],
     })
 
     try:
+        from agents.mortality.agents.llm_config import get_llm_config
+        cfg = get_llm_config("builder.llm")
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=messages,
             tools=tools if tools else None,
             tool_choice="auto" if tools else None,
-            max_tokens=4000,
+            max_tokens=cfg.get("max_tokens", 4000),
+            temperature=cfg.get("temperature", 0.0),
         )
     except Exception as exc:
         new_events.append({"type": "error", "message": f"Erreur API OpenAI (BuilderAgent) : {exc}"})
@@ -199,20 +302,27 @@ def builder_node(state: "AgentState") -> dict:
 
     # ── Garde-fou decision_required ──────────────────────────────────────────
     # Si un tool précédent a retourné un marqueur `decision_required`, on ne
-    # laisse PAS le LLM enchaîner des tool_calls : il doit poser la question
-    # à l'utilisateur en texte et rendre la main. S'il a émis du content ET
-    # des tool_calls (désobéissance au system prompt), on écrase les tool_calls.
+    # laisse PAS le LLM enchaîner des tool_calls, qu'il ait émis du content ou
+    # non. Il doit rendre la main à l'utilisateur pour qu'il choisisse parmi
+    # les options proposées par le tool.
     if _has_pending_decision(raw_msgs):
         lc_tool_calls = getattr(lc_msg, "tool_calls", None)
-        content = getattr(lc_msg, "content", None) or ""
-        if content and lc_tool_calls:
+        if lc_tool_calls:
+            lc_msg.tool_calls = []
+            if hasattr(msg_obj, "tool_calls"):
+                msg_obj.tool_calls = []
+            # Si le LLM n'a émis aucun texte, on force un message explicite pour
+            # que l'UI n'affiche pas une réponse vide.
+            content = getattr(lc_msg, "content", None) or ""
+            if not content.strip():
+                lc_msg.content = (
+                    "[Décision utilisateur en attente — tool_calls supprimés par le garde-fou] "
+                    "Merci de choisir parmi les options proposées avant toute nouvelle action."
+                )
             new_events.append({
                 "type":    "message",
                 "content": "[garde-fou] Décision utilisateur en attente — tool_calls supprimés.",
             })
-            lc_msg.tool_calls = []
-            if hasattr(msg_obj, "tool_calls"):
-                msg_obj.tool_calls = []
 
     # ── Event : réponse de l'API ──────────────────────────────────────────────
     usage = response.usage

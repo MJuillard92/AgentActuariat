@@ -157,12 +157,39 @@ def _is_active(section: dict, context: dict) -> bool:
     """Retourne True si la section est active dans le contexte donné.
 
     Une section sans champ `activation` est toujours active.
-    Sinon, elle est active ssi context[activation.key] == activation.equals.
+
+    Deux formats supportés :
+      1. Ancien (mono-clé, scalaire) :
+         activation: {key: gender_segmentation, equals: unisex}
+         → active ssi context[key] == equals.
+
+      2. Nouveau (multi-clé, listes avec AND implicite) :
+         activation: {report_mode: [full_report, raw_rates], gender_segmentation: [unisex]}
+         → active ssi, pour chaque clé, context[clé] est dans la liste.
     """
     act = section.get("activation")
-    if act is None:
+    if not act:
         return True
-    return context.get(act["key"]) == act["equals"]
+
+    # Format ancien : {key: ..., equals: ...}
+    if "key" in act and "equals" in act:
+        return context.get(act["key"]) == act["equals"]
+
+    # Format nouveau : {field_name: [allowed_values], ...} (AND implicite).
+    # Si une clé d'activation n'est pas fournie par le contexte, on considère
+    # la contrainte non évaluable → on skippe (compatibilité ascendante : un
+    # context partiel ne fait pas tomber des sections hors scope).
+    for field_name, allowed in act.items():
+        if field_name not in context:
+            continue
+        ctx_val = context.get(field_name)
+        if isinstance(allowed, list):
+            if ctx_val not in allowed:
+                return False
+        else:
+            if ctx_val != allowed:
+                return False
+    return True
 
 
 def _collect_aggregations(tpl: dict) -> list[Aggregation]:
@@ -220,21 +247,51 @@ def build_manifest(
     )
 
 
-def load_section(sid: str, yaml_path: Path = DEFAULT_TEMPLATE) -> Section:
-    """Usage Writer : livre narrative + directives + visuals d'une section."""
+def load_section(
+    sid: str,
+    yaml_path: Path = DEFAULT_TEMPLATE,
+    context: dict | None = None,
+) -> Section:
+    """Usage Writer : livre narrative + directives + visuals d'une section.
+
+    Si la section définit plusieurs variantes de narrative (`text_default` et
+    `text_raw_rates`), la variante est choisie en fonction de
+    `context["report_mode"]`. Le champ retourné reste `narrative["text"]`.
+    """
+    ctx = context or {}
     tpl = _load_yaml(Path(yaml_path))
     for section in tpl.get("sections") or []:
         if section.get("id") == sid:
+            narrative_raw = section.get("narrative") or {}
+            narrative = _select_narrative_variant(narrative_raw, ctx)
             return Section(
                 id=section["id"],
                 label=section.get("label", ""),
                 required=section.get("required", False),
                 dependencies=section.get("dependencies") or [],
-                narrative=section.get("narrative") or {},
+                narrative=narrative,
                 llm_directives=section.get("llm_directives") or {},
                 visual_specs=section.get("visual_specs") or [],
             )
     raise KeyError(f"section inconnue : {sid!r}")
+
+
+def _select_narrative_variant(narrative_raw: dict, context: dict) -> dict:
+    """Choisit la variante de narrative selon `context["report_mode"]`.
+
+    Formats supportés dans le YAML :
+      narrative: {text: "..."}                     → un seul text
+      narrative: {text_default: "...", text_raw_rates: "..."}  → variantes
+    """
+    out = dict(narrative_raw)  # copie shallow, on ne mute pas la source
+    if "text" in narrative_raw:
+        return out
+    mode = (context or {}).get("report_mode")
+    if mode == "raw_rates" and "text_raw_rates" in narrative_raw:
+        out["text"] = narrative_raw["text_raw_rates"]
+    else:
+        out["text"] = narrative_raw.get("text_default", "")
+    return out
 
 
 def load_enum_specs(yaml_path: Path = DEFAULT_TEMPLATE) -> dict[str, list]:

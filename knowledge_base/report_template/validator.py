@@ -366,7 +366,17 @@ def _check_dependencies(doc: dict, report: ValidationReport) -> None:
 # ───────────────── Check 11 : activation ─────────────────
 
 def _validate_activation(template: dict, errors: ValidationReport) -> None:
-    """Vérifie la syntaxe et la couverture d'enum des champs `activation`."""
+    """Vérifie la syntaxe et la couverture d'enum des champs `activation`.
+
+    Deux formats supportés :
+      1. Ancien : {key: X, equals: Y}
+      2. Nouveau : {field1: [values...], field2: [values...]}  (AND implicite)
+
+    Pour la couverture d'enum, seuls les champs présents dans les enums
+    master_* sont vérifiés (les autres sont ignorés — couvre par exemple le
+    cas où `report_mode` est un champ logique géré par Master et non déclaré
+    comme enum dans le data_contract).
+    """
     # Index des enums dans master_from_data + master_from_modeling
     enums: dict[str, list[str]] = {}
     for group in ("master_from_data", "master_from_modeling"):
@@ -374,7 +384,7 @@ def _validate_activation(template: dict, errors: ValidationReport) -> None:
             if isinstance(entry, dict) and entry.get("type") == "enum":
                 enums[entry["key"]] = entry.get("allowed") or []
 
-    # Collecter les activations par clé référencée
+    # Collecter les activations par clé d'enum référencée
     covered: dict[str, set[str]] = {}
     for section in template.get("sections") or []:
         if not isinstance(section, dict):
@@ -383,26 +393,49 @@ def _validate_activation(template: dict, errors: ValidationReport) -> None:
         if act is None:
             continue
         sid = section.get("id", "?")
-        if not isinstance(act, dict) or "key" not in act or "equals" not in act:
+        if not isinstance(act, dict):
             errors.add_error(
                 f"sections.{sid}.activation",
-                f"Section {sid} : activation doit être un dict {{key, equals}}",
+                f"Section {sid} : activation doit être un dict",
             )
             continue
-        key = act["key"]
-        if key not in enums:
-            errors.add_error(
-                f"sections.{sid}.activation",
-                f"Section {sid} : activation.key '{key}' absent des enums master_*",
-            )
+
+        # Format ancien
+        if "key" in act and "equals" in act:
+            key = act["key"]
+            val = act["equals"]
+            if key not in enums:
+                errors.add_error(
+                    f"sections.{sid}.activation",
+                    f"Section {sid} : activation.key '{key}' absent des enums master_*",
+                )
+                continue
+            if val not in enums[key]:
+                errors.add_error(
+                    f"sections.{sid}.activation",
+                    f"Section {sid} : activation.equals '{val}' absent de allowed={enums[key]}",
+                )
+                continue
+            covered.setdefault(key, set()).add(val)
             continue
-        if act["equals"] not in enums[key]:
-            errors.add_error(
-                f"sections.{sid}.activation",
-                f"Section {sid} : activation.equals '{act['equals']}' absent de allowed={enums[key]}",
-            )
-            continue
-        covered.setdefault(key, set()).add(act["equals"])
+
+        # Format nouveau : dict {field: [values]} — on vérifie chaque champ enum
+        for field, values in act.items():
+            if field not in enums:
+                # Champ logique non déclaré comme enum (ex: report_mode géré
+                # par le Master). On tolère.
+                continue
+            allowed_values = values if isinstance(values, list) else [values]
+            for v in allowed_values:
+                if v not in enums[field]:
+                    errors.add_error(
+                        f"sections.{sid}.activation",
+                        f"Section {sid} : activation.{field} contient '{v}' "
+                        f"absent de allowed={enums[field]}",
+                    )
+                    break
+            else:
+                covered.setdefault(field, set()).update(allowed_values)
 
     for key, seen in covered.items():
         missing = set(enums[key]) - seen

@@ -95,12 +95,16 @@ def _should_continue_builder(state: AgentState) -> str:
     if "<MODEL_CHOICE_CHECKPOINT>" in content:
         return END
 
-    # Priorité 3 (Proposition 3) : vérification data_store — routing déterministe
-    # Si les données minimales sont présentes, retourner au Master sans attendre
-    # que le LLM Builder émette un signal textuel.
+    # Priorité 3 : vérification data_store — routing déterministe.
+    # Si toutes les clés attendues pour le mode courant sont présentes, on rend
+    # la main au Master sans attendre que le LLM Builder émette <BUILD_DONE>.
     data_store = state.get("data_store") or {}
-    _MINIMUM_BUILDER_KEYS = ["exposure_table", "smoothed_table"]
-    if all(data_store.get(k) for k in _MINIMUM_BUILDER_KEYS):
+    try:
+        from agents.mortality.agents.master_node import _get_required_keys_for_current_mode
+        expected = _get_required_keys_for_current_mode(data_store)
+    except Exception:
+        expected = []
+    if expected and all(data_store.get(k) for k in expected):
         return "to_master"
 
     # Sécurité : si le Builder tourne trop longtemps sans produire les données,

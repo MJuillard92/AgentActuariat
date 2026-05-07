@@ -199,6 +199,8 @@ sections:
     label: "Préambule"
     required: true
     dependencies: []
+    activation:
+      report_mode: [full_report, raw_rates, description]
 
     narrative:
       text: |
@@ -242,7 +244,8 @@ sections:
     label: "Retraitement des données"
     required: true
     dependencies: [preamble]
-    # pas de bloc `activation` → toujours rendue
+    activation:
+      report_mode: [full_report, raw_rates, description]
 
     narrative:
       text: |
@@ -289,8 +292,8 @@ sections:
     required: true
     dependencies: [data_preprocessing]
     activation:
-      key: gender_segmentation
-      equals: unisex
+      report_mode: [full_report, raw_rates, description]
+      gender_segmentation: [unisex]
 
     narrative:
       text: |
@@ -347,8 +350,8 @@ sections:
     required: true
     dependencies: [data_preprocessing]
     activation:
-      key: gender_segmentation
-      equals: by_sex
+      report_mode: [full_report, raw_rates, description]
+      gender_segmentation: [by_sex]
 
     narrative:
       text: |

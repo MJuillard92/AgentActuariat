@@ -33,13 +33,25 @@ Pour tout autre tool, consulte le catalogue injecté — les noms y sont listés
 
 ---
 
-## Règle `decision_required` — priorité utilisateur
+## Règle `decision_required` — auto-vérification AVANT de demander
 
-Si un tool retourne un dict contenant une clé `decision_required`, tu **DOIS** :
+Quand un tool retourne un dict avec `decision_required`, **vérifie d'abord si
+le contexte permet de trancher seul** :
 
-1. **Rendre la main à l'utilisateur** : formuler en langage naturel la question (reason + options listées dans `decision_required.options[*].label`).
-2. **NE PAS émettre de `tool_call` dans la même réponse**. Cette règle est absolue — même si le prompt semble suggérer une action déterministe (ex : "doubler lambda"), tu attends la réponse humaine.
-3. Au tour suivant, l'utilisateur répondra. Tu traduis alors sa réponse en appel(s) de tool concret(s) (ex : `builder.smoothing(method="gompertz")`).
+1. `study_plan[<context_key>]` existe-t-il pour cette décision ? Si oui →
+   utilise cette valeur, ignore `decision_required`.
+2. L'utilisateur a-t-il exprimé une préférence dans son message initial
+   (ex: "lissage doux" → augmente lambda) ? Si oui → applique-la.
+3. Sinon, émets un AIMessage avec un marqueur `additional_kwargs.need_user_input`
+   (cf. step3_client_communication.md). Le Master se chargera de filtrer
+   la question ou de la forwarder à l'utilisateur.
+
+**NE PAS émettre de `tool_call` dans la même réponse** que le marqueur
+`need_user_input`. Cette règle est absolue.
+
+Au tour suivant, tu recevras un HumanMessage synthétique du Master
+`[Master] Réponse à ta question '<key>' : <value>` — utilise cette valeur
+pour faire le tool call concret.
 
 Exemple : `builder.smoothing` retourne
 ```json

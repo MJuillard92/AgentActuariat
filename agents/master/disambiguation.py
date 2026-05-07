@@ -192,13 +192,16 @@ def _classify_with_llm(message: str, data_store: dict) -> dict | None:
             f"Contexte session : {', '.join(ds_context) or 'aucun calcul effectué'}\n\n"
             f"Message : {message}\n\nJSON :"
         )
+        from agents.mortality.agents.llm_config import get_llm_config
+        cfg = get_llm_config("master.classify_intent")  # même profil : JSON court
         client = openai.OpenAI()
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=80,
+            max_tokens=cfg.get("max_tokens", 80),
+            temperature=cfg.get("temperature", 0.0),
         )
         import json
         result = json.loads(response.choices[0].message.content or "{}")
@@ -348,13 +351,16 @@ def _suggest_mapping_with_llm(
             "Réponds en JSON : {\"date_naissance\": \"nom_colonne_ou_null\", ...}\n"
             "Si aucune colonne ne correspond, mettre null.\n\nJSON :"
         )
+        from agents.mortality.agents.llm_config import get_llm_config
+        cfg = get_llm_config("master.classify_intent")  # même profil : JSON
         client = openai.OpenAI()
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=200,
+            max_tokens=cfg.get("max_tokens", 200),
+            temperature=cfg.get("temperature", 0.0),
         )
         return json.loads(response.choices[0].message.content or "{}")
     except Exception:

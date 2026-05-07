@@ -172,8 +172,14 @@ def test_data_analysis_unisex_and_by_sex_exist():
 
 
 def test_data_analysis_sections_have_activation():
+    """Format multi-clés (report_mode + gender_segmentation), AND implicite."""
     import yaml
     tpl = yaml.safe_load(open("knowledge_base/report_template/mortality_template.yaml"))
-    for sid in ("data_analysis_unisex", "data_analysis_by_sex"):
+    expected_gender = {"data_analysis_unisex": "unisex", "data_analysis_by_sex": "by_sex"}
+    for sid, gender in expected_gender.items():
         section = next(s for s in tpl["sections"] if s["id"] == sid)
-        assert section["activation"]["key"] == "gender_segmentation"
+        act = section["activation"]
+        assert isinstance(act.get("gender_segmentation"), list)
+        assert gender in act["gender_segmentation"]
+        assert isinstance(act.get("report_mode"), list)
+        assert set(act["report_mode"]) >= {"full_report", "raw_rates", "description"}
