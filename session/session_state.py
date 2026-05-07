@@ -127,6 +127,13 @@ class SessionState(BaseModel):
     # ── Mémoire conversationnelle compactée ───────────────────────────────────
     context_summary:  Optional[ContextSummary]  = None
 
+    # ── Flags cinématiques préservés entre tours ──────────────────────────────
+    # Ces clés alimentent les branches de routage du Master (need_user_input,
+    # préservation _write/report_mode, anti-boucle, accumulateur user_messages).
+    # Sans cette persistance, elles sont perdues entre deux invocations
+    # successives du graphe LangGraph et la cinématique perd la mémoire.
+    cinematic_state: Dict[str, Any] = Field(default_factory=dict)
+
     def touch(self) -> None:
         self.updated_at = datetime.datetime.now().isoformat()
 
@@ -169,6 +176,9 @@ class SessionState(BaseModel):
         # Résultats tools
         ds.update(self.tool_results)
 
+        # Flags cinématiques (préservés entre tours)
+        ds.update(self.cinematic_state)
+
         return ds
 
     def update_from_data_store(self, data_store: dict) -> None:
@@ -205,5 +215,27 @@ class SessionState(BaseModel):
         for key in _TOOL_RESULT_KEYS:
             if data_store.get(key) is not None:
                 self.tool_results[key] = data_store[key]
+
+        # Flags cinématiques préservés entre tours (stricte liste blanche).
+        # IMPORTANT : on synchronise dans LES DEUX SENS — si une clé a été
+        # consommée (data_store.pop) pendant le tour, elle doit aussi
+        # disparaître de la persistance. Sinon le tour suivant la verrait
+        # ressusciter via to_data_store().
+        _CINEMATIC_KEYS = {
+            "_pending_need",
+            "_user_messages",
+            "_master_builder_cycles",
+            "_questions_asked_this_cycle",
+            "_write",
+            "_kind",
+            "report_mode",
+            "_write_question_asked",
+        }
+        for key in _CINEMATIC_KEYS:
+            if key in data_store:
+                self.cinematic_state[key] = data_store[key]
+            else:
+                # Pop côté persistance pour rester cohérent avec le data_store
+                self.cinematic_state.pop(key, None)
 
         self.touch()
