@@ -1,0 +1,88 @@
+# config/llm_models.yaml
+# ─────────────────────────────────────────────────────────────────────────
+# Configuration centralisée des modèles LLM par rôle.
+# Modifiable sans toucher au code.
+#
+# Override par variable d'environnement (priorité supérieure) :
+#   LLM_MODEL_<ROLE_PATH>=<modèle>
+#
+# Exemples :
+#   export LLM_MODEL_MASTER_CLASSIFY_INTENT=gpt-5.4-nano
+#   export LLM_MODEL_BUILDER_LLM=o4-mini
+#   export LLM_MODEL_WRITER_REDACTION=gpt-5.5
+#
+# Pour ajouter un nouveau rôle, déclarer sous la bonne section et utiliser
+# `get_llm_config("master.nouveau_role")` dans le code.
+# ─────────────────────────────────────────────────────────────────────────
+
+defaults:
+  model:        gpt-5.4
+  temperature:  0.0
+  max_tokens:   4000
+
+# ── Master ───────────────────────────────────────────────────────────────
+# Le Master classifie les demandes utilisateur, extrait les paramètres
+# d'étude, et répond aux questions conversationnelles.
+master:
+
+  # Routage 3-axes (kind, write, report_mode) en JSON court.
+  # Tâche simple, JSON court, latence critique → mini.
+  classify_intent:
+    model:       gpt-5.4-mini
+    temperature: 0.0
+    max_tokens:  200
+
+  # Extraction structurée des paramètres d'étude depuis l'historique.
+  # Tâche d'extraction JSON, mini suffit largement.
+  extract_study_plan:
+    model:       gpt-5.4-mini
+    temperature: 0.0
+    max_tokens:  400
+
+  # Réponse conversationnelle (kind=question). Qualité pro indispensable
+  # car l'utilisateur est un actuaire — on ne lésine pas.
+  conversation:
+    model:       gpt-5.4
+    temperature: 0.3
+    max_tokens:  1500
+
+# ── Builder ──────────────────────────────────────────────────────────────
+# Le Builder orchestre les calculs actuariels via tool-calling.
+# Fiabilité tool-calling critique (un tool sauté → boucle).
+builder:
+  llm:
+    model:       gpt-5.4
+    temperature: 0.0
+    max_tokens:  4000
+
+# ── Writer ───────────────────────────────────────────────────────────────
+# Le Writer rédige les sections du rapport PDF.
+# Qualité du texte FR pro indispensable.
+writer:
+  redaction:
+    model:       gpt-5.4
+    temperature: 0.4
+    max_tokens:  2000
+
+  # Validation qualité du rapport produit (étape 06).
+  # Tâche d'analyse JSON, mini suffit.
+  validation:
+    model:       gpt-5.4-mini
+    temperature: 0.0
+    max_tokens:  2000
+
+# ── Optimisations transverses ────────────────────────────────────────────
+# Ces flags pilotent des comportements à coût zéro mais à impact mesurable.
+optimization:
+  # Si true, OpenAI cache automatiquement les system prompts > 1024 tokens.
+  # Pour bénéficier du cache, le prompt doit être STABLE d'un appel à l'autre :
+  # mettre les contenus variables (study_plan, mapping CSV) en fin de prompt.
+  enable_prompt_cache:        true
+
+  # Fenêtre de messages envoyée au LLM. Réduire = moins de tokens mais
+  # risque d'amnésie. 10-20 raisonnable.
+  builder_max_history:        20
+
+  # Filtrer les tools fournis au Builder selon report_mode courant.
+  # Réduit la taille du catalogue JSON envoyé à chaque appel.
+  filter_tools_by_report_mode: false  # à activer après tests

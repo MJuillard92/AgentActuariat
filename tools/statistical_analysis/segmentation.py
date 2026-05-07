@@ -118,14 +118,24 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         ("statut",  _CS["cause_sortie"]["candidates"]),
     ]
 
+    cols_to_analyze: list[tuple[str, str]] = []
     if requested:
-        cols_to_analyze = []
         for c in requested:
             found = _find_col(df, [c])
             if found:
                 cols_to_analyze.append((c, found))
-    else:
-        cols_to_analyze = []
+
+    # Fallback systématique sur les defaults si rien n'a été trouvé via `requested`
+    # (le LLM peut avoir passé un nom de colonne qui n'existe pas dans le CSV).
+    if not cols_to_analyze:
+        if requested:
+            import sys as _sys
+            print(
+                f"[segmentation] Colonnes demandées {requested} introuvables dans "
+                f"le CSV (colonnes disponibles : {list(df.columns)}). "
+                f"Fallback sur les defaults (sexe, produit, cause_sortie).",
+                file=_sys.stderr,
+            )
         for label, candidates in default_candidates:
             found = _find_col(df, candidates)
             if found:

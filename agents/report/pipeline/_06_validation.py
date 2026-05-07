@@ -130,11 +130,13 @@ def _call_llm(prompt: str) -> dict:
     try:
         import openai
         from agents.mortality.agents._utils import call_with_retry
+        from agents.mortality.agents.llm_config import get_llm_config
 
+        cfg = get_llm_config("writer.validation")
         client = openai.OpenAI()
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[
                 {
                     "role": "system",
@@ -146,7 +148,8 @@ def _call_llm(prompt: str) -> dict:
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            max_tokens=_MAX_TOKENS,
+            max_tokens=cfg.get("max_tokens", _MAX_TOKENS),
+            temperature=cfg.get("temperature", 0.0),
         )
         return json.loads(response.choices[0].message.content or "{}")
 

@@ -64,15 +64,18 @@ def report_node(state: "AgentState") -> dict:
     messages = sanitize_openai_messages(messages)
 
     from agents.mortality.agents._utils import call_with_retry
+    from agents.mortality.agents.llm_config import get_llm_config
+    cfg = get_llm_config("writer.redaction")  # ReportNode = profil Writer
     client = openai.OpenAI()
     try:
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=messages,
             tools=tools if tools else None,
             tool_choice="auto" if tools else None,
-            max_tokens=4000,
+            max_tokens=cfg.get("max_tokens", 4000),
+            temperature=cfg.get("temperature", 0.0),
         )
     except Exception as exc:
         return {

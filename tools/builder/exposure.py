@@ -165,12 +165,16 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     mask_sentinel_exit = df_clean[exit_col].astype(str).str.contains(_SENTINEL_RE, na=False)
     df_clean.loc[mask_sentinel_exit, exit_col] = obs_end.strftime("%d/%m/%Y")
 
-    # Autres colonnes de date : exclure les lignes avec valeur non parsable
+    # Autres colonnes de date : exclure les lignes avec valeur non parsable.
+    # Format-agnostique : on tente ISO (YYYY-MM-DD) puis dayfirst (DD/MM/YYYY).
+    # Une ligne n'est exclue que si AUCUN des deux formats ne fonctionne.
     for col in (dob_col, entry_col):
         mask_sentinel = df_clean[col].astype(str).str.contains(_SENTINEL_RE, na=False)
         df_clean = df_clean[~mask_sentinel].copy()
-        parsed = pd.to_datetime(df_clean[col], dayfirst=True, errors="coerce")
-        df_clean = df_clean[parsed.notna()].copy()
+        parsed_iso = pd.to_datetime(df_clean[col], format="%Y-%m-%d", errors="coerce")
+        parsed_eu  = pd.to_datetime(df_clean[col], dayfirst=True, errors="coerce")
+        valid = parsed_iso.notna() | parsed_eu.notna()
+        df_clean = df_clean[valid].copy()
 
     n_dropped = n_before - len(df_clean)
 

@@ -174,6 +174,24 @@ def run(data: dict | None, params: dict | None = None) -> dict:
     if not qx_records:
         return {"erreur": "qx_table manquant. Appeler builder.crude_rates d'abord."}
 
+    # ── STUB de dev : bypass complet pour itérer vite sur le Writer ──────────
+    # Activation : export AGENT_SMOOTHING_STUB=1 avant `streamlit run canvas_app.py`.
+    # Retourne une table "lissée" identique aux taux bruts, zéro violation de
+    # monotonie, zéro appel au notebook de lissage réel. Ne JAMAIS laisser
+    # cette variable en prod.
+    import os
+    if os.environ.get("AGENT_SMOOTHING_STUB") == "1":
+        stub = [
+            {"age": int(r["age"]), "q_x_lisse": float(r.get("q_x_brut") or 0.001)}
+            for r in qx_records if r.get("age") is not None
+        ]
+        return {
+            "smoothed_table": stub,
+            "method":         "stub",
+            "n_non_monotone": 0,
+            "_stub":          True,
+        }
+
     qx_table = pd.DataFrame(qx_records)
     method = params.get("method", "whittaker")
 

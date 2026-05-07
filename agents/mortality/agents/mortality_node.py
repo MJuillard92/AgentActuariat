@@ -125,12 +125,14 @@ def mortality_node(state: "AgentState") -> dict:
         (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
+    from agents.mortality.agents.llm_config import get_llm_config
+    cfg = get_llm_config("builder.llm")  # MortalityAgent partage le profil Builder
     new_events.append({
         "type":        "llm_input",
         "agent":       "MortalityAgent",
-        "model":       "gpt-4o",
+        "model":       cfg.get("model", "?"),
         "n_messages":  len(messages),
-        "max_tokens":  4000,
+        "max_tokens":  cfg.get("max_tokens", 4000),
         "has_tools":   bool(tools),
         "last_user":   str(last_user)[:400],
         "system_head": system_prompt[:300],
@@ -139,11 +141,12 @@ def mortality_node(state: "AgentState") -> dict:
     try:
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=messages,
             tools=tools if tools else None,
             tool_choice="auto" if tools else None,
-            max_tokens=4000,
+            max_tokens=cfg.get("max_tokens", 4000),
+            temperature=cfg.get("temperature", 0.0),
         )
     except Exception as exc:
         new_events.append({"type": "error", "message": f"Erreur API OpenAI : {exc}"})

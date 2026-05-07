@@ -647,17 +647,19 @@ def _call_llm_redaction(prompt: str) -> str:
     try:
         import openai
         from agents.mortality.agents._utils import call_with_retry
+        from agents.mortality.agents.llm_config import get_llm_config
 
+        cfg = get_llm_config("writer.redaction")
         client = openai.OpenAI()
         response = call_with_retry(
             client,
-            model="gpt-4o",
+            model=cfg["model"],
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT_REDACTION},
                 {"role": "user",   "content": prompt},
             ],
-            temperature=_TEMPERATURE,
-            max_tokens=_MAX_TOKENS_NARRATIVE,
+            temperature=cfg.get("temperature", _TEMPERATURE),
+            max_tokens=cfg.get("max_tokens", _MAX_TOKENS_NARRATIVE),
         )
         return (response.choices[0].message.content or "").strip()
 

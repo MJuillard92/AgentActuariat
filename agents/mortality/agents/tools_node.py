@@ -164,6 +164,37 @@ def execute_tools(
                     data_store["validation"] = existing
                 else:
                     data_store["validation"] = result
+
+            # ── preprocessing.clean_records : spread cleaned_records + exclusion_report + total_records ──
+            elif fn_name == "preprocessing" and function_name == "clean_records":
+                if "cleaned_records" in result:
+                    data_store["cleaned_records"] = result["cleaned_records"]
+                if "exclusion_report" in result:
+                    data_store["exclusion_report"] = result["exclusion_report"]
+                    final = (result["exclusion_report"] or {}).get("final_count")
+                    if final is not None:
+                        data_store["total_records"] = final
+
+            # ── statistical_analysis.segmentation ──
+            # Deux consommateurs aval, deux noms :
+            #   - YAML Writer attend `segmentations` (pluriel)
+            #   - tools/graphs/analysis_plots.py lit `data["segmentation"]` (singulier)
+            # On alimente les deux pour ne casser ni l'un ni l'autre.
+            elif fn_name == "statistical_analysis" and function_name == "segmentation":
+                data_store["segmentations"] = result.get("segmentations", {})
+                data_store["segmentation"]  = result   # rétro-compat analysis_plots
+
+            # ── statistical_analysis.time_series : spread serie + serie_h + serie_f ──
+            elif fn_name == "statistical_analysis" and function_name == "time_series":
+                if "serie" in result:
+                    data_store["serie"] = result["serie"]
+                if "serie_h" in result:
+                    data_store["serie_h"] = result["serie_h"]
+                if "serie_f" in result:
+                    data_store["serie_f"] = result["serie_f"]
+                # Aussi sauvegarder le résultat complet pour debug
+                data_store["series"] = result
+
             else:
                 store_key = _RESULT_KEYS.get(function_name, function_name)
                 data_store[store_key] = result

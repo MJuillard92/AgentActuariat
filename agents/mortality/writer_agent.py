@@ -29,7 +29,10 @@ class WriterAgent:
 
     MAX_STEPS = 20   # limite de sécurité pour la boucle
 
-    def __init__(self, model: str = "gpt-4o"):
+    def __init__(self, model: str | None = None):
+        if model is None:
+            from agents.mortality.agents.llm_config import get_llm_config
+            model = get_llm_config("writer.redaction").get("model", "gpt-5.4")
         self._model = model
         self._client = None   # lazy
 

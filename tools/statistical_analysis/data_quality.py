@@ -111,12 +111,23 @@ from agents.mortality.dictionary.column_schema import find_col_by_role, COLUMN_S
 
 
 def _try_parse_date(series: pd.Series) -> pd.Series:
-    """Tente de parser une série en dates ; retourne un masque des valeurs invalides."""
+    """Tente de parser une série en dates ; retourne un masque des valeurs invalides.
+
+    Format-agnostique : on essaie d'abord le format ISO (YYYY-MM-DD), puis
+    `dayfirst=True` (DD/MM/YYYY courant en France). Une valeur n'est invalide
+    que si AUCUN des deux parses ne fonctionne.
+    """
+    # ISO d'abord (CSV exportés par bases SQL, pandas, etc.)
     try:
-        parsed = pd.to_datetime(series, dayfirst=True, errors="coerce")
-        return parsed.isna() & series.notna() & (series.astype(str).str.strip() != "")
-    except Exception:
-        return pd.Series([False] * len(series), index=series.index)
+        parsed_iso = pd.to_datetime(series, format="%Y-%m-%d", errors="coerce")
+    except (ValueError, TypeError):
+        parsed_iso = pd.Series([pd.NaT] * len(series), index=series.index)
+    # Fallback : dates européennes
+    try:
+        parsed_eu = pd.to_datetime(series, dayfirst=True, errors="coerce")
+    except (ValueError, TypeError):
+        parsed_eu = pd.Series([pd.NaT] * len(series), index=series.index)
+    return parsed_iso.isna() & parsed_eu.isna() & series.notna() & (series.astype(str).str.strip() != "")
 
 
 def _is_sentinel(series: pd.Series) -> pd.Series:
