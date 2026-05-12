@@ -85,15 +85,25 @@ def _ensure_reportlab():
 
 
 def _fmt(val: Any, fmt: str = "") -> str:
-    """Format a single cell value according to a format string."""
+    """Format a single cell value according to a format string.
+    Conventions :
+      - Séparateur de milliers = espace fine (lisibilité actuariat FR)
+      - pctN : valeur supposée DÉJÀ en pourcentage (0-100), N décimales
+      - float2 / float4 : décimales, séparateur milliers"""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "—"
     if fmt == "pct":
-        return f"{float(val):.1%}"
+        return f"{float(val):.1%}".replace(",", " ")
+    if fmt == "pct1":
+        return f"{float(val):.1f} %".replace(",", " ")
+    if fmt == "pct2":
+        return f"{float(val):.2f} %".replace(",", " ")
     if fmt == "int":
-        return f"{int(val):,}"
+        return f"{int(val):,}".replace(",", " ")
+    if fmt == "float1":
+        return f"{float(val):,.1f}".replace(",", " ")
     if fmt == "float2":
-        return f"{float(val):.2f}"
+        return f"{float(val):,.2f}".replace(",", " ")
     if fmt == "float4":
         return f"{float(val):.4f}"
     if fmt == "sci":
@@ -257,20 +267,62 @@ def render_table_from_spec(spec: dict, data: dict) -> tuple[Any, str, list]:
 
     # ── ReportLab Table ───────────────────────────────────────────────────────
     n_cols = max(len(r) for r in all_rows)
-    col_width = 16 * cm / n_cols if n_cols else 2 * cm
+    total_width = 16 * cm
+
+    # Largeurs proportionnelles au contenu maximum de chaque colonne.
+    # Sans ça, des libellés longs comme "Diff/Prédits (%)" se collent au
+    # voisin "IC Min 95%" et l'en-tête déborde sur la cellule suivante.
+    if n_cols:
+        col_maxlen = [0] * n_cols
+        for r in all_rows:
+            for i, v in enumerate(r[:n_cols]):
+                col_maxlen[i] = max(col_maxlen[i], len(str(v)))
+        # Largeur min = 1.2cm pour les colonnes très étroites
+        min_w = 1.2 * cm
+        total_weight = sum(max(c, 4) for c in col_maxlen) or 1
+        col_widths = [
+            max(min_w, total_width * max(c, 4) / total_weight)
+            for c in col_maxlen
+        ]
+        # Re-scaler si on dépasse total_width
+        sum_w = sum(col_widths)
+        if sum_w > total_width:
+            col_widths = [w * total_width / sum_w for w in col_widths]
+    else:
+        col_widths = [total_width / max(n_cols, 1)] * n_cols
+
+    # Wrapping des en-têtes longs via Paragraph
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import ParagraphStyle
+    _header_style = ParagraphStyle(
+        "th", fontName="Helvetica-Bold", fontSize=8, leading=10,
+        textColor=colors.white, alignment=1,  # 1 = CENTER
+    )
+    wrapped_rows = []
+    for i, r in enumerate(all_rows):
+        if i == 0:
+            # `\n` dans le label YAML → retour à la ligne dans l'en-tête.
+            # Paragraph traite naturellement <br/> mais ignore \n.
+            wrapped_rows.append([
+                Paragraph(str(c).replace("\n", "<br/>"), _header_style)
+                for c in r
+            ])
+        else:
+            wrapped_rows.append(list(r))
 
     try:
-        tbl = Table(all_rows, colWidths=[col_width] * n_cols, repeatRows=1)
+        tbl = Table(wrapped_rows, colWidths=col_widths, repeatRows=1)
 
         style_cmds = [
             ("BACKGROUND",  (0, 0), (-1, 0), BLUE),
             ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE",    (0, 0), (-1, -1), 8),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT, colors.white]),
             ("GRID",        (0, 0), (-1, -1), 0.3, GREY),
-            ("TOPPADDING",  (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING",  (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN",       (0, 0), (-1, -1), "CENTER"),
         ]
 

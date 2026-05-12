@@ -403,12 +403,74 @@ def detect_value_mapping_stage(records, enum_specs: dict) -> dict:
 
 # ── Normalisation des records (US-14) ────────────────────────────────────────
 
-def maybe_normalize_records(data_store: dict, df_json: str | None) -> dict | None:
+# Colonnes canoniques traitées comme des dates lors de la normalisation.
+_DATE_COLUMNS_CANONICAL = ("date_naissance", "date_entree", "date_sortie")
+# Regex des dates sentinelles (contrats actifs) à clipper.
+_SENTINEL_DATE_PATTERNS = ("2999", "9999", "3000")
+
+
+def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
+    """Convertit les colonnes date_* en datetime64 (format mixte, dayfirst).
+    Clippe les dates sentinelles (31/12/2999, etc.) à la date du dernier
+    décès observé (= fin d'observation réelle).
+    Retourne (df_modifié, obs_end_iso ou None)."""
+    import pandas as pd
+    for col in _DATE_COLUMNS_CANONICAL:
+        if col in df.columns:
+            df[col] = pd.to_datetime(
+                df[col], format="mixed", dayfirst=True, errors="coerce",
+            )
+    # Auto-détection observation_end : max(date_sortie) parmi décès
+    obs_end = None
+    if "date_sortie" in df.columns and "cause_sortie" in df.columns:
+        is_dead = df["cause_sortie"].astype(str).str.lower().isin(
+            {"deces", "décès", "decede", "décédé", "d", "1", "true"}
+        )
+        ds = df.loc[is_dead, "date_sortie"]
+        ds = ds[ds.notna() & (ds.dt.year < 2100)]
+        if len(ds) > 0:
+            obs_end = ds.max()
+    # Clipping des sentinelles dans date_sortie
+    if obs_end is not None and "date_sortie" in df.columns:
+        sentinel = df["date_sortie"].dt.year >= 2100
+        df.loc[sentinel, "date_sortie"] = obs_end
+    return df, (obs_end.isoformat() if obs_end is not None else None)
+
+
+def _write_normalized_parquet(df, dataset_ref: str) -> str | None:
+    """Écrit le DataFrame normalisé en Parquet à côté de l'original :
+    `sessions/artifacts/<session_id>_dataset_normalized.parquet`.
+    Retourne le path absolu, ou None en cas d'erreur."""
+    if not dataset_ref:
+        return None
+    try:
+        from pathlib import Path
+        from session.dataset_store import _ARTIFACTS_DIR
+        norm_path = Path(_ARTIFACTS_DIR) / f"{dataset_ref}_dataset_normalized.parquet"
+        df.to_parquet(norm_path, index=False)
+        return str(norm_path)
+    except Exception:
+        return None
+
+
+def maybe_normalize_records(
+    data_store: dict,
+    df_json: str | None,
+    dataset_ref: str | None = None,
+) -> dict | None:
     """Retourne les updates data_store à appliquer si normalisation due.
 
     Déclenche uniquement quand :
       column_mapping_confirmed ET value_mapping_confirmed ET NOT records_normalized.
-    Renvoie None sinon (no-op).
+
+    Actions :
+      1. Renomme colonnes (column_mapping) et mappe valeurs enum (value_mapping)
+      2. Parse les dates canoniques en datetime64 (format mixte, dayfirst)
+      3. Clip les dates sentinelles (31/12/2999, ...) à la fin d'observation
+      4. Écrit le résultat en Parquet sur disque (<session>_normalized.parquet)
+         et expose `dataset_ref_normalized` pour que tools_node le charge.
+
+    Renvoie None si conditions non remplies.
     """
     if not data_store.get("column_mapping_confirmed"):
         return None
@@ -436,20 +498,34 @@ def maybe_normalize_records(data_store: dict, df_json: str | None) -> dict | Non
     )
     df_out = result["normalized_records"]
 
+    # Parsing dates + clipping sentinelles
+    df_out, obs_end_iso = _parse_and_clip_dates(df_out, dataset_ref)
+
+    # Persistance Parquet (zéro re-parsing dans les tools en aval)
+    normalized_path = _write_normalized_parquet(df_out, dataset_ref or "")
+
     audit_entry = {
-        "column_mapping": dict(column_mapping_canonical),
-        "value_mapping":  dict(value_mapping),
-        "rows_in":        len(df_in),
-        "rows_out":       len(df_out),
+        "column_mapping":  dict(column_mapping_canonical),
+        "value_mapping":   dict(value_mapping),
+        "rows_in":         len(df_in),
+        "rows_out":        len(df_out),
+        "observation_end": obs_end_iso,
+        "parquet_path":    normalized_path,
     }
     existing_audit = dict(data_store.get("_audit") or {})
     existing_audit["normalization"] = audit_entry
 
-    return {
-        "input_records":       df_out,
-        "records_normalized":  True,
-        "_audit":              existing_audit,
+    updates = {
+        "records_normalized": True,
+        "_audit":             existing_audit,
     }
+    # Plus de DataFrame dans data_store (le précédent input_records était
+    # code mort et causait des problèmes de sérialisation msgpack).
+    if normalized_path:
+        updates["dataset_ref_normalized"] = normalized_path
+    if obs_end_iso:
+        updates["observation_end"] = obs_end_iso
+    return updates
 
 
 # ── Point d'entrée principal ─────────────────────────────────────────────────

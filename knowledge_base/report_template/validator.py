@@ -115,6 +115,111 @@ def validate_template(
     return report
 
 
+# ───────────────── Check étendu (--check-columns) ─────────────────
+
+def check_table_columns(
+    yaml_path: Path | str,
+    registry: dict[str, dict],
+    samples_provider=None,
+) -> ValidationReport:
+    """Vérifie que chaque `columns[].key` d'un visual_spec table existe
+    bien dans les records produits par le tool référencé via produced_by.
+
+    Stratégie : on appelle le tool avec des fixtures minimales (via
+    `samples_provider(tool_name) -> dict | None`, optionnel) ou on parse
+    les noms de champs depuis la docstring `OUTPUTS.data_store_keys_written`
+    du tool. Le second mode ne nécessite aucune exécution réelle.
+
+    Retourne un ValidationReport. Erreur si une columns[].key n'existe
+    pas dans les records de la source attendue.
+    """
+    report = ValidationReport()
+    path = Path(yaml_path)
+
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, FileNotFoundError) as exc:
+        report.add_error(str(path), f"lecture YAML : {exc}")
+        return report
+
+    # Map : key produite → docstring fields (extraits de OUTPUTS.data_store_keys_written)
+    # Format : "ci_table : list[dict] — {age, q_x_lisse, ci_lower, ci_upper}"
+    # On extrait les noms entre { } ou les colonnes mentionnées.
+    import re as _re
+    keys_to_fields: dict[str, set[str]] = {}
+    for block, idx, entry in _iter_produced(doc):
+        pb = entry.get("produced_by") or {}
+        tool_name = pb.get("tool")
+        if not tool_name:
+            continue
+        tool_spec = registry.get(tool_name) or {}
+        key_name = entry.get("key")
+        if not key_name:
+            continue
+        # Read tool docstring OUTPUTS.data_store_keys_written for the key
+        path_to_tool = tool_spec.get("path")
+        if not path_to_tool:
+            continue
+        try:
+            src = Path(path_to_tool).read_text(encoding="utf-8")
+        except Exception:
+            continue
+        # Trouver la ligne du data_store_keys_written matchant la clé
+        # Format attendu : `  - key_name : type — {field1, field2, ...}`
+        # ou `  - key_name : type — texte mentionnant les champs`
+        pat = _re.compile(
+            r"^\s*-\s*" + _re.escape(key_name) + r"\s*:\s*[^—\n]+—\s*(.+)$",
+            _re.MULTILINE,
+        )
+        match = pat.search(src)
+        if not match:
+            continue
+        desc = match.group(1)
+        # Extraire les champs entre {…}
+        brace_match = _re.search(r"\{([^}]+)\}", desc)
+        if brace_match:
+            fields_raw = brace_match.group(1)
+            fields = {f.strip() for f in fields_raw.split(",") if f.strip()}
+        else:
+            # Fallback : mots-clés style "age, q_x" dans la description
+            fields = set(_re.findall(r"\b([a-z_][a-z0-9_]*)\b", desc.lower()))
+        if fields:
+            keys_to_fields[key_name] = fields
+
+    # Pour chaque visual_spec table, vérifier que columns[].key ∈ keys_to_fields[source]
+    for section in doc.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        sid = section.get("id", "?")
+        for j, spec in enumerate(section.get("visual_specs") or []):
+            if not isinstance(spec, dict) or spec.get("type") != "table":
+                continue
+            src = spec.get("source") or ""
+            if not src:
+                continue
+            # Si la source est sub-pathed (ex. `exclusion_report.rules`), on
+            # ne sait pas typer le sub-record précisément depuis la docstring
+            # globale — on skip (best-effort).
+            if "." in src:
+                continue
+            declared_fields = keys_to_fields.get(src)
+            if not declared_fields:
+                # Pas d'info de schéma — on ne peut pas vérifier
+                continue
+            for k, col in enumerate(spec.get("columns") or []):
+                col_key = col.get("key")
+                if not col_key:
+                    continue
+                if col_key not in declared_fields:
+                    report.add_error(
+                        f"sections.{sid}.visual_specs[{j}].columns[{k}]",
+                        f"colonne '{col_key}' absente du schéma de '{base}' "
+                        f"(fields déclarés dans le tool : {sorted(declared_fields)})",
+                    )
+
+    return report
+
+
 # ───────────────── Helpers : collecte ─────────────────
 
 def _data_contract(doc: dict) -> dict:
@@ -468,18 +573,29 @@ def _warn_unused_keys(
                 consumed.add(v)
 
     # visual_specs.source (support sub-paths like "exclusion_report.rules")
+    # + multi-series charts qui déclarent une source par série.
     for section in doc.get("sections") or []:
         if not isinstance(section, dict):
             continue
         for spec in section.get("visual_specs") or []:
-            if isinstance(spec, dict):
-                src = spec.get("source")
-                if isinstance(src, str):
-                    consumed.add(src)
-                    # also mark the base key consumed for sub-paths (e.g. "foo.bar" → "foo")
-                    base = src.split(".")[0]
-                    if base != src:
-                        consumed.add(base)
+            if not isinstance(spec, dict):
+                continue
+            # Source globale (mono-source)
+            src = spec.get("source")
+            if isinstance(src, str):
+                consumed.add(src)
+                base = src.split(".")[0]
+                if base != src:
+                    consumed.add(base)
+            # Sources par série (multi_series)
+            for s in (spec.get("series") or []):
+                if isinstance(s, dict):
+                    ssrc = s.get("source")
+                    if isinstance(ssrc, str):
+                        consumed.add(ssrc)
+                        sbase = ssrc.split(".")[0]
+                        if sbase != ssrc:
+                            consumed.add(sbase)
 
     for key, (block, idx) in produced_keys.items():
         if key not in consumed:

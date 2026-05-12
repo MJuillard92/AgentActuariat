@@ -24,8 +24,10 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-# Nombre de chunks RAG demandés par section
-_N_RESULTS = 3
+# Nombre de chunks RAG demandés par section. Volontairement 1 :
+# au-delà, le LLM rédacteur prend les chunks comme des "templates" et
+# produit autant de narratives qu'il y a d'exemples (cf. Plan Lot 1 - cause B).
+_N_RESULTS = 1
 
 # Score de distance max acceptable (ChromaDB — plus petit = plus proche)
 # Au-dessus de ce seuil, l'extrait est ignoré (pas assez pertinent)
@@ -166,10 +168,17 @@ def _format_chunks(chunks: list[dict], style_guide: dict | None = None) -> str:
         return ""
 
     lines = [
-        "## Exemples de rédaction issus du corpus de référence",
-        "Les éléments ci-dessous proviennent de rapports actuariels réels.",
-        "Ils te donnent le ton, le niveau de détail et la longueur attendus.",
-        "Ne les copie pas — inspire-toi du style.",
+        "## INSPIRATION DE STYLE — référence à NE PAS copier",
+        "",
+        "Les éléments ci-dessous sont des EXTRAITS d'autres rapports actuariels.",
+        "Ils servent UNIQUEMENT à indiquer le ton, le vocabulaire et la longueur attendus.",
+        "",
+        "⚠ RÈGLES STRICTES :",
+        "  1. PRODUIS UN SEUL TEXTE COHÉRENT — pas 2, pas 3, pas plusieurs versions empilées.",
+        "  2. NE REPRENDS PAS la méthodologie de ces extraits (Kaplan-Meier, Makeham,",
+        "     Whittaker, abattements…) si elle ne figure pas dans tes propres données.",
+        "  3. NE REPRODUIS PAS les noms propres, marques, dates ou chiffres des extraits.",
+        "  4. INSPIRE-TOI uniquement du style narratif (phrases courtes, sobriété actuarielle).",
         "",
     ]
 
@@ -177,7 +186,7 @@ def _format_chunks(chunks: list[dict], style_guide: dict | None = None) -> str:
         sg_text = _chunk_text(style_guide)
         if sg_text:
             lines += [
-                "### Guide de style (tournures et conventions du rapport de référence)",
+                "### Guide de style (tournures et conventions)",
                 sg_text[:_EXTRACT_MAX_CHARS],
                 "",
             ]
@@ -186,9 +195,8 @@ def _format_chunks(chunks: list[dict], style_guide: dict | None = None) -> str:
         content = _chunk_text(chunk)
         if not content:
             continue
-        source = _chunk_source(chunk, fallback=f"rapport_{i+1}")
         lines += [
-            f"### Extrait {i+1} — {source}",
+            f"### Inspiration stylistique (extrait)",
             content[:_EXTRACT_MAX_CHARS],
             "",
         ]

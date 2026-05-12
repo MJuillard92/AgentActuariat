@@ -211,7 +211,12 @@ def test_master_routes_to_builder_when_write_yes(monkeypatch):
 
     state = {
         "messages": [HumanMessage(content="fais-moi le rapport")],
-        "data_store": {"_disambiguation_done": True, "study_plan": {"gender_segmentation": "unisex"}},
+        "data_store": {
+            "_disambiguation_done":   True,
+            "_methods_question_done": True,
+            "study_plan":             {"gender_segmentation": "unisex",
+                                       "methods_auto":        True},
+        },
         "dataset_ref": None,
     }
     out = mn.master_node(state)
@@ -228,7 +233,12 @@ def test_master_routes_to_builder_when_write_yes(monkeypatch):
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_master_cumulative_cycle_limit(monkeypatch):
-    """Après 3 cycles sans convergence, Master doit s'arrêter."""
+    """Après 6 cycles sans convergence, Master doit s'arrêter.
+
+    La limite a été portée de 3 à 6 pour absorber le pipeline full_report
+    (~5 batchs : descriptifs → crude_rates → smoothing → validation →
+    aggregation_deciles).
+    """
     from langchain_core.messages import HumanMessage
     from agents.mortality.agents import master_node as mn
 
@@ -245,9 +255,11 @@ def test_master_cumulative_cycle_limit(monkeypatch):
     state = {
         "messages": [HumanMessage(content="fais-moi le rapport")],
         "data_store": {
-            "_disambiguation_done": True,
-            "_master_builder_cycles": 3,  # déjà 3 cycles
-            "study_plan": {"gender_segmentation": "unisex"},
+            "_disambiguation_done":     True,
+            "_methods_question_done":   True,
+            "_master_builder_cycles":   6,  # déjà 6 cycles → 7 > 6 → stop
+            "study_plan":               {"gender_segmentation": "unisex",
+                                         "methods_auto":        True},
         },
         "dataset_ref": None,
     }
@@ -312,11 +324,13 @@ def test_builder_raw_rates_assimilation_is_deterministic(monkeypatch):
 
     out = bn.builder_node(state)
 
-    # smoothed_table doit être dans data_store, produit par assimilation
+    # smoothed_table doit être dans data_store, produit par assimilation.
+    # Avec l'enrichissement Lot 1, on inclut aussi q_x_brut pour le
+    # tableau YAML smoothing_table.
     ds = out.get("data_store", {})
     assert ds.get("smoothed_table") == [
-        {"age": 30, "q_x_lisse": 0.0012},
-        {"age": 31, "q_x_lisse": 0.0013},
+        {"age": 30, "q_x_brut": 0.0012, "q_x_lisse": 0.0012},
+        {"age": 31, "q_x_brut": 0.0013, "q_x_lisse": 0.0013},
     ]
 
 

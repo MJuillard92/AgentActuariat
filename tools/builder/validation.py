@@ -64,15 +64,19 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - validation.ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)
-  - validation.alpha         : float — niveau de risque utilisé (confidence_intervals)
-  - validation.p_value       : float — p-value du test chi² (chi_square)
-  - validation.chi2_stat     : float — statistique chi² observée (chi_square)
-  - validation.df            : int   — degrés de liberté (chi_square)
-  - validation.interpretation: str   — interprétation textuelle (chi_square)
+  - ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)
+  - alpha         : float — niveau de risque utilisé (confidence_intervals)
+  - p_value       : float — p-value du test chi² (chi_square)
+  - chi2_stat     : float — statistique chi² observée (chi_square)
+  - df            : int   — degrés de liberté (chi_square)
+  - interpretation: str   — interprétation textuelle (chi_square)
 return_payload:
-  confidence_intervals → ci_table (list), alpha
-  chi_square → chi2_stat, p_value, df, interpretation
+  ci_table       : list[dict] — IC par âge (function_name=confidence_intervals)
+  alpha          : float — niveau de risque utilisé
+  chi2_stat      : float — statistique chi² (function_name=chi_square)
+  p_value        : float — p-value (function_name=chi_square)
+  df             : int — degrés de liberté (function_name=chi_square)
+  interpretation : str — interprétation textuelle (function_name=chi_square)
 
 QUALITY GATES
 -------------

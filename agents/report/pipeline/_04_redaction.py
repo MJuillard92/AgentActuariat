@@ -23,9 +23,59 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import math
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Cache lazy des formats globaux du YAML (chargés une fois par run)
+_FORMATS_CACHE: dict | None = None
+
+
+def _get_formats() -> dict:
+    """Charge formats:{defaults, na_display, number_separator} depuis le YAML.
+    Cache au niveau module pour ne pas relire le YAML à chaque cellule."""
+    global _FORMATS_CACHE
+    if _FORMATS_CACHE is None:
+        try:
+            from knowledge_base.report_template.template_loader import load_formats
+            _FORMATS_CACHE = load_formats()
+        except Exception:
+            _FORMATS_CACHE = {
+                "defaults": {}, "na_display": "—", "number_separator": " ",
+            }
+    return _FORMATS_CACHE
+
+
+def _format_cell(value: Any, fmt: str, na_display: str = "—",
+                  thousand_sep: str = " ") -> str:
+    """Formate une valeur de cellule selon `fmt` (cf. formats.defaults YAML).
+
+    Formats supportés : int, float1, float2, float4, pct, pct1, sci, str
+    (= passthrough). NaN/None → na_display.
+    """
+    if value is None:
+        return na_display
+    if isinstance(value, float) and math.isnan(value):
+        return na_display
+    try:
+        if fmt == "int":
+            return f"{int(value):,}".replace(",", thousand_sep)
+        if fmt == "float1":
+            return f"{float(value):,.1f}".replace(",", thousand_sep)
+        if fmt == "float2":
+            return f"{float(value):,.2f}".replace(",", thousand_sep)
+        if fmt == "float4":
+            return f"{float(value):,.4f}".replace(",", thousand_sep)
+        if fmt == "pct":
+            return f"{float(value):.1%}"
+        if fmt == "pct1":
+            return f"{float(value):.1f} %"
+        if fmt == "sci":
+            return f"{float(value):.3e}"
+    except (ValueError, TypeError):
+        pass
+    return str(value)
 
 _MAX_TOKENS_NARRATIVE = 1200
 _TEMPERATURE          = 0.4   # Faible : style professionnel, peu créatif
@@ -52,10 +102,50 @@ def _resolve_source(source: str | None, data_store: dict):
 def _hydrate_visual_spec(spec: dict, data_store: dict) -> dict:
     """Design 3 : `source` pointe vers une clé data_store contenant la donnée,
     éventuellement via un sub-path pointé (ex. `segmentations.sexe`).
-    Tableau → (headers, rows). Chart → (x_values, y_values)."""
+    Tableau → (headers, rows). Chart simple → (x_values, y_values).
+    Chart multi_series → series_hydrated (liste de séries avec leurs propres
+    sources, styles et valeurs)."""
+    stype = spec.get("type")
+
+    # ── Chart multi-séries : chaque série a sa propre source ──────────────
+    # Pas de `source` global ; le spec déclare une liste `series:` où
+    # chaque entrée pointe vers sa propre source/keys.
+    if stype == "chart" and spec.get("chart_type") == "multi_series":
+        series_specs = spec.get("series") or []
+        series_hydrated: list[dict] = []
+        for s in series_specs:
+            src = s.get("source")
+            d = _resolve_source(src, data_store) or []
+            if not isinstance(d, list):
+                # Sources comme dict (rare) → skip silencieusement
+                continue
+            key_x = s.get("key_x", "age")
+            entry = {
+                "style":  s.get("style", "line"),
+                "label":  s.get("label", src or ""),
+                "color":  s.get("color"),
+                "alpha":  s.get("alpha", 1.0),
+                "xs":     [row.get(key_x) for row in d],
+            }
+            if s.get("style") == "area":
+                # Aire : deux y nécessaires (lower + upper)
+                entry["ys_lower"] = [row.get(s.get("key_y_lower", "ci_lower")) for row in d]
+                entry["ys_upper"] = [row.get(s.get("key_y_upper", "ci_upper")) for row in d]
+            else:
+                key_y = s.get("key_y", "value")
+                entry["ys"] = [row.get(key_y) for row in d]
+            series_hydrated.append(entry)
+        return {
+            **spec,
+            "series_hydrated": series_hydrated,
+            "x_label":  (spec.get("x_axis") or {}).get("label", ""),
+            "y_label":  (spec.get("y_axis") or {}).get("label", ""),
+            "error":    None,
+        }
+
+    # ── Cas mono-source (tableaux + chart classique) ──────────────────────
     source = spec.get("source")
     data = _resolve_source(source, data_store)
-    stype = spec.get("type")
 
     if data is None:
         return {**spec, "error": f"source '{source}' absente du data_store"}
@@ -63,7 +153,20 @@ def _hydrate_visual_spec(spec: dict, data_store: dict) -> dict:
     if stype == "table":
         columns = spec.get("columns", [])
         headers = [c.get("label", c.get("key", "")) for c in columns]
-        rows    = [[row.get(c["key"]) for c in columns] for row in (data or [])]
+        # Application des formats : inline (col["format"]) > formats.defaults[key]
+        fmt_cfg = _get_formats()
+        defaults = fmt_cfg.get("defaults") or {}
+        na = fmt_cfg.get("na_display", "—")
+        sep = fmt_cfg.get("number_separator", " ")
+        rows = []
+        for row in (data or []):
+            row_out = []
+            for c in columns:
+                key = c["key"]
+                val = row.get(key)
+                fmt = c.get("format") or defaults.get(key, "")
+                row_out.append(_format_cell(val, fmt, na_display=na, thousand_sep=sep))
+            rows.append(row_out)
         return {**spec, "headers": headers, "rows": rows, "error": None}
 
     if stype == "chart":
@@ -327,12 +430,8 @@ def _run_stats(section, data_store: dict) -> list[dict]:
 
 def _run_graphs(section, data_store: dict) -> list[str]:
     """
-    Design 3 (US-24) : itère sur section.visual_specs et ne retient que les
-    specs de type `chart`. L'appel au renderer graph_from_spec n'est pas
-    encore aligné sur la forme Design 3 — on skippe pour l'instant en
-    loggant pour debug.
-    TODO(US-25/US-27) : adapter tools/graphs/graph_from_spec.py à la forme
-    {x_values, y_values, chart_type, x_label, y_label} hydratée.
+    Design 3 : itère sur visual_specs de type `chart` et rend chacun en PNG
+    via matplotlib (renderer direct). Retourne la liste des chemins PNG.
     """
     paths: list[str] = []
     for spec in (section.visual_specs or []):
@@ -343,10 +442,140 @@ def _run_graphs(section, data_store: dict) -> list[str]:
             log.warning("[04_redaction] graphique '%s' : %s",
                         spec.get("id", "?"), hydrated["error"])
             continue
-        # TODO: adapt graph_from_spec to Design 3 (x_values/y_values payload).
-        log.info("[04_redaction] graphique '%s' hydraté mais rendu reporté (US-25/27)",
-                 spec.get("id", "?"))
+        path = _render_chart_to_png(hydrated)
+        if path:
+            paths.append(path)
+            log.info("[04_redaction] graphique '%s' rendu → %s",
+                     spec.get("id", "?"), path)
+        else:
+            log.warning("[04_redaction] graphique '%s' : rendu échoué",
+                        spec.get("id", "?"))
     return paths
+
+
+def _render_chart_to_png(hydrated: dict) -> str:
+    """Rend un spec chart hydraté (Design 3) en PNG via matplotlib.
+
+    Spec attendu : {id, type: 'chart', chart_type: 'bar'|'line'|'scatter',
+                    x_values, y_values, x_label, y_label, purpose, [name]}
+    Retourne le path PNG, ou "" si échec.
+    """
+    import os, tempfile
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        log.error("[04_redaction] matplotlib indisponible")
+        return ""
+
+    chart_type = hydrated.get("chart_type", "bar")
+    x_label    = hydrated.get("x_label", "")
+    y_label    = hydrated.get("y_label", "")
+    title      = hydrated.get("name") or hydrated.get("purpose") or hydrated.get("id", "Graphique")
+
+    # Désactiver text.usetex explicitement (cf. fix LaTeX missing dans Lot 1)
+    plt.rcParams["text.usetex"] = False
+
+    # ── Cas multi-séries : on dispatch chaque série selon son style ──────
+    if chart_type == "multi_series":
+        series_hydrated = hydrated.get("series_hydrated") or []
+        if not series_hydrated:
+            log.warning("[04_redaction] multi_series '%s' : aucune série",
+                        hydrated.get("id", "?"))
+            return ""
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        DEFAULT_COLORS = ["#1A3668", "#E25B34", "#2CA02C", "#9467BD"]
+        n_drawn = 0
+        for i, ser in enumerate(series_hydrated):
+            xs = ser.get("xs") or []
+            style = ser.get("style", "line")
+            color = ser.get("color") or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+            label = ser.get("label", "")
+
+            if style == "area":
+                ys_lower = ser.get("ys_lower") or []
+                ys_upper = ser.get("ys_upper") or []
+                triples = [(x, lo, hi) for x, lo, hi in zip(xs, ys_lower, ys_upper)
+                           if x is not None and lo is not None and hi is not None]
+                if not triples:
+                    continue
+                tx, tl, tu = zip(*triples)
+                ax.fill_between(tx, tl, tu, color=color, alpha=ser.get("alpha", 0.15), label=label)
+                n_drawn += 1
+            else:
+                ys = ser.get("ys") or []
+                pairs = [(x, y) for x, y in zip(xs, ys)
+                         if x is not None and y is not None]
+                if not pairs:
+                    continue
+                px, py = zip(*pairs)
+                if style == "point":
+                    ax.scatter(px, py, color=color, s=24, alpha=ser.get("alpha", 0.8), label=label, zorder=3)
+                else:   # line par défaut
+                    ax.plot(px, py, color=color, linewidth=1.8, label=label, zorder=2)
+                n_drawn += 1
+
+        if n_drawn == 0:
+            log.warning("[04_redaction] multi_series '%s' : aucune série rendue",
+                        hydrated.get("id", "?"))
+            plt.close(fig)
+            return ""
+
+        ax.set_title(title, fontsize=11, fontweight="bold", pad=10)
+        ax.set_xlabel(x_label, fontsize=9)
+        ax.set_ylabel(y_label, fontsize=9)
+        ax.grid(True, alpha=0.3, axis="y")
+        ax.legend(fontsize=9, frameon=True)
+        plt.tight_layout()
+
+        spec_id = hydrated.get("id", "chart")
+        path = os.path.join(tempfile.gettempdir(),
+                            f"chart_{spec_id}_{os.getpid()}.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    # ── Cas mono-source (existant) ────────────────────────────────────────
+    x_values   = hydrated.get("x_values") or []
+    y_values   = hydrated.get("y_values") or []
+
+    if not x_values or not y_values:
+        log.warning("[04_redaction] _render_chart_to_png '%s' : pas de données "
+                    "(x=%d, y=%d) — chart skip",
+                    hydrated.get("id", "?"), len(x_values), len(y_values))
+        return ""
+
+    pairs = [(x, y) for x, y in zip(x_values, y_values)
+             if x is not None and y is not None]
+    if not pairs:
+        return ""
+    xs, ys = zip(*pairs)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    BLUE = "#1A3668"
+
+    if chart_type == "line":
+        ax.plot(xs, ys, color=BLUE, linewidth=1.8, marker="o", markersize=3)
+    elif chart_type == "scatter":
+        ax.scatter(xs, ys, color=BLUE, s=20, alpha=0.7)
+    else:   # bar par défaut
+        ax.bar([str(x) for x in xs], ys, color=BLUE, edgecolor="white")
+        ax.tick_params(axis="x", rotation=45)
+
+    ax.set_title(title, fontsize=11, fontweight="bold", pad=10)
+    ax.set_xlabel(x_label, fontsize=9)
+    ax.set_ylabel(y_label, fontsize=9)
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+
+    spec_id = hydrated.get("id", "chart")
+    path = os.path.join(tempfile.gettempdir(),
+                        f"chart_{spec_id}_{os.getpid()}.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
 
 
 # ── Appel LLM de rédaction ────────────────────────────────────────────────────
@@ -386,15 +615,36 @@ def _build_redaction_prompt(section, table_results: list, graph_paths: list) -> 
         )
 
     prompt += (
-        "\n\n## Consigne finale"
+        "\n\n## Consigne finale (impérative)"
+        "\n- PRODUIS UN SEUL TEXTE COHÉRENT (pas 2 ou 3 versions empilées). Le texte"
+        " s'articule en : 1 intro courte, 2-3 sous-sections, 1 synthèse finale."
         "\n- Rédige le texte narratif de cette section en respectant la charte de style."
         "\n- Cite les chiffres clés du bloc JSON « Résultats actuariels » (HR, IC, "
         "p-values, R², SMR, ratios, pourcentages) — ils doivent apparaître mot-pour-mot "
         "dans ta prose."
+        "\n- FORMATAGE DES NOMBRES : utilise TOUJOURS l'écriture courante avec espaces"
+        " comme séparateur de milliers (ex: '6 082 714 années-personne', '94 282 décès')."
+        " JAMAIS de notation scientifique (interdit : '6.08271e+06', '1.2e5'). JAMAIS de"
+        " décimales superflues sur des entiers ('94282.0' → '94 282')."
+        "\n- CONTEXTE des chiffres : si les nombres viennent de `cleaned_records` (après"
+        " application des règles d'exclusion R1-R6), précise-le explicitement"
+        " ('après retraitement', 'sur la base assainie', etc.) plutôt que de présenter"
+        " ces chiffres comme la base brute initiale."
+        "\n- PÉRIODE D'OBSERVATION : si `annee_min` et `annee_max` te sont fournis, "
+        "utilise EXACTEMENT ces deux bornes (ex: '1983 à 2010'). Ne calcule pas le"
+        " nombre d'années si le résultat dépasse 100 (signe de date sentinelle non"
+        " filtrée — omets alors la mention)."
         "\n- Si une statistique manque, OMETS la phrase entière plutôt que d'écrire "
         "« [donnée non disponible] »."
         "\n- N'INVENTE JAMAIS d'âge, de valeur ou d'intervalle absent des données fournies."
         "\n- Ne répète pas ligne-à-ligne les tableaux — commente-les."
+        "\n- INTERDIT : ne mentionne AUCUNE méthode actuarielle qui n'est PAS dans tes"
+        " résultats actuariels (Kaplan-Meier, Makeham, Whittaker-Henderson, Gompertz,"
+        " abattement, raccordement, table TH/TF…). Si tu ne vois pas la clé `smoothed_table`"
+        " dans le contexte → ne parle pas de lissage. Si pas de `validation` → ne parle pas"
+        " d'IC ni de backtesting. Si pas de `benchmarking` → ne parle pas de tables"
+        " réglementaires ni d'abattements. Les chunks d'inspiration sont stylistiques"
+        " UNIQUEMENT, ils ne décrivent PAS ta méthodologie."
         "\n- Conclus la section par une phrase de synthèse."
     )
 
@@ -783,8 +1033,11 @@ def redact_plan(plan, data_store: dict) -> dict:
     # Snapshot read-only pour les workers (évite les conflits d'écriture)
     ds_snapshot = dict(data_store)
 
-    # Limiter le parallélisme : 5 appels LLM simultanés max (429 protection)
-    max_workers = min(len(ready), 5)
+    # Limiter le parallélisme : 2 appels LLM simultanés max.
+    # Au-delà, les TPM/RPM cumulatifs causent des échecs en cascade (les
+    # 5 threads se reglent les 429 simultanément, retries en parallèle,
+    # bail). 2 workers offre le meilleur tradeoff vitesse/robustesse.
+    max_workers = min(len(ready), 2)
     log.info("[04_redaction] %d sections en parallèle (max_workers=%d)",
              len(ready), max_workers)
 
@@ -823,16 +1076,19 @@ def redact_plan(plan, data_store: dict) -> dict:
         text        = r.get("text", "")
         sid         = sec.section_id
 
-        # Nettoyage des résidus du tour précédent
-        data_store.pop("_last_table_rows", None)
-        data_store.pop("_last_graph_path", None)
-
         # Nombre total d'inserts attendus — on met le texte sur le PREMIER write,
         # les suivants sont purement pour append tableau/graphique.
         n_inserts = max(len(all_tables), len(graph_paths), 1)
         text_written = False
 
         for i in range(n_inserts):
+            # Reset systématique en début d'itération pour éviter que
+            # _last_table_rows/_last_graph_path de l'itération précédente
+            # soient re-consommés par write_section et dupliquent le
+            # tableau/graphique (cf. plan Lot 1 cause A).
+            data_store.pop("_last_table_rows", None)
+            data_store.pop("_last_graph_path", None)
+
             tbl_spec = all_tables[i]["spec"] if i < len(all_tables) else None
             tbl_rows = all_tables[i]["rows"] if i < len(all_tables) else None
             g_spec   = sec.graph_specs[i]   if i < len(sec.graph_specs) else None

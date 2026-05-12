@@ -38,6 +38,10 @@ required_data_store_keys:
 INPUTS
 ------
 params:
+  qx_table:
+    type    : list[dict]
+    note    : Table des taux bruts par âge produite par builder.crude_rates
+              (lue depuis le data_store).
   method:
     type    : string
     values  : whittaker | gompertz | makeham | spline
@@ -69,7 +73,8 @@ params:
 OUTPUTS
 -------
 data_store_keys_written:
-  - smoothed_table : list[dict] — age, q_x_brut, q_x_lisse par âge
+  - smoothed_table : list[dict] — records {age, q_x_brut, q_x_lisse} par âge
+                     q_x_brut est joint depuis qx_table par âge.
   - method         : str — méthode utilisée
 return_payload:
   smoothed_table : list[dict]
@@ -180,9 +185,19 @@ def run(data: dict | None, params: dict | None = None) -> dict:
     # monotonie, zéro appel au notebook de lissage réel. Ne JAMAIS laisser
     # cette variable en prod.
     import os
+    # Index par âge des taux bruts pour jointure avec les taux lissés.
+    # Le YAML attend des records {age, q_x_brut, q_x_lisse}.
+    qx_brut_by_age = {
+        int(r["age"]): float(r.get("qx") or r.get("q_x_brut") or 0.0)
+        for r in qx_records if r.get("age") is not None
+    }
     if os.environ.get("AGENT_SMOOTHING_STUB") == "1":
         stub = [
-            {"age": int(r["age"]), "q_x_lisse": float(r.get("q_x_brut") or 0.001)}
+            {
+                "age":       int(r["age"]),
+                "q_x_brut":  qx_brut_by_age.get(int(r["age"]), 0.0),
+                "q_x_lisse": float(r.get("q_x_brut") or qx_brut_by_age.get(int(r["age"]), 0.001)),
+            }
             for r in qx_records if r.get("age") is not None
         ]
         return {
@@ -197,11 +212,26 @@ def run(data: dict | None, params: dict | None = None) -> dict:
 
     nb = load_nb("04_smoothing")
 
+    # Auto-scaling lambda_wh par l'exposition moyenne. Le smoother
+    # Whittaker-Henderson pondère par E_x : si E_x ~ 100k (grand portefeuille)
+    # et lambda=100, le terme de lissage devient négligeable → aucun effet
+    # visible. On scale lambda à l'échelle de E_x quand l'utilisateur ne
+    # le précise pas explicitement.
+    lambda_param = params.get("lambda_wh")
+    if lambda_param is None and method == "whittaker":
+        try:
+            mean_ex = float(qx_table["E_x"].mean())
+            lambda_param = max(100.0, mean_ex * 0.5)
+        except Exception:
+            lambda_param = 100.0
+    if lambda_param is None:
+        lambda_param = 100.0
+
     try:
         if method == "whittaker":
             result = nb.smooth_whittaker(
                 qx_table,
-                lambda_wh=float(params.get("lambda_wh", 100)),
+                lambda_wh=float(lambda_param),
                 d=int(params.get("d", 2)),
             )
         elif method == "gompertz":
@@ -227,14 +257,19 @@ def run(data: dict | None, params: dict | None = None) -> dict:
     # ou {smoothed_table, ...} (DataFrame) selon la méthode.
     import numpy as np
 
-    lambda_used = params.get("lambda_wh") if method == "whittaker" else None
+    lambda_used = lambda_param if method == "whittaker" else None
 
     if "ages" in result and "qx_smoothed" in result:
-        # Format arrays → convertir en records [{age, q_x_lisse}, ...]
+        # Format arrays → convertir en records {age, q_x_brut, q_x_lisse}.
+        # Jointure q_x_brut par âge depuis qx_brut_by_age (cf. ligne ~180).
         ages_arr = np.asarray(result["ages"]).astype(int)
         qx_arr = np.asarray(result["qx_smoothed"]).astype(float)
         records = [
-            {"age": int(a), "q_x_lisse": float(q) if not np.isnan(q) else None}
+            {
+                "age":       int(a),
+                "q_x_brut":  qx_brut_by_age.get(int(a)),
+                "q_x_lisse": float(q) if not np.isnan(q) else None,
+            }
             for a, q in zip(ages_arr, qx_arr)
         ]
         n_non_monotone = result.get("n_non_monotone_after_40")
@@ -253,6 +288,10 @@ def run(data: dict | None, params: dict | None = None) -> dict:
         return {"erreur": f"Le smoother '{method}' n'a pas retourné de table lissée."}
 
     records = smoothed_df.where(pd.notnull(smoothed_df), None).to_dict(orient="records")
+    # S'assurer que q_x_brut est présent dans chaque record (jointure depuis qx_records).
+    for r in records:
+        if r.get("age") is not None and "q_x_brut" not in r:
+            r["q_x_brut"] = qx_brut_by_age.get(int(r["age"]))
     n_non_monotone = result.get("n_non_monotone")
     out = {
         "smoothed_table": records,

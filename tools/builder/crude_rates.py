@@ -36,12 +36,22 @@ required_data_store_keys:
 INPUTS
 ------
 params:
+  exposure_table:
+    type    : list[dict]
+    note    : Table d'exposition par âge produite par builder.exposure
+              (lue depuis le data_store, pas passée explicitement).
   method:
     type    : string
-    values  : central | binomial
+    values  : central | binomial | kaplan_meier
     default : central
-    note    : "central" = μ̂_x = D_x/E_x (standard actuariel). "binomial" pour
-              populations plus petites avec faible exposition.
+    note    : >
+      "central"      = μ̂_x = D_x/E_x (standard actuariel — central exposure).
+      "binomial"     = D_x / (E_x + D_x/2) (correction binomiale pour
+                       populations plus petites avec faible exposition).
+      "kaplan_meier" = estimateur non-paramétrique de la fonction de survie
+                       q_x = 1 - S(x+1)/S(x), calculé depuis le DataFrame
+                       individuel cleaned_records. Nécessite que les
+                       individual records soient persistés (dataset_ref).
 
 OUTPUTS
 -------
@@ -106,6 +116,35 @@ def run(data: dict | None, params: dict | None = None) -> dict:
 
     if method == "binomial":
         qx_table = nb.crude_rates_binomial(exposure_table)
+    elif method == "kaplan_meier":
+        # KM nécessite le DataFrame individuel (records nettoyés). Source :
+        # cleaned_records (list[dict]) ou df chargé via dataset_ref.
+        df_records = data.get("cleaned_records")
+        if df_records and isinstance(df_records, list):
+            df_indiv = pd.DataFrame(df_records)
+        else:
+            # Fallback : charger le Parquet normalisé en priorité (colonnes
+            # canoniques + dates parsées + sentinelles clippées). Sinon
+            # l'original via MemoryManager.
+            ref = data.get("_dataset_ref")
+            if not ref:
+                return {"erreur": "kaplan_meier nécessite cleaned_records "
+                                  "(appeler preprocessing.clean_records d'abord) "
+                                  "ou un dataset_ref."}
+            try:
+                from session.dataset_store import DatasetStore
+                df_indiv = DatasetStore.load_preferring_normalized(data, ref)
+                if df_indiv is None:
+                    raise FileNotFoundError(f"aucun dataset chargeable pour session {ref}")
+            except Exception as exc:
+                return {"erreur": f"impossible de charger le DataFrame pour KM : {exc}"}
+        if df_indiv is None or len(df_indiv) == 0:
+            return {"erreur": "DataFrame individuel vide ou indisponible pour KM."}
+        age_min = int(exposure_table["age"].min()) if "age" in exposure_table else 20
+        age_max = int(exposure_table["age"].max()) if "age" in exposure_table else 90
+        qx_table = nb.crude_rates_kaplan_meier(
+            df_indiv, age_min=age_min, age_max=age_max,
+        )
     else:
         qx_table = nb.crude_rates_central(exposure_table)
 

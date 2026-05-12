@@ -101,6 +101,34 @@ class DatasetStore:
         return pd.read_parquet(path)
 
     @staticmethod
+    def load_preferring_normalized(
+        data_store: dict | None,
+        session_id: str | None,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Charge le DataFrame en préférant le Parquet normalisé écrit par
+        `maybe_normalize_records()` après validation UI des mappings.
+
+        Ordre :
+          1. `data_store["dataset_ref_normalized"]` si présent et fichier OK
+          2. `<session_id>_dataset.parquet` (original) en fallback
+
+        Retourne None si rien de chargeable.
+        """
+        ds = data_store or {}
+        norm_path = ds.get("dataset_ref_normalized")
+        if norm_path:
+            p = Path(str(norm_path))
+            if p.exists():
+                try:
+                    return pd.read_parquet(p)
+                except Exception:
+                    pass
+        if not session_id:
+            return None
+        return DatasetStore.load_by_session(session_id)
+
+    @staticmethod
     def exists(session_id: str) -> bool:
         """Vérifie si un artefact existe pour cette session."""
         return (_ARTIFACTS_DIR / f"{session_id}_dataset.parquet").exists()

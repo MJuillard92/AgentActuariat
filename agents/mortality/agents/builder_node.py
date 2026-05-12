@@ -32,6 +32,7 @@ BUILDER_TOOLS = {
     "builder",
     "preprocessing",        # tools/preprocessing/clean_records (R1-R6)
     "statistical_analysis",
+    "aggregation",          # tools/aggregation/* — déciles d'exposition, etc.
     "graphs",
     "reasoning",
     "build_pdf",
@@ -63,14 +64,19 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
         fallback = _PROJECT_ROOT / "agents" / "mortality" / "agent_instructions" / "behavioral_contract.md"
         base = fallback.read_text(encoding="utf-8") if fallback.exists() else ""
 
-    # Ajouter le mapping colonnes — chargement depuis MemoryManager (Parquet)
+    # Ajouter le mapping colonnes — préférer le Parquet normalisé (post-UI)
+    # à l'original. Le mapping affiché doit refléter le df que les tools
+    # vont effectivement consommer.
     dataset_ref = state.get("dataset_ref")
     if dataset_ref:
         try:
             from session.memory_manager import MemoryManager
+            from session.dataset_store import DatasetStore
             mm = MemoryManager(dataset_ref)
             mm.load()
-            df = mm.load_dataframe()
+            df = DatasetStore.load_preferring_normalized(
+                state.get("data_store") or {}, dataset_ref,
+            )
             if df is not None:
                 from tools.tool_registry import get_capabilities
                 from agents.mortality.dictionary.column_schema import build_mapping_report, COLUMN_SCHEMA
@@ -130,8 +136,25 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
         "par une branche déterministe du nœud Builder.\n"
         "  5. Si `report_mode == 'description'`, ne PAS appeler `builder.crude_rates`, "
         "`builder.smoothing`, `builder.validation`, `builder.benchmarking` — seules "
-        "`builder.exposure` et les tools `statistical_analysis.*` sont requis.\n"
+        "`builder.exposure` (optionnel) et les tools `preprocessing.clean_records` + "
+        "`statistical_analysis.*` sont requis.\n"
     )
+
+    # ── Override step 0 (data dictionary) si column_mapping confirmé ────────
+    # Quand le mapping a déjà été validé via l'UI (column_mapping_confirmed),
+    # on supprime explicitement la phase de confirmation du dictionnaire
+    # de données — la step0 du contrat comportemental est court-circuitée.
+    if data_store.get("column_mapping_confirmed"):
+        base += (
+            "\n\n## OVERRIDE — étape 0 (dictionnaire de données) DÉSACTIVÉE\n\n"
+            "Le mapping des colonnes a déjà été confirmé par l'utilisateur via "
+            "l'interface (`column_mapping_confirmed=True`). Tu DOIS donc :\n"
+            "  - **NE PAS proposer** de tableau de validation des colonnes.\n"
+            "  - **NE PAS attendre** de confirmation utilisateur sur les colonnes.\n"
+            "  - Lancer directement les tools nécessaires pour produire les clés "
+            "manquantes listées par le Master.\n"
+            "Cette règle a priorité sur l'instruction de step0_data_dictionary.md.\n"
+        )
 
     # Documents de contexte
     context_docs = state.get("context_docs") or []
@@ -237,9 +260,56 @@ def builder_node(state: "AgentState") -> dict:
             and data_store.get("qx_table")
             and not data_store.get("smoothed_table")):
         data_store["smoothed_table"] = [
-            {"age": r.get("age"), "q_x_lisse": r.get("q_x_brut")}
+            {"age": r.get("age"), "q_x_brut": r.get("q_x_brut") or r.get("qx"),
+             "q_x_lisse": r.get("q_x_brut") or r.get("qx")}
             for r in (data_store["qx_table"] or []) if r.get("age") is not None
         ]
+
+    # ── Branches déterministes pour clés "dérivées" ─────────────────────────
+    # Les tools `aggregation.exposure_deciles` et `builder.validation`
+    # sont rarement choisis spontanément par le LLM ; on les exécute
+    # déterministement dès que leurs prérequis sont satisfaits, pour
+    # gagner des cycles Master↔Builder.
+    if (data_store.get("smoothed_table")
+            and data_store.get("qx_table")
+            and not data_store.get("ci_table")):
+        try:
+            from tools.builder.validation import run as _validation_run
+            # Respect du choix utilisateur (study_plan.methods.builder.validation)
+            sp_user = data_store.get("study_plan") or {}
+            user_methods = sp_user.get("methods") or {}
+            chosen_validation = user_methods.get("builder.validation")
+            validation_fn = (chosen_validation
+                             if chosen_validation and chosen_validation != "auto"
+                             else "confidence_intervals")
+            res = _validation_run(
+                data=data_store,
+                params={"function_name": validation_fn,
+                        "qx_col": "q_x_lisse", "alpha": 0.05},
+            )
+            if "ci_table" in res:
+                data_store["ci_table"] = res["ci_table"]
+                # Mirror dans data_store.validation pour compat
+                v = data_store.get("validation") or {}
+                if isinstance(v, dict):
+                    v.update(res)
+                    data_store["validation"] = v
+        except Exception:
+            pass
+
+    if (data_store.get("qx_table")
+            and not data_store.get("qx_deciles_table")):
+        try:
+            from tools.aggregation.exposure_deciles import run as _deciles_run
+            res = _deciles_run(
+                data={"qx_table":       data_store.get("qx_table"),
+                      "smoothed_table": data_store.get("smoothed_table")},
+                params={"n_buckets": 10},
+            )
+            if "qx_deciles_table" in res:
+                data_store["qx_deciles_table"] = res["qx_deciles_table"]
+        except Exception:
+            pass
 
     level = _get_catalogue_level(state)
     system_prompt = _build_system_prompt(state, level)

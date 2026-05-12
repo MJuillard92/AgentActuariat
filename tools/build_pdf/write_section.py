@@ -126,11 +126,12 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
     sec = section_outputs[section_id]
 
     # ── Texte narratif ────────────────────────────────────────────────────────
-    if text:
-        if sec["text"]:
-            sec["text"] = sec["text"] + "\n\n" + text
-        else:
-            sec["text"] = text
+    # Politique "premier appel gagne" : si la section a déjà du texte, on ne
+    # concatène PAS — sinon en cas de retry traçabilité ou de boucle n_inserts
+    # mal calibrée, le texte serait dupliqué (cf. Plan Lot 1 - cause B).
+    # Pour explicitement remplacer, l'appelant doit passer params["clear"]=True.
+    if text and not sec["text"]:
+        sec["text"] = text
 
     # ── Tableau : consommer _last_table_rows ──────────────────────────────────
     last_rows = data.pop("_last_table_rows", None)

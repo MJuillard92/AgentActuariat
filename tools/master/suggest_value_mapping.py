@@ -41,10 +41,15 @@ import pandas as pd
 
 
 _SYNONYMS: dict[str, dict[str, str]] = {
-    "deces": {"deces", "décès", "decede", "décédé", "decedee", "décédée", "mort", "dead"},
-    "autre": {"autre", "vivant", "vivante", "alive", "sortie", "en cours", "encours"},
-    "H": {"h", "m", "homme", "male", "masculin"},
-    "F": {"f", "w", "femme", "female", "féminin", "feminin"},
+    "deces": {"deces", "décès", "decede", "décédé", "decedee", "décédée",
+              "mort", "dead", "d", "1", "true"},
+    "autre": {"autre", "vivant", "vivante", "alive", "sortie", "en cours",
+              "encours", "actif", "active", "0", "false"},
+    # Convention actuarielle française INSEE : 1=Homme, 2=Femme.
+    # Si la convention diffère pour ce portefeuille, l'utilisateur doit
+    # corriger via le mapping UI.
+    "H": {"h", "m", "homme", "male", "masculin", "1"},
+    "F": {"f", "w", "femme", "female", "féminin", "feminin", "2"},
 }
 
 

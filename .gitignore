@@ -82,3 +82,8 @@ base_de_connaissance/
 
 # Git worktrees locaux (isolation parallel work)
 .worktrees/
+
+
+# Claude Code local
+.claude/
+tmp/

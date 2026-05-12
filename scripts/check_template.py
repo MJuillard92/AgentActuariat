@@ -74,8 +74,15 @@ def main(
     yaml_path: Path = DEFAULT_YAML,
     tools_root: Path = DEFAULT_TOOLS,
     color: bool = True,
+    check_columns: bool = False,
 ) -> int:
-    """Point d'entrée testable. Retourne l'exit code (0 ou 1)."""
+    """Point d'entrée testable. Retourne l'exit code (0 ou 1).
+
+    Args:
+        check_columns : si True, lance en plus `check_table_columns` qui
+            vérifie que chaque colonne d'un visual_spec table existe dans
+            le schéma déclaré par la docstring OUTPUTS du tool source.
+    """
     try:
         registry = build_registry(Path(tools_root))
     except Exception as exc:
@@ -84,7 +91,17 @@ def main(
 
     report = validate_template(Path(yaml_path), registry)
     print(_render_report(report, color))
-    return 0 if report.ok else 1
+    rc = 0 if report.ok else 1
+
+    if check_columns:
+        from knowledge_base.report_template.validator import check_table_columns
+        col_report = check_table_columns(Path(yaml_path), registry)
+        print(_colorize("\n── Vérification colonnes table ↔ tool OUTPUTS ──", "bold", color))
+        print(_render_report(col_report, color))
+        if not col_report.ok:
+            rc = 1
+
+    return rc
 
 
 def _cli() -> int:
@@ -92,8 +109,18 @@ def _cli() -> int:
     parser.add_argument("--yaml", type=Path, default=DEFAULT_YAML, help="Chemin du template YAML.")
     parser.add_argument("--tools-root", type=Path, default=DEFAULT_TOOLS, help="Racine des tools à scanner.")
     parser.add_argument("--no-color", action="store_true", help="Désactive la coloration ANSI.")
+    parser.add_argument(
+        "--check-columns", action="store_true",
+        help="Vérifie que les columns[].key des visual_specs table existent "
+             "bien dans le schéma déclaré par la docstring OUTPUTS du tool.",
+    )
     args = parser.parse_args()
-    return main(yaml_path=args.yaml, tools_root=args.tools_root, color=not args.no_color)
+    return main(
+        yaml_path=args.yaml,
+        tools_root=args.tools_root,
+        color=not args.no_color,
+        check_columns=args.check_columns,
+    )
 
 
 if __name__ == "__main__":

@@ -25,12 +25,18 @@ defaults:
 # d'étude, et répond aux questions conversationnelles.
 master:
 
-  # Routage 3-axes (kind, write, report_mode) en JSON court.
-  # Tâche simple, JSON court, latence critique → mini.
+  # Routage 3-axes (kind, write, report_mode) + score de confiance.
+  # Le full gpt-5.4 est nécessaire : le mini ignore parfois la règle stricte
+  # ("rapport" → write=yes) et produit des classifications inconsistantes
+  # malgré temperature=0. Le coût additionnel (~5x) est négligeable face
+  # au coût d'une mauvaise classification (mauvais PDF généré).
   classify_intent:
-    model:       gpt-5.4-mini
+    model:       gpt-5.4
     temperature: 0.0
-    max_tokens:  200
+    max_tokens:  400
+    # Seuil de confiance en dessous duquel Master demande à reformuler.
+    # Démarrer à 0.80, calibrer empiriquement (cf. doc).
+    confidence_threshold: 0.80
 
   # Extraction structurée des paramètres d'étude depuis l'historique.
   # Tâche d'extraction JSON, mini suffit largement.
@@ -38,6 +44,14 @@ master:
     model:       gpt-5.4-mini
     temperature: 0.0
     max_tokens:  400
+
+  # Fallback de résolution de méthodes (kaplan_meier, whittaker, …) quand
+  # le matching regex/alias échoue. Tâche d'extraction JSON contrainte —
+  # mini suffit. Appelé rarement (cas paraphrasés).
+  method_resolution:
+    model:       gpt-5.4-mini
+    temperature: 0.0
+    max_tokens:  200
 
   # Réponse conversationnelle (kind=question). Qualité pro indispensable
   # car l'utilisateur est un actuaire — on ne lésine pas.

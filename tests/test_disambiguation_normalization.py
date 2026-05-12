@@ -45,8 +45,15 @@ def test_no_op_when_already_normalized():
     assert out is None
 
 
-def test_applies_column_and_value_mappings():
-    """Format column_mapping = {canonical: csv_col} (cf. build_mapping_report)."""
+def test_applies_column_and_value_mappings(tmp_path, monkeypatch):
+    """Format column_mapping = {canonical: csv_col} (cf. build_mapping_report).
+    Le DataFrame normalisé est écrit sur disque (Parquet) — on le relit
+    pour vérifier le contenu (pas dans data_store, qui contiendrait un
+    DataFrame non sérialisable msgpack)."""
+    import pandas as _pd
+    from session import dataset_store as _ds
+    monkeypatch.setattr(_ds, "_ARTIFACTS_DIR", tmp_path)
+
     df = pd.DataFrame({
         "cause": ["décédé", "vivant"],
         "g":     ["Homme", "Femme"],
@@ -61,14 +68,19 @@ def test_applies_column_and_value_mappings():
         "value_mapping_confirmed": True,
     }
 
-    out = maybe_normalize_records(data_store, _df_to_json(df))
+    out = maybe_normalize_records(
+        data_store, _df_to_json(df), dataset_ref="test_session",
+    )
 
     assert out is not None
-    normalized = out["input_records"]
+    assert out["records_normalized"] is True
+    # Le Parquet normalisé est écrit sur disque
+    norm_path = out.get("dataset_ref_normalized")
+    assert norm_path is not None, "dataset_ref_normalized absent du retour"
+    normalized = _pd.read_parquet(norm_path)
     assert list(normalized.columns) == ["cause_sortie", "sexe"]
     assert list(normalized["cause_sortie"]) == ["deces", "autre"]
     assert list(normalized["sexe"]) == ["H", "F"]
-    assert out["records_normalized"] is True
 
 
 def test_audit_trace_written():

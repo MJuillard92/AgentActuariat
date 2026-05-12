@@ -152,8 +152,25 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     import re as _re
     from datetime import date as _date
 
-    obs_end_str = str(params.get("observation_end", "31/12/2023"))
-    obs_end = pd.to_datetime(obs_end_str, dayfirst=True)
+    # observation_end : défaut auto-détecté = dernière date avec un décès
+    # observé. Sinon on capote à 31/12/<année courante>. Sans ça, les
+    # contrats actifs (sentinelle 2999) sont comptés en exposition au-delà
+    # de la période d'observation réelle de l'assureur.
+    obs_end_str = params.get("observation_end")
+    if not obs_end_str:
+        try:
+            _parsed_exit = pd.to_datetime(df[exit_col], format="mixed",
+                                            dayfirst=True, errors="coerce")
+            _is_dead    = df[death_col].astype(str).str.lower().str.strip().eq("deces")
+            _real_exits = _parsed_exit[_is_dead & _parsed_exit.notna()
+                                       & (_parsed_exit.dt.year < 2100)]
+            if len(_real_exits) > 0:
+                obs_end_str = _real_exits.max().strftime("%d/%m/%Y")
+        except Exception:
+            obs_end_str = None
+    if not obs_end_str:
+        obs_end_str = f"31/12/{_date.today().year}"
+    obs_end = pd.to_datetime(str(obs_end_str), dayfirst=True)
 
     df_clean = df.copy()
     n_before = len(df_clean)

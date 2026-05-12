@@ -2,16 +2,58 @@
 # mortality_template.yaml — Design 3 (ADR squishy-jingling-koala v3)
 #
 # Structure racine :
+#   formats          : formats par défaut pour les cellules de tableaux,
+#                      séparateur de milliers, affichage des NaN
 #   session_inputs   : entrées fournies par l'utilisateur à t=0
 #   data_contract    : toutes les grandeurs produites (master_from_data,
 #                      master_from_modeling, builder_outputs)
 #   sections         : purement rédactionnel (narrative + llm_directives +
 #                      visual_specs)
-#
-# Fil rouge : seule la section `preamble` est active. Les autres sections
-# (construction, analysis, results, conclusion, annex) seront réintroduites
-# une par une après E2E preamble vert (US-26+).
 # ─────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────
+# Formats globaux des tableaux. Source unique de vérité pour le rendu :
+#   - defaults    : format implicite par clé canonique (utilisé si le
+#                   visual_spec ne précise pas format inline)
+#   - na_display  : chaîne affichée à la place des NaN/None
+#   - number_separator : séparateur de milliers dans les nombres ≥ 1000
+# ─────────────────────────────────────────────────────────────────────────
+formats:
+  defaults:
+    age:                   int
+    age_min:               int
+    age_max:               int
+    annee:                 int
+    qx:                    float4
+    q_x:                   float4
+    q_x_brut:              float4
+    q_x_lisse:             float4
+    E_x:                   float2
+    D_x:                   int
+    exposition_pa:         float2
+    nb_contrats:           int
+    nb_deces:               int
+    nb_entres:              int
+    taux_deces:            float2
+    age_moyen:             float2
+    age_moyen_entres:      float2
+    age_moyen_deces:       float2
+    pct_contrats:          float1
+    pct_deces:             float1
+    proportion:            float1
+    E_x_sum:               float2
+    D_x_observed:          int
+    D_x_predicted:         float2
+    ecart:                 float2
+    ecart_pct:             float1
+    ci_lower:              float2
+    ci_upper:              float2
+    total_exposure:        float2
+    total_deaths:          int
+    total_records:         int
+    count:                 int
+  na_display: "—"
+  number_separator: " "
 
 session_inputs:
   - key: raw_user_request
@@ -133,6 +175,17 @@ data_contract:
         inputs: {records: cleaned_records}
         output_mapping: {total_exposure: total_exposure}
 
+    - key: exposure_table
+      type: list[dict]
+      description: >
+        Table d'exposition par âge entier : age, E_x, D_x. Produite par
+        builder.exposure (étape intermédiaire), consommée par
+        builder.crude_rates pour calculer q_x = D_x / E_x.
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {exposure_table: exposure_table}
+
     - key: total_deaths
       type: integer
       description: "Nombre total de décès observés sur la période."
@@ -189,6 +242,70 @@ data_contract:
         inputs: {records: cleaned_records, by_sex: true}
         output_mapping: {ages: ages}
 
+    - key: qx_table
+      type: list[dict]
+      description: >
+        Taux bruts de mortalité par âge entier : age, E_x, D_x, qx,
+        method_name. Consommé par la section table_construction
+        (raw_rates / full_report) et par builder.smoothing.
+      produced_by:
+        tool: builder.crude_rates
+        inputs: {exposure_table: exposure_table}
+        output_mapping: {qx_table: qx_table}
+
+    - key: smoothed_table
+      type: list[dict]
+      description: >
+        Taux lissés par âge : age, q_x_brut, q_x_lisse. Produit par
+        builder.smoothing (mode full_report uniquement). En mode
+        raw_rates, smoothed_table est assimilé à qx_table par une
+        branche déterministe du Builder.
+      produced_by:
+        tool: builder.smoothing
+        inputs: {qx_table: qx_table}
+        output_mapping: {smoothed_table: smoothed_table}
+
+    - key: qx_deciles_table
+      type: list[dict]
+      description: >
+        Agrégation des taux par déciles d'exposition (10 buckets représentant
+        ~10% chacun). Colonnes : age_range, E_x_sum, proportion, D_x_observed,
+        D_x_predicted, ecart, ecart_pct, ci_lower, ci_upper. Reproduit la
+        structure du Tableau 7 du rapport référence.
+      produced_by:
+        tool: aggregation.exposure_deciles
+        inputs: {qx_table: qx_table}
+        output_mapping: {qx_deciles_table: qx_deciles_table}
+
+    - key: ci_table
+      type: list[dict]
+      description: >
+        Intervalles de confiance à 95% pour les taux lissés par âge.
+        Colonnes : age, q_x_lisse, ci_lower, ci_upper. Sert au chart
+        multi-séries de la section smoothing (style aire).
+        Le tool builder.validation appelle par défaut function_name
+        =confidence_intervals avec alpha=0.05 (IC 95%) sur q_x_lisse.
+      produced_by:
+        tool: builder.validation
+        inputs: {}
+        output_mapping: {ci_table: ci_table}
+
+    - key: cohort_min_age
+      type: int
+      description: "Âge minimum de la cohorte (issu de builder.exposure)."
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {age_min: cohort_min_age}
+
+    - key: cohort_max_age
+      type: int
+      description: "Âge maximum de la cohorte (issu de builder.exposure)."
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {age_max: cohort_max_age}
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sections — purement rédactionnel
@@ -203,17 +320,43 @@ sections:
       report_mode: [full_report, raw_rates, description]
 
     narrative:
-      text: |
+      text_default: |
         Ce rapport présente {{ study_objective }} construite à partir
         d'un portefeuille observé de {{ start_year }} à {{ end_year }},
         soit {{ num_observation_years }} années. L'étude porte sur une
         exposition totale de {{ total_exposure }} années-personne
         et {{ total_deaths }} décès observés.
 
-        D'une manière synthétique,l'étude réalisée peut se résumer de la
-        sorte : analyse statistique du portefeuille assuré, calcul des taux
-        bruts par application de la méthologie de Kaplan Meier, lissage des
-        taux bruts puis backetsting du niveau global de pruduence.
+        L'étude se déroule en quatre étapes : analyse descriptive du
+        portefeuille assuré, calcul des taux bruts de mortalité par
+        application de la formule centrale q_x = D_x / E_x sur la
+        cohorte, lissage des taux bruts pour obtenir la table d'expérience
+        finale, puis validation observé vs prédit par classes d'âges.
+
+      text_description: |
+        Ce rapport présente une analyse descriptive du portefeuille
+        assuré observé de {{ start_year }} à {{ end_year }}, soit
+        {{ num_observation_years }} années. L'étude porte sur une
+        exposition totale de {{ total_exposure }} années-personne
+        et {{ total_deaths }} décès observés.
+
+        Cette analyse couvre la composition du portefeuille (par sexe,
+        par âge, par année), l'évolution annuelle des décès et les
+        statistiques d'exposition. Aucun calcul de taux de mortalité
+        ni de lissage n'est réalisé dans ce mode descriptif.
+
+      text_raw_rates: |
+        Ce rapport présente la table de mortalité d'expérience, en taux
+        bruts uniquement (sans lissage), construite à partir d'un
+        portefeuille observé de {{ start_year }} à {{ end_year }}, soit
+        {{ num_observation_years }} années. L'étude porte sur une
+        exposition totale de {{ total_exposure }} années-personne et
+        {{ total_deaths }} décès observés.
+
+        L'étude couvre l'analyse descriptive du portefeuille puis le
+        calcul des taux bruts de mortalité q_x = D_x / E_x par âge,
+        sans étape de lissage. Les taux sont restitués en l'état pour
+        analyse ou ré-utilisation externe.
 
     llm_directives:
       tone: "neutre, descriptif, factuel"
@@ -227,10 +370,10 @@ sections:
         source: segmentations.sexe   # sub-path dans le dict `segmentations`
         columns:
           - {key: valeur,         label: "Sexe"}
-          - {key: nb_contrats,    label: "Nombre de vies",   format: int}
-          - {key: nb_deces,       label: "Décès",            format: int}
-          - {key: pct_contrats,   label: "Part du portefeuille (%)", format: float2}
-          - {key: pct_deces,      label: "Part des décès (%)",       format: float2}
+          - {key: nb_contrats,    label: "Exposition",                 format: int}
+          - {key: nb_deces,       label: "Décès",                      format: int}
+          - {key: pct_contrats,   label: "Part du portefeuille (%)",   format: float2}
+          - {key: pct_deces,      label: "Part des décès (%)",         format: float2}
 
       - id: deaths_per_year
         type: chart
@@ -329,12 +472,11 @@ sections:
         purpose: "Statistiques annuelles agrégées."
         source: serie
         columns:
-          - {key: annee,            label: "Année",                        format: int}
-          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
-          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
-          - {key: nb_deces,         label: "Nombre de décès",              format: int}
-          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
-          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+          - {key: annee,            label: "Année",                  format: int}
+          - {key: exposition_pa,    label: "Exposition",             format: int}
+          - {key: nb_deces,         label: "Nb décès",               format: int}
+          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
       - id: exposure_distribution_by_age
@@ -388,12 +530,11 @@ sections:
         purpose: "Statistiques annuelles — hommes."
         source: serie_h
         columns:
-          - {key: annee,            label: "Année",                        format: int}
-          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
-          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
-          - {key: nb_deces,         label: "Nombre de décès",              format: int}
-          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
-          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+          - {key: annee,            label: "Année",                  format: int}
+          - {key: exposition_pa,    label: "Exposition",             format: int}
+          - {key: nb_deces,         label: "Nb décès",               format: int}
+          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
       - id: annual_statistics_female
@@ -401,12 +542,11 @@ sections:
         purpose: "Statistiques annuelles — femmes."
         source: serie_f
         columns:
-          - {key: annee,            label: "Année",                        format: int}
-          - {key: exposition_pa,    label: "Exposition (années-personne)", format: float2}
-          - {key: age_moyen_entres, label: "Âge moyen",                    format: float2}
-          - {key: nb_deces,         label: "Nombre de décès",              format: int}
-          - {key: taux_deces,       label: "Taux de décès (‰ PA)",         format: float2}
-          - {key: age_moyen_deces,  label: "Âge moyen au décès",           format: float2}
+          - {key: annee,            label: "Année",                  format: int}
+          - {key: exposition_pa,    label: "Exposition",             format: int}
+          - {key: nb_deces,         label: "Nb décès",               format: int}
+          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
       - id: exposure_distribution_male
@@ -425,29 +565,178 @@ sections:
         x_axis: {key: tranche,     label: "Âge (tranches)"}
         y_axis: {key: nb_contrats, label: "Effectif"}
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Construction de la table de mortalité (taux bruts par âge)
+  # Active en mode raw_rates ET full_report (pas description).
+  # Cf. rapport référence AF8796-TD3 §3 "La construction de la table".
+  # Consomme `qx_table` produit par `builder.crude_rates` (D_x, E_x, q_x
+  # par âge entier sur la cohorte cohort_min_age..cohort_max_age).
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: table_construction
+    label: "Construction de la table — taux bruts par âge"
+    required: true
+    dependencies: [data_preprocessing]
+    activation:
+      report_mode: [full_report, raw_rates]
+
+    narrative:
+      text_default: |
+        Les taux bruts de mortalité q_x par âge ont été estimés à partir
+        des {{ total_exposure }} années-personne et {{ total_deaths }} décès
+        observés sur la cohorte d'âges {{ cohort_min_age }} à {{ cohort_max_age }} ans.
+        Pour chaque âge x, le taux brut est défini par q_x = D_x / E_x,
+        où D_x désigne les décès observés et E_x l'exposition centrale.
+        Ces taux bruts constituent l'étape intermédiaire avant lissage
+        et calibration de la table d'expérience.
+
+      text_raw_rates: |
+        Les taux bruts de mortalité q_x par âge ont été estimés à partir
+        des {{ total_exposure }} années-personne et {{ total_deaths }} décès
+        observés sur la cohorte d'âges {{ cohort_min_age }} à {{ cohort_max_age }} ans.
+        Pour chaque âge x, le taux brut est défini par q_x = D_x / E_x,
+        où D_x désigne les décès observés et E_x l'exposition centrale.
+        À la demande, AUCUN lissage n'est appliqué sur ces taux ; ils sont
+        livrés en l'état pour analyse ou ré-utilisation externe.
+
+    llm_directives:
+      tone: "professionnel, actuariel, méthodologique"
+      length_words: [120, 220]
+      rag_query: "taux bruts mortalité q_x calcul actuariel exposition centrale"
+
+      post_table_analysis:
+        instruction: >
+          À partir du tableau des taux bruts, commenter (1) la plage d'âges
+          couverte ; (2) les âges où l'exposition est faible (E_x < 10) et
+          où le taux brut est donc peu crédible ; (3) la forme générale
+          (croissance avec l'âge, oscillations dues à la faible volumétrie).
+          Ne PAS interpréter de tendance fine — les taux bruts sont par
+          nature très volatils.
+        length_words: [80, 150]
+        few_shot_example: |
+          - les taux bruts sont calculés sur la plage 30-85 ans, couvrant
+            l'essentiel de l'exposition ;
+          - aux âges extrêmes (< 35 et > 80), la faiblesse de l'exposition
+            (E_x < 10) rend les taux peu crédibles ;
+          - la forme générale est croissante avec l'âge, avec une volatilité
+            marquée du fait de la taille modeste du portefeuille (1546 a.-p.).
+
+    visual_specs:
+      - id: crude_rates_deciles_table
+        type: table
+        purpose: >
+          Synthèse des taux bruts agrégés par déciles d'exposition
+          (10 buckets contigus représentant ~10% chacun). Reproduit la
+          structure du Tableau 7 du rapport référence.
+        source: qx_deciles_table
+        columns:
+          - {key: age_range,     label: "Classe d'âges"}
+          - {key: E_x_sum,       label: "Exp",                     format: int}
+          - {key: proportion,    label: "% Exp",                   format: float1}
+          - {key: D_x_observed,  label: "Décès\nobservés",         format: int}
+          - {key: D_x_predicted, label: "Décès\nprédits",          format: int}
+          - {key: ecart_pct,     label: "Écart %",                 format: float1}
+          - {key: ci_lower,      label: "IC Min\n95%",             format: int}
+          - {key: ci_upper,      label: "IC Max\n95%",             format: int}
+
+      - id: crude_rates_chart
+        type: chart
+        chart_type: scatter
+        purpose: "Taux bruts q_x par âge — visualisation des variations."
+        source: qx_table
+        x_axis: {key: age, label: "Âge"}
+        y_axis: {key: qx,  label: "Taux brut q_x"}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Lissage des taux bruts (full_report uniquement)
+  # En raw_rates, smoothed_table est juste assimilé à qx_table par une
+  # branche déterministe du Builder ; la section n'est pas activée.
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: smoothing
+    label: "Lissage des taux bruts"
+    required: false
+    dependencies: [table_construction]
+    activation:
+      report_mode: [full_report]
+
+    narrative:
+      text: |
+        Les taux bruts q_x calculés à partir des {{ total_exposure }}
+        années-personne et {{ total_deaths }} décès ont été lissés pour
+        produire la table de mortalité d'expérience finale, sur la plage
+        d'âges {{ cohort_min_age }} à {{ cohort_max_age }} ans. Le
+        lissage atténue les variations dues à la faible volumétrie aux
+        âges marginaux et garantit une croissance régulière du taux de
+        mortalité avec l'âge. La méthode retenue est Whittaker-Henderson
+        avec un paramètre de pénalisation par défaut.
+
+    llm_directives:
+      tone: "professionnel, actuariel, méthodologique"
+      length_words: [150, 250]
+      rag_query: "lissage taux bruts mortalité Whittaker-Henderson Makeham"
+
+      post_table_analysis:
+        instruction: >
+          À partir du tableau lissé, commenter (1) la régularité obtenue
+          (croissance monotone avec l'âge ou violations résiduelles) ;
+          (2) l'écart maximal entre q_x_brut et q_x_lisse ; (3) la
+          pertinence de la méthode au regard du nombre d'âges et de
+          l'exposition disponible. Style sobre, pas de jugement de
+          prudence (relève d'une section validation distincte).
+        length_words: [80, 150]
+        few_shot_example: |
+          - les taux lissés présentent une croissance régulière avec
+            l'âge, sans rupture marquée ;
+          - l'écart maximal entre brut et lissé est observé aux âges
+            extrêmes, où l'exposition est la plus faible ;
+          - la méthode Whittaker-Henderson est adaptée à la plage
+            d'âges couverte et au volume d'observations.
+
+    visual_specs:
+      - id: smoothing_table
+        type: table
+        purpose: "Taux bruts et taux lissés par âge."
+        source: smoothed_table
+        columns:
+          - {key: age,        label: "Âge",          format: int}
+          - {key: q_x_brut,   label: "Taux brut",    format: float4}
+          - {key: q_x_lisse,  label: "Taux lissé",   format: float4}
+
+      - id: obs_vs_smoothed_chart
+        type: chart
+        chart_type: multi_series
+        purpose: >
+          Comparaison taux bruts (points) et taux lissés (ligne) avec
+          intervalle de confiance à 95% (aire). Reproduit la Figure 8
+          du rapport référence.
+        x_axis: {key: age, label: "Âge"}
+        y_axis: {key: q_x, label: "Taux de mortalité q_x"}
+        series:
+          - {source: qx_table,       key_x: age, key_y: qx,        style: point, label: "Taux brut",  color: "#1A3668"}
+          - {source: smoothed_table, key_x: age, key_y: q_x_lisse, style: line,  label: "Taux lissé", color: "#E25B34"}
+          - {source: ci_table,       key_x: age, key_y_lower: ci_lower, key_y_upper: ci_upper, style: area, label: "IC 95%", color: "#E25B34", alpha: 0.18}
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sections à réintroduire après E2E preamble vert (US-26+).
-# Squelette conservé en commentaire pour référence — à rédiger une par une
-# en réactivant la clé data_contract qui va avec.
 # ─────────────────────────────────────────────────────────────────────────
-# - id: construction
-#   label: "Construction de la table"
-#   required: true
-#   dependencies: [preamble]
+# - id: smoothing (intégré ci-dessus)
+#   ─────────
 #
-# - id: analysis
-#   label: "Analyse des résultats"
-#   dependencies: [construction]
+# - id: validation
+#   label: "Validation — observés vs prédits"
+#   dependencies: [smoothing]
+#   activation: {report_mode: [full_report]}
 #
-# - id: results
-#   label: "Résultats"
-#   dependencies: [analysis]
+# - id: benchmarking
+#   label: "Benchmarking — tables réglementaires"
+#   dependencies: [validation]
+#   activation: {report_mode: [full_report]}
 #
 # - id: conclusion
 #   label: "Conclusion"
-#   dependencies: [results]
+#   dependencies: [benchmarking]
 #
 # - id: annex
+#   label: "Annexe — Table finale par âge"
 #   label: "Annexes"
 #   dependencies: [conclusion]

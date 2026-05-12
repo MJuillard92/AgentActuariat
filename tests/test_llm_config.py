@@ -42,13 +42,16 @@ def test_default_role_returns_defaults():
     assert "model" in cfg
 
 
-def test_classify_intent_uses_mini():
-    """Le rôle master.classify_intent utilise gpt-5.4-mini par défaut."""
+def test_classify_intent_uses_full_model():
+    """Le rôle master.classify_intent utilise gpt-5.4 (full) pour suivre
+    fidèlement la règle stricte de l'axe write. Le mini hésitait."""
     from agents.mortality.agents.llm_config import get_llm_config
     cfg = get_llm_config("master.classify_intent")
-    assert cfg["model"] == "gpt-5.4-mini"
-    assert cfg["max_tokens"] == 200
+    assert cfg["model"] == "gpt-5.4"
+    assert cfg["max_tokens"] == 400
     assert cfg["temperature"] == 0.0
+    # Seuil de confiance par défaut (peut être tuné dans le YAML).
+    assert 0.0 < cfg["confidence_threshold"] <= 1.0
 
 
 def test_builder_llm_uses_full_model():
@@ -74,7 +77,7 @@ def test_env_var_overrides_yaml_for_model():
     cfg = get_llm_config("master.classify_intent")
     assert cfg["model"] == "gpt-5.4-nano"
     # Les autres champs restent les valeurs YAML
-    assert cfg["max_tokens"] == 200
+    assert cfg["max_tokens"] == 400
 
 
 def test_env_var_for_builder():

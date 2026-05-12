@@ -110,12 +110,19 @@ def _keys_for_sections(section_ids: list[str]) -> list[str]:
         fse = pta.get("few_shot_example") or ""
         keys.update(placeholder_re.findall(fse))
 
-        # visual_specs.source (on prend la racine du sub-path)
+        # visual_specs.source (on prend la racine du sub-path).
+        # Pour les charts multi-séries, on parcourt aussi `series[].source`.
         for v in (section.get("visual_specs") or []):
             src = v.get("source") or ""
             root = src.split(".")[0] if src else ""
             if root:
                 keys.add(root)
+            # Charts multi-séries : chaque série a sa propre source
+            for s in (v.get("series") or []):
+                ssrc = s.get("source") or ""
+                sroot = ssrc.split(".")[0] if ssrc else ""
+                if sroot:
+                    keys.add(sroot)
 
     # On ne retient que les clés effectivement dans builder_outputs
     # (les placeholders peuvent référencer des master_from_data aussi, qu'on
@@ -139,107 +146,51 @@ def _get_required_keys_for_current_mode(data_store: dict) -> list[str]:
     return _keys_for_sections(sections)
 
 
+# ── Wrappers locaux (rétro-compat tests + signature mortality-aware) ─────────
+#
+# Les implémentations sont désormais dans `agents.master.*` (domain-agnostic).
+# On conserve ces wrappers minces pour ne pas casser :
+#   - les tests qui patchent `mn._classify_intent` via patch.object
+#   - le code existant qui appelle `_extract_gender_from_text`
+#
+# Toute évolution de la logique doit se faire dans les modules `agents.master.*`,
+# pas ici.
+
+def _extract_gender_from_text(text: str) -> str | None:
+    """Wrapper rétro-compat. Voir `agents.master.extract_gender`."""
+    from agents.master.extract_gender import extract_gender_from_text
+    return extract_gender_from_text(text)
+
+
 def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None) -> dict:
-    """
-    Classifie la demande sur 3 axes orthogonaux via un appel JSON structuré.
+    """Wrapper rétro-compat. Voir `agents.master.classify_intent`.
 
-    Retourne {"kind", "write", "report_mode", "reply"} :
-      - kind        : "task" | "question"
-      - write       : "yes" | "no" | "ask"   (mot 'rapport'/'PDF' explicite pour yes ;
-                                              refus explicite pour no ; sinon ask)
-      - report_mode : "full_report" | "raw_rates" | "description"
-      - reply       : confirmation 1-2 phrases
-
-    Anciens intents (build_only / write_only / build_and_write / question) ne sont
-    plus retournés — la branche Master utilise kind+write. Pour rétro-compat, on
-    calcule un `intent` équivalent à partir de (kind, write).
+    Calcule has_data / has_calcs depuis le contexte mortalité (builder_keys
+    issus du YAML), puis délègue à la fonction domain-agnostic.
     """
-    import openai
-    from agents.mortality.agents._utils import call_with_retry
+    from agents.master.classify_intent import classify_intent as _generic_classify
 
     builder_keys = _get_builder_keys()
     has_data  = bool(dataset_ref or data_store.get("_dataset_ref"))
-    # Note : on utilise `is not None` plutôt que la véracité brute car
-    # certaines builder_outputs peuvent être des DataFrames (ex: cleaned_records),
-    # et `bool(df)` lève ValueError côté pandas.
-    has_calcs = bool(builder_keys) and all(data_store.get(k) is not None for k in builder_keys)
-
-    ctx = (
-        f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
-        f"Calculs complets (prêt pour rapport) : {'oui' if has_calcs else 'non'}."
+    # `is not None` plutôt que truthy : certaines builder_outputs peuvent être
+    # des DataFrames (ex: cleaned_records) et `bool(df)` lève ValueError.
+    has_calcs = bool(builder_keys) and all(
+        data_store.get(k) is not None for k in builder_keys
     )
-
-    prompt = (
-        "Tu es un routeur pour un système actuariel. Classifie la demande en 3 axes :\n\n"
-        "Axe 1 — kind :\n"
-        "  - task      : calculs / rapport\n"
-        "  - question  : explication, conversation hors calculs et hors rapport\n\n"
-        "Axe 2 — write (uniquement si kind=task) — RÈGLE STRICTE :\n"
-        "  - yes : le mot 'rapport', 'PDF' ou 'document' apparaît explicitement dans la demande\n"
-        "          (ex: 'fais-moi le rapport', 'génère un rapport', 'je veux un PDF')\n"
-        "  - no  : refus explicite du rapport ('sans rapport', 'pas de PDF', 'juste les calculs')\n"
-        "  - ask : AUCUN mot-clé explicite (défaut). 'construis une table' ou 'fais-moi une analyse'\n"
-        "          ne suffisent PAS pour yes — on posera la question avant de lancer les calculs.\n"
-        "  Si l'utilisateur répond à une question précédente sur le rapport (ex: 'oui', 'non',\n"
-        "  'oui je veux un rapport', 'non merci'), classifie 'yes' ou 'no' en conséquence.\n\n"
-        "Axe 3 — report_mode (uniquement si kind=task) :\n"
-        "  - full_report : pipeline complet avec lissage (défaut)\n"
-        "  - raw_rates   : 'taux bruts', 'sans lissage', 'brut', 'non lissé'\n"
-        "  - description : 'description', 'analyse descriptive', 'résumé du portefeuille'\n\n"
-        f"Contexte : {ctx}\n"
-        f"Demande : {last_human[:500]}\n\n"
-        "Réponds UNIQUEMENT en JSON :\n"
-        '{"kind": "...", "write": "...", "report_mode": "...", '
-        '"reply": "confirmation courte en français (1-2 phrases max)"}'
-    )
-
-    try:
-        from agents.mortality.agents.llm_config import get_llm_config
-        cfg = get_llm_config("master.classify_intent")
-        client = openai.OpenAI()
-        resp = call_with_retry(
-            client,
-            model=cfg["model"],
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            max_tokens=cfg.get("max_tokens", 200),
-            temperature=cfg.get("temperature", 0.0),
-        )
-        parsed = json.loads(resp.choices[0].message.content or "{}")
-    except Exception as exc:
-        print(f"[MasterAgent] _classify_intent error: {exc}", file=sys.stderr)
-        return {
-            "kind":        "task",
-            "write":       "ask",
-            "report_mode": "full_report",
-            "intent":      "unclear",  # rétro-compat pour test legacy
-            "reply":       "Je n'ai pas compris votre demande. Pouvez-vous préciser ?",
-        }
-
-    # Défauts tolérants
-    kind        = parsed.get("kind", "task")
-    write       = parsed.get("write", "ask")
-    report_mode = parsed.get("report_mode", "full_report")
-    reply       = parsed.get("reply", "")
-
-    # Rétro-compat : dériver un `intent` legacy pour le code Master qui le consomme
-    # encore. Cet alias sera retiré une fois toutes les branches migrées.
-    if kind == "question":
-        legacy_intent = "question"
-    elif write == "yes":
-        legacy_intent = "build_and_write"
-    elif write == "no":
-        legacy_intent = "build_only"
-    else:  # ask
-        legacy_intent = "build_and_write"  # pessimiste : on prépare un rapport
-
-    return {
-        "kind":        kind,
-        "write":       write,
-        "report_mode": report_mode,
-        "intent":      legacy_intent,
-        "reply":       reply,
+    # Contexte déjà tranché (transmis au LLM pour éviter qu'il dise
+    # "je n'ai pas d'indication sur X" alors que X est connu).
+    sp = data_store.get("study_plan") or {}
+    known = {
+        "gender_segmentation": sp.get("gender_segmentation")
+                                or data_store.get("gender_segmentation"),
+        "report_mode":         data_store.get("report_mode"),
+        "write":               data_store.get("_write"),
     }
+    known = {k: v for k, v in known.items() if v}
+    return _generic_classify(
+        last_human, has_data=has_data, has_calcs=has_calcs,
+        known_context=known or None,
+    )
 
 
 def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
@@ -252,62 +203,9 @@ def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
 
 
 def _extract_study_plan_from_history(messages: list) -> dict:
-    """
-    Extrait les paramètres d'étude mentionnés dans la conversation et
-    les retourne sous forme de study_plan dict.
-    Appelle GPT-4o en JSON mode pour parser les intentions de l'utilisateur.
-    """
-    import openai
-    import json
-    from agents.mortality.agents._utils import call_with_retry
-
-    # Reconstituer le texte de la conversation
-    conv_lines = []
-    for m in messages:
-        role = m.get("role", "")
-        content = m.get("content", "")
-        if role in ("user", "assistant") and content:
-            conv_lines.append(f"{role.upper()}: {str(content)[:300]}")
-    if not conv_lines:
-        return {}
-
-    conversation_text = "\n".join(conv_lines[-20:])  # 20 derniers messages
-
-    prompt = (
-        "Extrait les paramètres d'étude actuarielle mentionnés dans cette conversation.\n"
-        "Retourne UNIQUEMENT un JSON avec les clés présentes (ignore les absentes).\n\n"
-        "Clés possibles :\n"
-        "  observation_start_date (YYYY-MM-DD)\n"
-        "  observation_end_date (YYYY-MM-DD)\n"
-        "  observation_period_years (liste d'années ex: [2019,2020,2021])\n"
-        "  study_objective (ex: 'prévoyance collective décès')\n"
-        "  product_list (liste de codes produits)\n"
-        "  smoothing_algorithm (ex: 'whittaker_henderson')\n"
-        "  baseline_regulatory_table (ex: 'TH0002')\n"
-        "  cohort_min_age (entier)\n"
-        "  cohort_max_age (entier)\n"
-        "  confidence_interval_level (ex: 0.95)\n"
-        "  chi_squared_p_significance (ex: 0.05)\n\n"
-        f"Conversation :\n{conversation_text}\n\n"
-        "JSON uniquement, sans markdown :"
-    )
-
-    try:
-        from agents.mortality.agents.llm_config import get_llm_config
-        cfg = get_llm_config("master.extract_study_plan")
-        client = openai.OpenAI()
-        response = call_with_retry(
-            client,
-            model=cfg["model"],
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            max_tokens=cfg.get("max_tokens", 400),
-            temperature=cfg.get("temperature", 0.0),
-        )
-        raw = response.choices[0].message.content or "{}"
-        return json.loads(raw)
-    except Exception:
-        return {}
+    """Wrapper rétro-compat. Voir `agents.master.extract_study_plan`."""
+    from agents.master.extract_study_plan import extract_study_plan_from_history
+    return extract_study_plan_from_history(messages)
 
 
 def _augment_with_data_store(prompt: str, data_store: dict, dataset_ref: str | None = None) -> str:
@@ -401,11 +299,22 @@ def master_node(state: "AgentState") -> dict:
     messages_list = state.get("messages") or []
 
     # ── 1. WRITE_DONE : cycle complet — nettoyer et terminer ─────────────────
-    last_write_done = next(
-        (True for m in reversed(messages_list)
-         if "<WRITE_DONE" in (getattr(m, "content", "") or "")),
-        False,
-    )
+    # IMPORTANT (cf. Bug #7 BUILD_DONE) : un <WRITE_DONE> n'est valide que si
+    # AUCUN nouveau HumanMessage n'a été reçu depuis. Sinon on est sur un
+    # nouveau tour utilisateur qui doit passer par classification.
+    last_write_done = False
+    for m in reversed(messages_list):
+        content = getattr(m, "content", "") or ""
+        is_human = (
+            getattr(m, "type", "") == "human"
+            and (getattr(m, "additional_kwargs", None) or {}).get("source") != "master_synthetic"
+        )
+        if is_human:
+            # Un HumanMessage récent invalide tout WRITE_DONE antérieur.
+            break
+        if "<WRITE_DONE" in content:
+            last_write_done = True
+            break
     if last_write_done:
         data_store.pop("_intent", None)
         data_store.pop("_need_data_attempts", None)
@@ -519,6 +428,26 @@ def master_node(state: "AgentState") -> dict:
     if pending and last_real_human is not None:
         from agents.master.question_filter import extract_user_answer
         last_text = getattr(last_real_human, "content", "") or ""
+        ctx_key = pending.get("context_key", "?")
+
+        # ─── Désambiguation méthodes : déléguée à agents.master ──────────
+        # Toute la logique (méta-question, branches auto/préciser,
+        # inline-parse, fallback LLM, re-ask, enchaînement per-tool) vit
+        # dans agents/master/method_choices.py. Ce nœud LangGraph ne
+        # fait qu'invoquer le handler et retourner son update d'état.
+        rep_mode = data_store.get("report_mode", "full_report")
+        if ctx_key == "methods_choice_mode":
+            from agents.master.method_choices import handle_methods_choice_response
+            return handle_methods_choice_response(
+                pending, last_text, data_store, report_mode=rep_mode,
+            )
+        if ctx_key.startswith("method_"):
+            from agents.master.method_choices import handle_per_tool_method_response
+            return handle_per_tool_method_response(
+                pending, last_text, data_store, report_mode=rep_mode,
+            )
+
+        # ─── Cas général (gender, etc.) ──────────────────────────────────
         value = extract_user_answer(last_text, pending)
         if value is not None:
             sp = data_store.setdefault("study_plan", {})
@@ -541,7 +470,6 @@ def master_node(state: "AgentState") -> dict:
         # Extract a échoué — re-poser la question avec un hint sans classify
         options = pending.get("options") or []
         options_str = " ou ".join(repr(o) for o in options) if options else "une réponse claire"
-        ctx_key = pending.get("context_key", "?")
         question_msg = _AIMsg(content=(
             f"Je n'ai pas bien compris votre réponse '{last_text}'. "
             f"Pour la question sur '{ctx_key}', "
@@ -555,12 +483,21 @@ def master_node(state: "AgentState") -> dict:
         }
 
     # ── 2. BUILD_DONE : routing déterministe vers Writer ─────────────────────
-    last_build_done = next(
-        (True for m in reversed(messages_list)
-         if "<BUILD_DONE>" in (getattr(m, "content", "") or "")
-         or "<HANDOFF_WRITER>" in (getattr(m, "content", "") or "")),
-        False,
-    )
+    # IMPORTANT : un BUILD_DONE n'est valide que si AUCUN nouveau HumanMessage
+    # n'a été reçu depuis. Sinon on est sur un nouveau tour de l'utilisateur,
+    # qui doit passer par classification (cas typique : "fais l'analyse sans
+    # rapport" puis "finalement, fais-moi le rapport PDF").
+    last_build_done = False
+    for m in reversed(messages_list):
+        content = getattr(m, "content", "") or ""
+        is_human = (getattr(m, "type", "") == "human"
+                    and (getattr(m, "additional_kwargs", None) or {}).get("source") != "master_synthetic")
+        if is_human:
+            # Un HumanMessage récent invalide tout BUILD_DONE antérieur.
+            break
+        if "<BUILD_DONE>" in content or "<HANDOFF_WRITER>" in content:
+            last_build_done = True
+            break
     # On vérifie les clés attendues pour le mode courant (pas les 10 clés totales).
     _required = _get_required_keys_for_current_mode(data_store) or _get_builder_keys()
     if last_build_done and all(data_store.get(k) for k in _required):
@@ -669,7 +606,9 @@ def master_node(state: "AgentState") -> dict:
                             df_json_for_norm = df_loaded.to_json(orient="split")
                     except Exception:
                         pass
-                norm_updates = maybe_normalize_records(data_store, df_json_for_norm)
+                norm_updates = maybe_normalize_records(
+                    data_store, df_json_for_norm, dataset_ref=dataset_ref,
+                )
                 if norm_updates:
                     data_store.update(norm_updates)
             except Exception as exc:
@@ -685,12 +624,99 @@ def master_node(state: "AgentState") -> dict:
     if not last_human:
         return {"messages": [], "events": [], "data_store": data_store}
 
-    classification = _classify_intent(last_human, data_store, dataset_ref)
+    # ── 5a. Court-circuit : réponse à la question PDF en attente ─────────────
+    # Si `_write_question_asked=True`, Master a posé la question "voulez-vous
+    # un PDF ?" au tour précédent. La réponse de l'utilisateur ("oui"/"non"/
+    # "yes"/"no"…) est interprétée DIRECTEMENT — ne pas la passer au classifier
+    # qui, sans contexte, la classerait comme `kind=question`.
+    if data_store.get("_write_question_asked"):
+        ans = (last_human or "").strip().lower()
+        YES_TOKENS = {"oui", "yes", "ok", "d'accord", "daccord", "oui svp",
+                      "oui merci", "oui!", "carrément", "carrement",
+                      "absolument", "bien sûr", "bien sur", "yep", "yeah"}
+        NO_TOKENS  = {"non", "no", "nope", "pas maintenant", "non merci",
+                      "pas de pdf", "pas de rapport", "sans rapport",
+                      "pas tout de suite", "plus tard"}
+        # On accepte aussi "oui …" / "non …" en début de phrase
+        first_word = ans.split()[0] if ans else ""
+        resolved_write: str | None = None
+        if ans in YES_TOKENS or first_word in ("oui", "yes", "ok"):
+            resolved_write = "yes"
+        elif ans in NO_TOKENS or first_word in ("non", "no", "nope"):
+            resolved_write = "no"
+        # Détection rapport explicite ("oui, fais le rapport", "fais-moi le rapport")
+        elif any(kw in ans for kw in ("rapport", "pdf", "document", "redige", "rédige")):
+            resolved_write = "yes"
+        elif any(kw in ans for kw in ("pas de rapport", "sans rapport", "pas de pdf")):
+            resolved_write = "no"
+
+        if resolved_write is not None:
+            data_store["_write"] = resolved_write
+            data_store.pop("_write_question_asked", None)
+            # Extraction parallèle du gender depuis la même phrase : permet à
+            # l'utilisateur de combiner la réponse PDF avec le choix de
+            # segmentation (ex: "oui, fais le rapport unisex").
+            gender_from_text = _extract_gender_from_text(last_human)
+            classification = {
+                "kind":                "task",
+                "write":               resolved_write,
+                "report_mode":         data_store.get("report_mode", "full_report"),
+                "gender_segmentation": gender_from_text,   # None | "unisex" | "by_sex"
+                "confidence":          1.0,                # décision déterministe
+                "intent":              "build_and_write" if resolved_write == "yes" else "build_only",
+                "reply":               ("D'accord, je lance les calculs avec rapport."
+                                        if resolved_write == "yes"
+                                        else "D'accord, je lance les calculs sans rapport."),
+            }
+        else:
+            classification = _classify_intent(last_human, data_store, dataset_ref)
+    else:
+        classification = _classify_intent(last_human, data_store, dataset_ref)
     intent       = classification.get("intent", "unclear")
     reply        = classification.get("reply", "")
     kind         = classification.get("kind", "task")
     write        = classification.get("write", "ask")
     report_mode  = classification.get("report_mode", "full_report")
+    # Défaut 1.0 : mocks de test n'incluent pas confidence, on les considère
+    # comme fiables par défaut (compat ascendante).
+    confidence   = classification.get("confidence", 1.0)
+    reasoning    = classification.get("reasoning", "")
+    # On stocke la confidence dans la classification pour `is_confident`
+    classification["confidence"] = confidence
+
+    # ── Branche reformulation : confiance LLM insuffisante ──────────────────
+    # Si le LLM signale lui-même qu'il n'est pas sûr (confidence < seuil
+    # configuré dans llm_models.yaml), on demande à l'utilisateur de
+    # reformuler plutôt que de risquer une exécution erronée.
+    #
+    # Anti-boucle : on n'insiste pas plus de 2 fois. Au 3e tour ambigu, on
+    # exécute avec les axes obtenus (fallback pessimiste).
+    from agents.master.classify_intent import is_confident
+    if not is_confident(classification):
+        attempts = data_store.get("_reformulation_attempts", 0)
+        MAX_REFORMULATIONS = 2
+        if attempts < MAX_REFORMULATIONS:
+            data_store["_reformulation_attempts"] = attempts + 1
+            from langchain_core.messages import AIMessage as LCAIMessage
+            hint = f" ({reasoning})" if reasoning else ""
+            q_text = (
+                f"Je ne suis pas sûr d'avoir compris votre demande{hint}. "
+                "Pourriez-vous reformuler en précisant :\n"
+                "• le type d'analyse souhaité (descriptive, taux bruts, taux lissés) ;\n"
+                "• si vous voulez un rapport PDF ou juste les calculs ;\n"
+                "• une table unisex ou des tables H/F séparées ?"
+            )
+            return {
+                "messages":   [LCAIMessage(content=q_text)],
+                "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                               {"type": "message", "content": q_text}],
+                "data_store": data_store,
+            }
+        # Compteur épuisé : on exécute quand même en mode dégradé.
+        data_store["_reformulation_attempts"] = 0
+    else:
+        # Classification fiable : reset le compteur (on est de nouveau au vert).
+        data_store.pop("_reformulation_attempts", None)
 
     # Stocker les 3 axes + l'alias legacy
     # Préservation des axes _write et report_mode contre une rétrogradation
@@ -714,6 +740,18 @@ def master_node(state: "AgentState") -> dict:
     data_store["_kind"]        = kind
     data_store["_write"]       = write
     data_store["report_mode"]  = report_mode
+
+    # ── Propagation du gender_segmentation détecté par le classifier ─────────
+    # Le classifier LLM retourne désormais gender_segmentation comme 4e axe
+    # (None / "unisex" / "by_sex"). Si la valeur n'est pas déjà fixée en
+    # session, on l'adopte. Sinon Master posera la question via _pending_need.
+    sp_now = data_store.get("study_plan") or {}
+    if not (sp_now.get("gender_segmentation") or data_store.get("gender_segmentation")):
+        gender_from_llm = classification.get("gender_segmentation")
+        if gender_from_llm in ("unisex", "by_sex"):
+            sp_now = data_store.setdefault("study_plan", {})
+            sp_now["gender_segmentation"]   = gender_from_llm
+            data_store["gender_segmentation"] = gender_from_llm
 
     # Extraire study_plan si pas encore fait
     if not data_store.get("study_plan"):
@@ -753,8 +791,9 @@ def master_node(state: "AgentState") -> dict:
 
         # ── Désambiguation gender_segmentation AVANT le Builder ─────────────
         # Master doit savoir si l'analyse est unisex (table agrégée) ou by_sex
-        # (tables H/F séparées). Si la valeur n'est pas dans study_plan, on
-        # demande à l'user via le pattern need_user_input.
+        # (tables H/F séparées). Si la valeur n'est toujours pas connue
+        # (l'extraction prématurée plus haut n'a rien trouvé), on demande à
+        # l'user via le pattern need_user_input.
         sp = data_store.get("study_plan") or {}
         gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
         if gender is None and not data_store.get("_pending_need"):
@@ -772,6 +811,23 @@ def master_node(state: "AgentState") -> dict:
                 "data_store":   data_store,
             }
 
+        # ── Désambiguation choix de méthodes (délégué à agents.master) ──────
+        from agents.master.method_choices import build_methods_meta_pending_need
+        meta_pn = build_methods_meta_pending_need(
+            report_mode, gender, data_store.get("study_plan"),
+        )
+        if (meta_pn
+                and not data_store.get("_pending_need")
+                and not data_store.get("_methods_question_done")):
+            data_store["_pending_need"] = meta_pn
+            q_msg = LCAIMessage(content=meta_pn["question"])
+            return {
+                "messages":   [q_msg],
+                "events":     new_events + [{"type": "message",
+                                              "content": meta_pn["question"]}],
+                "data_store": data_store,
+            }
+
         # ── Sections actives dérivées de report_mode + gender_segmentation ──
         active_sections = _sections_for_mode(report_mode, gender)
         required_keys = _keys_for_sections(active_sections)
@@ -782,30 +838,76 @@ def master_node(state: "AgentState") -> dict:
         if missing_keys:
             cycles = data_store.get("_master_builder_cycles", 0) + 1
             data_store["_master_builder_cycles"] = cycles
-            if cycles > 3:
+            # Limite portée à 6 : le mode full_report nécessite ~5 batchs
+            # de tools (descriptifs → crude_rates → smoothing → validation
+            # → aggregation_deciles). 3 cycles bloquait avant convergence.
+            if cycles > 6:
                 new_events.append({
                     "type":    "message",
                     "content": (f"[MasterAgent] {cycles} cycles sans convergence — arrêt. "
                                 f"Manquantes : {missing_keys}"),
                 })
                 new_events.append({"type": "done"})
-                return {"messages": [], "events": new_events, "data_store": data_store}
+                # IMPORTANT : reset active_agent à "master" pour que le routeur
+                # graph.py:_should_continue_master retourne END (sinon il
+                # voit active_agent="builder" de l'étape précédente et
+                # reboucle indéfiniment).
+                return {
+                    "messages":     [],
+                    "events":       new_events,
+                    "active_agent": "master",
+                    "data_store":   data_store,
+                }
 
             # Détecter si l'intention de l'utilisateur est suffisamment
             # explicite pour skipper la phase de confirmation (cf. step3_client_
-            # communication.md). Critère : write=yes ET report_mode posé.
-            intent_explicit = (write == "yes" and report_mode in ("full_report", "raw_rates", "description"))
+            # communication.md). Critère : write ∈ {yes, no} ET report_mode posé.
+            # write="no" est aussi explicite : "calcule sans rapport" est aussi
+            # clair que "fais-moi le rapport".
+            intent_explicit = (
+                write in ("yes", "no")
+                and report_mode in ("full_report", "raw_rates", "description")
+            )
             skip_confirm_line = (
                 "L'utilisateur a déjà été explicite : NE demande PAS confirmation, "
-                "lance directement les tools nécessaires.\n"
+                "ne ré-explique PAS le dictionnaire de données (déjà confirmé via "
+                "le mapping UI), lance directement les tools nécessaires.\n"
                 if intent_explicit else ""
             )
+            # Hint pour by_sex : si serie_h/serie_f ou distribution_list_h/_f
+            # sont attendus, appeler time_series + age_distribution avec by_sex=True
+            # (un seul appel suffit, le tool retourne serie + serie_h + serie_f).
+            hint_by_sex = ""
+            if (gender == "by_sex"
+                or any(k.endswith(("_h", "_f")) for k in missing_keys)):
+                hint_by_sex = (
+                    "Pour produire serie_h/serie_f : appelle "
+                    "`statistical_analysis.time_series` UNE SEULE FOIS avec "
+                    "params {by_sex: true}. Idem pour ages.distribution_list_h/_f : "
+                    "`statistical_analysis.age_distribution` avec {by_sex: true}.\n"
+                )
+            # Hints explicites pour les clés réclamant un tool spécifique
+            # rarement choisi spontanément par le LLM.
+            extra_hints = []
+            if "qx_deciles_table" in missing_keys:
+                extra_hints.append(
+                    "Pour `qx_deciles_table` : appelle `aggregation.exposure_deciles` "
+                    "(prérequis : qx_table + smoothed_table déjà dans data_store).")
+            if "ci_table" in missing_keys:
+                extra_hints.append(
+                    "Pour `ci_table` : appelle `builder.validation` avec params "
+                    "{function_name: confidence_intervals, qx_col: q_x_lisse} "
+                    "(prérequis : smoothed_table).")
+            hint_extra = ("\n".join(extra_hints) + "\n") if extra_hints else ""
+
             instr = (
                 f"Mode de rapport : {report_mode}\n"
                 f"Sections actives : {active_sections}\n"
                 f"Déjà produit (NE PAS relancer) : {already_done}\n"
                 f"Reste à produire : {missing_keys}\n"
                 + skip_confirm_line
+                + hint_by_sex
+                + hint_extra
                 + "Émets <BUILD_DONE> quand toutes les clés ci-dessus sont dans le data_store."
             )
             return {

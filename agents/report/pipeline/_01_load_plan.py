@@ -145,9 +145,54 @@ def load_plan(
     if study_plan:
         context_merged.update(study_plan)
 
+    # ── Dérivations automatiques pour combler les placeholders manquants ──
+    # L'utilisateur peut ne pas avoir explicitement renseigné les dates
+    # d'observation dans le formulaire ; on les dérive depuis les données
+    # déjà calculées (serie / exposure_table / cleaned_records).
+    if not context_merged.get("start_year") or not context_merged.get("end_year"):
+        years: list[int] = []
+        serie = context_merged.get("serie") or []
+        if isinstance(serie, list):
+            for r in serie:
+                if isinstance(r, dict) and r.get("annee") is not None:
+                    try:
+                        years.append(int(r["annee"]))
+                    except (ValueError, TypeError):
+                        pass
+        if not years:
+            cleaned = context_merged.get("cleaned_records") or []
+            if isinstance(cleaned, list):
+                for r in cleaned[:5000]:
+                    if not isinstance(r, dict):
+                        continue
+                    for k in ("date_entree", "date_sortie"):
+                        v = r.get(k)
+                        if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                            years.append(int(v[:4]))
+        if years:
+            context_merged.setdefault("start_year", min(years))
+            context_merged.setdefault("end_year",   max(years))
+            context_merged.setdefault(
+                "num_observation_years",
+                max(years) - min(years) + 1,
+            )
+
+    # study_objective est requis par le préambule. Fallback humain.
+    if not context_merged.get("study_objective"):
+        context_merged["study_objective"] = "une analyse descriptive du portefeuille"
+
     # context=None → compat ascendante : pas de filtrage (toutes les sections retournées).
     # context explicite (même vide) → filtrage des sections par activation.
-    manifest = build_manifest(yaml_path, context=context)
+    # Si l'appelant n'a pas fourni de context, on dérive depuis data_store
+    # + study_plan pour activer le filtrage par report_mode/gender_segmentation.
+    manifest_context = context if context is not None else {
+        "report_mode":         context_merged.get("report_mode"),
+        "gender_segmentation": context_merged.get("gender_segmentation")
+                               or (study_plan or {}).get("gender_segmentation"),
+    }
+    # Nettoyer les valeurs None pour que build_manifest filtre correctement
+    manifest_context = {k: v for k, v in manifest_context.items() if v is not None}
+    manifest = build_manifest(yaml_path, context=manifest_context or None)
     active_section_ids = [s["id"] for s in manifest.sections if "id" in s]
 
     # context local pour la résolution des placeholders = data_store + study_plan
@@ -157,7 +202,10 @@ def load_plan(
     missing_fields_global: set[str] = set()
 
     for sid in active_section_ids:
-        sec = load_section(sid, yaml_path)
+        # Passe le report_mode / gender_segmentation à load_section pour
+        # que la variante de narrative soit choisie correctement
+        # (text_default / text_raw_rates / text_description).
+        sec = load_section(sid, yaml_path, context=manifest_context)
         prompt, missing_narrative = _build_prompt(sec, context)
 
         # Visuals : si `source` pointe vers une clé absente du contexte, on la marque manquante.

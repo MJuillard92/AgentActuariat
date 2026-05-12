@@ -931,6 +931,64 @@ tools:
       sur la tendance temporelle dans §3 du rapport : valeur négative = amélioration de la mortalité. Les âges_derive_forte
       permettent d''identifier des ruptures locales (ex : changement de comportement sur un segment d''âge).'
     exemplar_query: '"évolution tendance mortalité entre deux périodes d''observation"'
+  aggregation.exposure_deciles:
+    display_name: Agrégation des taux par déciles d'exposition
+    short_description: Agrège qx_table en buckets d'âges contigus représentant ~10% d'exposition. Produit le tableau type
+      "Tableau 7" du rapport référence (D_obs, D_pred, écart, IC 95%).
+    description: 'Agrège les taux bruts/lissés par âge en buckets d''âges contigus dont chacun représente environ 1/n_buckets
+      de l''exposition totale (par défaut 10 buckets → ~10% chacun). Pour chaque bucket : - intervalle d''âges (age_range)
+      - exposition cumulée (E_x_sum) - proportion de l''exposition totale (proportion) - décès observés (D_x_observed) - décès
+      prédits (D_x_predicted = sum age in bucket : E_x_age × q_x_age) où q_x_age vient de smoothed_table si disponible, sinon
+      qx_table - écart (observed - predicted) - écart relatif (% par rapport au prédit) - bornes IC 95% des décès prédits
+      sous l''hypothèse de Poisson : ci_lower = D_pred - 1.96 × sqrt(D_pred) ci_upper = D_pred + 1.96 × sqrt(D_pred) Reproduit
+      la structure du Tableau 7 du rapport référence AF8796-TD3 p.9.'
+    domain: mortality_experience
+    capability_group: aggregation
+    depends_on:
+    - builder.crude_rates
+    required_by:
+    - build_pdf.assemble_sections
+    client_visible: false
+    when_to_use: À appeler après builder.crude_rates (et optionnellement builder.smoothing). Le résultat alimente la section
+      table_construction (mode raw_rates) ou validation (mode full_report) du YAML.
+    when_not_to_use: Ne pas appeler sans qx_table. Si n_buckets > nombre d'âges distincts, l'agrégation est triviale (1 âge
+      par bucket).
+    prerequisites:
+      required_tools:
+      - builder.crude_rates → provides qx_table
+      required_data_store_keys:
+      - qx_table
+    params:
+      qx_table:
+        type: list[dict]
+        note: Records {age, E_x, D_x, qx} produits par builder.crude_rates.
+      smoothed_table:
+        type: list[dict]
+        note: Records {age, q_x_brut, q_x_lisse} produits par builder.smoothing.
+      n_buckets:
+        type: int
+        default: '10'
+        note: 'Nombre de buckets cibles. Standard actuariel : 10 (déciles).'
+    outputs:
+      data_store_keys_written:
+      - 'qx_deciles_table : list[dict] — records {age_range, E_x_sum, proportion, D_x_observed, D_x_predicted, ecart, ecart_pct,
+        ci_lower, ci_upper}'
+      - 'n_buckets        : int — nombre effectif de buckets produits'
+      return_payload:
+        qx_deciles_table: list[dict]
+        n_buckets: int — nombre effectif de buckets produits
+    quality_gates:
+      blocking:
+      - qx_table absent → retourne erreur.
+      non_blocking:
+      - Si certains buckets ont D_predicted=0, ci_lower=ci_upper=0 — à mentionner.
+    errors:
+    - error: qx_table manquant. Appeler builder.crude_rates d'abord.
+      cause: qx_table absent du data_store.
+      action: Appeler builder.crude_rates avec exposure_table préalable.
+    version: 1.0.0
+    author: Marc Juillard
+    last_updated: '2026-05-11'
   build_pdf.table_renderer:
     display_name: Rendu table depuis spec YAML
     short_description: Construit un objet ReportLab Table depuis un spec YAML.
@@ -1051,11 +1109,14 @@ tools:
       required_data_store_keys:
       - exposure_table
     params:
+      exposure_table:
+        type: list[dict]
+        note: Table d'exposition par âge produite par builder.exposure
       method:
         type: string
-        values: central | binomial
+        values: central | binomial | kaplan_meier
         default: central
-        note: '"central" = μ̂_x = D_x/E_x (standard actuariel). "binomial" pour'
+        note: '>'
     outputs:
       data_store_keys_written:
       - 'qx_table : list[dict] — age, E_x, D_x, qx, method_name par âge'
@@ -1170,6 +1231,9 @@ tools:
       required_data_store_keys:
       - qx_table
     params:
+      qx_table:
+        type: list[dict]
+        note: Table des taux bruts par âge produite par builder.crude_rates
       method:
         type: string
         values: whittaker | gompertz | makeham | spline
@@ -1197,7 +1261,7 @@ tools:
         note: Âge de fin pour Gompertz/Makeham.
     outputs:
       data_store_keys_written:
-      - 'smoothed_table : list[dict] — age, q_x_brut, q_x_lisse par âge'
+      - 'smoothed_table : list[dict] — records {age, q_x_brut, q_x_lisse} par âge'
       - 'method         : str — méthode utilisée'
       return_payload:
         smoothed_table: list[dict]
@@ -1269,7 +1333,8 @@ tools:
     outputs:
       data_store_keys_written:
       - 'cleaned_records : DataFrame — records après exclusions'
-      - 'exclusion_report : dict — initial_count, final_count, rules'
+      - 'exclusion_report : dict — {initial_count, final_count, rules}'
+      - 'rules : list[dict] — records {rule_id, rule_label, count, detail} (sous-champ de exclusion_report.rules)'
       return_payload:
         cleaned_records: table — records après retraitement (R1–R6)
         exclusion_report: dict — initial_count, final_count, rules
@@ -1477,13 +1542,18 @@ tools:
         note: Sexe pour la table de référence (chi_square uniquement).
     outputs:
       data_store_keys_written:
-      - 'validation.ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)'
-      - 'validation.alpha         : float — niveau de risque utilisé (confidence_intervals)'
-      - 'validation.p_value       : float — p-value du test chi² (chi_square)'
-      - 'validation.chi2_stat     : float — statistique chi² observée (chi_square)'
-      - 'validation.df            : int   — degrés de liberté (chi_square)'
-      - 'validation.interpretation: str   — interprétation textuelle (chi_square)'
-      return_payload: {}
+      - 'ci_table      : list[dict] — IC par âge : {age, q_x_lisse, ci_lower, ci_upper} (confidence_intervals)'
+      - 'alpha         : float — niveau de risque utilisé (confidence_intervals)'
+      - 'p_value       : float — p-value du test chi² (chi_square)'
+      - 'chi2_stat     : float — statistique chi² observée (chi_square)'
+      - 'df            : int   — degrés de liberté (chi_square)'
+      - 'interpretation: str   — interprétation textuelle (chi_square)'
+      return_payload:
+        ci_table: list[dict] — IC par âge (function_name=confidence_intervals)
+        alpha: float — niveau de risque utilisé
+        p_value: float — p-value (function_name=chi_square)
+        df: int — degrés de liberté (function_name=chi_square)
+        interpretation: str — interprétation textuelle (function_name=chi_square)
     quality_gates:
       blocking:
       - exposure_table absent → retourne erreur.

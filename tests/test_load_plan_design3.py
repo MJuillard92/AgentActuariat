@@ -59,14 +59,32 @@ def _preamble_data_store():
                 {"rule_label": "Données manquantes",                "count": 20},
             ],
         },
+        # Section table_construction (raw_rates / full_report) requiert :
+        "cohort_min_age": 25,
+        "cohort_max_age": 80,
+        "qx_table":      [
+            {"age": 30, "E_x": 100.0, "D_x": 1, "qx": 0.01, "method_name": "central"},
+        ],
+        # Section smoothing (full_report) requiert :
+        "smoothed_table": [
+            {"age": 30, "q_x_brut": 0.01, "q_x_lisse": 0.011},
+        ],
+        # Nouvelle section table_construction nécessite qx_deciles_table
+        "qx_deciles_table": [
+            {"age_range": "20-30", "E_x_sum": 100.0, "proportion": 10.0,
+             "D_x_observed": 1, "D_x_predicted": 1.0,
+             "ecart": 0.0, "ecart_pct": 0.0,
+             "ci_lower": 0.0, "ci_upper": 2.0},
+        ],
     }
 
 
 def test_load_plan_returns_one_section_for_preamble_yaml():
     plan = load_plan(_preamble_data_store())
     assert isinstance(plan, ReportPlan)
-    # US-39 : data_analysis_{unisex,by_sex} s'ajoutent après data_preprocessing → 4 sections
-    assert len(plan.sections) == 4
+    # preamble + data_preprocessing + data_analysis_{unisex,by_sex}
+    # + table_construction + smoothing = 6
+    assert len(plan.sections) == 6
     assert plan.sections[0].section_id == "preamble"
     assert plan.sections[1].section_id == "data_preprocessing"
 

@@ -71,16 +71,33 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _SECTION_ORDER = [
-    "preamble", "data_submission", "construction", "analysis", "conclusion", "annex"
+    "preamble",
+    # Sections Design 3 (mortality_template.yaml actuel)
+    "data_preprocessing",
+    "data_analysis_unisex",
+    "data_analysis_by_sex",
+    "table_construction",    # taux bruts q_x = D_x / E_x (raw_rates, full_report)
+    # Sections à venir (full_report)
+    "smoothing", "validation", "benchmarking",
+    # Sections legacy (rétro-compat) — restent en queue
+    "data_submission", "construction", "analysis", "conclusion", "annex",
 ]
 
 _SECTION_LABELS = {
-    "preamble":        "Préambule",
-    "data_submission": "Données soumises et prétraitement",
-    "construction":    "Méthodologie de construction",
-    "analysis":        "Analyse et validation",
-    "conclusion":      "Conclusion",
-    "annex":           "Annexe — Table de mortalité",
+    "preamble":              "Préambule",
+    "data_preprocessing":    "Données et prétraitement",
+    "data_analysis_unisex":  "Analyse descriptive du portefeuille",
+    "data_analysis_by_sex":  "Analyse descriptive H/F",
+    "table_construction":    "Construction de la table — taux bruts par âge",
+    "smoothing":             "Lissage des taux bruts",
+    "validation":            "Validation — observés vs prédits",
+    "benchmarking":          "Benchmarking — tables réglementaires",
+    # Legacy
+    "data_submission":       "Données soumises et prétraitement",
+    "construction":          "Méthodologie de construction",
+    "analysis":              "Analyse et validation",
+    "conclusion":            "Conclusion",
+    "annex":                 "Annexe — Table de mortalité",
 }
 
 
@@ -429,14 +446,32 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
                     n_cols = max(len(r) for r in tbl)
                     col_w  = [16 * cm / n_cols] * n_cols
                     rl_tbl = Table(tbl, colWidths=col_w, repeatRows=1)
+                    # Style enrichi : en-tête gras + padding généreux,
+                    # corps centré verticalement, lignes alternées discrètes,
+                    # bordures verticales fines plutôt qu'une grille complète.
                     rl_tbl.setStyle(TableStyle([
-                        ("BACKGROUND",  (0, 0), (-1, 0), BLUE),
-                        ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
-                        ("FONTSIZE",    (0, 0), (-1, -1), 8),
-                        ("GRID",        (0, 0), (-1, -1), 0.3, GREY),
-                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT, colors.white]),
-                        ("TOPPADDING",  (0, 0), (-1, -1), 3),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                        # En-tête (ligne 0)
+                        ("BACKGROUND",     (0, 0), (-1, 0), BLUE),
+                        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.white),
+                        ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE",       (0, 0), (-1, 0), 9),
+                        ("ALIGN",          (0, 0), (-1, 0), "CENTER"),
+                        ("VALIGN",         (0, 0), (-1, 0), "MIDDLE"),
+                        ("TOPPADDING",     (0, 0), (-1, 0), 6),
+                        ("BOTTOMPADDING",  (0, 0), (-1, 0), 6),
+                        # Corps (lignes 1+)
+                        ("FONTSIZE",       (0, 1), (-1, -1), 8.5),
+                        ("VALIGN",         (0, 1), (-1, -1), "MIDDLE"),
+                        ("TOPPADDING",     (0, 1), (-1, -1), 4),
+                        ("BOTTOMPADDING",  (0, 1), (-1, -1), 4),
+                        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+                        ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+                        # Bordures discrètes : haut/bas en gras, intérieur fin
+                        ("LINEABOVE",      (0, 0), (-1, 0),  1.0, BLUE),
+                        ("LINEBELOW",      (0, 0), (-1, 0),  0.8, BLUE),
+                        ("LINEBELOW",      (0, -1), (-1, -1), 0.6, BLUE),
+                        ("INNERGRID",      (0, 0), (-1, -1), 0.2, GREY),
                     ]))
                     story.append(rl_tbl)
             else:

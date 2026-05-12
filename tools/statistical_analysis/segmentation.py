@@ -110,6 +110,16 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     """
     p = params or {}
     requested = p.get("columns", [])
+    # Le LLM peut passer columns sous forme de string JSON (ex: '["sexe","cause_sortie"]')
+    # au lieu d'une vraie liste. On parse pour rester tolérant.
+    if isinstance(requested, str):
+        try:
+            import json as _json
+            requested = _json.loads(requested)
+        except Exception:
+            requested = [requested]   # une seule colonne sous forme de string
+    if not isinstance(requested, list):
+        requested = []
 
     # Colonnes prioritaires si rien de spécifié
     default_candidates = [
@@ -121,6 +131,8 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     cols_to_analyze: list[tuple[str, str]] = []
     if requested:
         for c in requested:
+            if not isinstance(c, str):
+                continue
             found = _find_col(df, [c])
             if found:
                 cols_to_analyze.append((c, found))

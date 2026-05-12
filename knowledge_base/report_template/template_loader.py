@@ -289,6 +289,8 @@ def _select_narrative_variant(narrative_raw: dict, context: dict) -> dict:
     mode = (context or {}).get("report_mode")
     if mode == "raw_rates" and "text_raw_rates" in narrative_raw:
         out["text"] = narrative_raw["text_raw_rates"]
+    elif mode == "description" and "text_description" in narrative_raw:
+        out["text"] = narrative_raw["text_description"]
     else:
         out["text"] = narrative_raw.get("text_default", "")
     return out
@@ -316,11 +318,64 @@ def load_style(style_path: Path = DEFAULT_STYLE) -> dict:
     return _load_yaml(p)
 
 
+_DEFAULT_FORMATS: dict = {
+    "defaults":         {},
+    "na_display":       "—",
+    "number_separator": " ",
+}
+
+
+def load_formats(yaml_path: Path = DEFAULT_TEMPLATE) -> dict:
+    """Charge la section `formats:` du YAML template.
+
+    Retourne :
+      {"defaults": {col_key: format_str}, "na_display": str, "number_separator": str}
+
+    Si la section est absente, retourne les defaults minimaux.
+    """
+    try:
+        doc = _load_yaml(Path(yaml_path))
+    except Exception:
+        return {**_DEFAULT_FORMATS}
+    fmt = doc.get("formats") or {}
+    merged = {**_DEFAULT_FORMATS}
+    merged.update({
+        "defaults":         dict(fmt.get("defaults") or {}),
+        "na_display":       fmt.get("na_display") or _DEFAULT_FORMATS["na_display"],
+        "number_separator": fmt.get("number_separator") or _DEFAULT_FORMATS["number_separator"],
+    })
+    return merged
+
+
+def _format_placeholder_value(v) -> str:
+    """Formate une valeur pour insertion dans une narrative : séparateurs
+    de milliers, pas de notation scientifique, pas de décimales superflues
+    pour les entiers. Sans ça, 6082714.05 risque d'apparaître comme
+    '6.08271e+06' dans le PDF final."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "oui" if v else "non"
+    if isinstance(v, int):
+        return f"{v:,}".replace(",", " ")
+    if isinstance(v, float):
+        # NaN / Inf
+        if v != v or v in (float("inf"), float("-inf")):
+            return "—"
+        # Entier déguisé en float
+        if v.is_integer() and abs(v) < 1e15:
+            return f"{int(v):,}".replace(",", " ")
+        # Float « ordinaire » : 2 décimales + séparateur milliers
+        return f"{v:,.2f}".replace(",", " ")
+    return str(v)
+
+
 def resolve_placeholders(text: str, data_store: dict) -> str:
-    """Substitue {{ key }} par str(data_store[key]). KeyError si clé absente."""
+    """Substitue {{ key }} par une représentation formatée de data_store[key].
+    KeyError si clé absente."""
     def _sub(m: re.Match) -> str:
         key = m.group(1)
         if key not in data_store:
             raise KeyError(f"placeholder non résolu : {key!r}")
-        return str(data_store[key])
+        return _format_placeholder_value(data_store[key])
     return _PLACEHOLDER_RE.sub(_sub, text)

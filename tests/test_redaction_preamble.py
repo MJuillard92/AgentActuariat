@@ -37,9 +37,12 @@ def test_hydrate_table_reads_sub_path_from_data_store():
 
     assert out["type"] == "table"
     assert out["headers"] == ["Sexe", "Vies", "Décès"]
+    # Les cellules sont désormais formattées en strings via _format_cell.
+    # Les colonnes sans format explicite reçoivent le format depuis
+    # `formats.defaults` du YAML — `nb_contrats` et `nb_deces` sont `int`.
     assert out["rows"] == [
-        ["H", 500, 25],
-        ["F", 500, 17],
+        ["H", "500", "25"],
+        ["F", "500", "17"],
     ]
 
 

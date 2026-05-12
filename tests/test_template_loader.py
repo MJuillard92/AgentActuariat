@@ -31,7 +31,9 @@ def test_manifest_has_three_data_contract_blocks():
     assert isinstance(m, Manifest)
     assert len(m.master_from_data) == 4        # period, start, end, num_years
     assert len(m.master_from_modeling) == 2    # study_objective, gender_segmentation
-    assert len(m.builder_outputs) == 10        # 3 preprocessing + exposure, deaths, segmentations, serie, serie_h, serie_f, ages
+    # 3 preprocessing + 5 exposure-derived + 4 stats + ages + qx_table
+    # + smoothed_table + qx_deciles_table + ci_table = 17
+    assert len(m.builder_outputs) == 17
 
 
 def test_manifest_keyspec_has_core_fields():

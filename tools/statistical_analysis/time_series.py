@@ -217,9 +217,28 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     if len(valid) == 0:
         return {"erreur": "Aucune date d'entrée valide."}
 
+    # Détection sentinelle (ex: 31/12/2999) : la fin d'observation
+    # réelle est l'année du DERNIER décès observé. Tout sortie au-delà
+    # est interprété comme "contrat encore actif" et capé à cette date.
+    obs_end_year_param = (p.get("observation_end_year") or
+                          p.get("observation_end_date") or "")
+    try:
+        obs_end_year = int(str(obs_end_year_param)[:4]) if obs_end_year_param else None
+    except (ValueError, TypeError):
+        obs_end_year = None
+    if obs_end_year is None and valid["_is_dead"].any():
+        obs_end_year = int(valid.loc[valid["_is_dead"], "_sortie"].dt.year.max())
+    if obs_end_year is None:
+        # Fallback : si aucun décès, capper à l'année max d'entrée + 1
+        obs_end_year = int(valid["_entree"].dt.year.max())
+
+    # Clipping de _sortie au 31/12/obs_end_year — sentinelles 2999, 9999, etc.
+    obs_end_ts = pd.Timestamp(year=obs_end_year, month=12, day=31)
+    df.loc[df["_sortie"] > obs_end_ts, "_sortie"] = obs_end_ts
+    valid = df.dropna(subset=["_entree"])
+
     year_min = int(valid["_entree"].dt.year.min())
-    year_max = int(valid["_sortie"].dt.year.max()) if exit_col and valid["_sortie"].notna().any() \
-               else int(valid["_entree"].dt.year.max())
+    year_max = obs_end_year
 
     global_rows = _compute_annual(valid, df, exit_col, year_min, year_max)
     series = pd.DataFrame(global_rows).set_index("annee")

@@ -37,6 +37,14 @@ class StudyPlan(BaseModel):
     boundary_age_treatment:      Optional[str]  = None
     confidence_interval_level:   float          = 0.95
     chi_squared_p_significance:  float          = 0.05
+    # Critical : sans ce champ, la valeur est silencieusement dropped par
+    # StudyPlan(**merged) et l'agent re-pose la question à chaque tour.
+    gender_segmentation:         Optional[str]  = None   # "unisex" | "by_sex"
+    # Choix de méthodes par-tool (cf. agents.master.method_choices).
+    # Sans ces deux champs, `to_data_store()` écrase `study_plan["methods"]`
+    # et l'agent re-pose la méta-question méthode à chaque cycle.
+    methods:                     Dict[str, str] = Field(default_factory=dict)
+    methods_auto:                Optional[bool] = None
 
     def is_complete(self) -> bool:
         required = [
@@ -168,6 +176,23 @@ class SessionState(BaseModel):
             if sp.observation_period_years:
                 ds["observation_period_years"] = sp.observation_period_years
                 ds["num_observation_years"]     = len(sp.observation_period_years)
+                ds["start_year"]                = sp.observation_period_years[0]
+                ds["end_year"]                  = sp.observation_period_years[-1]
+            elif sp.observation_start_date and sp.observation_end_date:
+                # Fallback : dériver depuis les dates si la liste n'est pas dispo
+                try:
+                    ds["start_year"] = int(sp.observation_start_date[:4])
+                    ds["end_year"]   = int(sp.observation_end_date[:4])
+                    ds["num_observation_years"] = ds["end_year"] - ds["start_year"] + 1
+                except (ValueError, TypeError):
+                    pass
+            # study_objective : placeholder du préambule. Si non fourni
+            # explicitement, on dérive depuis le contexte demandé.
+            # Format humain (avec espaces, capitalisation) pour affichage PDF.
+            if sp.study_objective:
+                ds["study_objective"] = sp.study_objective
+            else:
+                ds["study_objective"] = "une analyse descriptive du portefeuille"
 
         # Référence dataset
         if self.dataset_meta:
@@ -211,6 +236,13 @@ class SessionState(BaseModel):
             # Scalaires issus du tool exposure — perdus entre les tours sans cette liste
             "total_deaths", "total_exposure_years", "cohort_min_age", "cohort_max_age",
             "age_min", "age_max", "total_exposure", "n_insured",
+            # Builder Design 3 — préprocessing + statistical_analysis
+            "cleaned_records", "exclusion_report", "total_records",
+            "segmentations", "segmentation",
+            "serie", "serie_h", "serie_f",
+            "ages",
+            # Writer pipeline outputs (utiles si demande de rapport ultérieure)
+            "section_outputs", "template_context",
         }
         for key in _TOOL_RESULT_KEYS:
             if data_store.get(key) is not None:
@@ -230,6 +262,7 @@ class SessionState(BaseModel):
             "_kind",
             "report_mode",
             "_write_question_asked",
+            "_reformulation_attempts",
         }
         for key in _CINEMATIC_KEYS:
             if key in data_store:

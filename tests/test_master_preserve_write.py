@@ -44,8 +44,10 @@ def test_master_instruction_says_skip_confirmation_when_intent_explicit():
     state = {
         "messages":    [HumanMessage(content="construit les taux bruts et le rapport associé")],
         "data_store":  {
-            "_disambiguation_done": True,
-            "study_plan":           {"gender_segmentation": "unisex"},
+            "_disambiguation_done":     True,
+            "_methods_question_done":   True,
+            "study_plan":               {"gender_segmentation": "unisex",
+                                         "methods_auto":        True},
         },
         "dataset_ref": None,
     }
