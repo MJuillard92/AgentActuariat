@@ -70,6 +70,35 @@ tools:
         result: dict | list — payload sérialisable JSON (jamais de DataFrame)
     reasoning_hint: Préférer `data_inspect.columns` pour découvrir la structure avant toute autre exploration. `value_counts`
       sur une catégorielle pour voir les modalités (sexe, statut). `describe` sur les numériques.
+  conversation.describe_capabilities:
+    display_name: Description des capacités du système
+    short_description: Liste outils, inputs requis, rapports producibles.
+    description: 'Liste structurée de tout ce que le système actuariel sait faire + des inputs qu''il faut fournir + des outputs
+      producibles. Agrège trois sources existantes : le catalogue des tools (tool_registry), le manifest YAML (template_loader),
+      et les règles d''activation des sections.'
+    domain: conversation
+    capability_group: data_exploration
+    client_visible: true
+    when_to_use: 'Phase conversationnelle, quand l''utilisateur demande : - "que sais-tu faire ?" - "qu''as-tu besoin de moi
+      ?" - "comment ça marche ?" - "quels rapports peux-tu produire ?"'
+    when_not_to_use: Pas pour exécuter un calcul. Ce tool est purement descriptif (read-only sur le code, aucune mutation
+      de data_store).
+    prerequisites:
+      required_data_store_keys: []
+      note: tool stateless, ne lit pas le df ni le data_store.
+    params:
+      function_name:
+        type: string
+        values: all | capabilities | required_inputs | outputs_produced
+        default: all
+        note: Filtre la sortie pour ne retourner qu'un sous-bloc.
+    outputs:
+      return_payload:
+        capabilities: dict — exploration / calculs_actuariels / rapports_pdf
+        required_inputs: dict — fichier / from_user / auto_detected
+        outputs_produced: dict — tables / charts par mode de rapport
+    reasoning_hint: Appeler avec function_name="all" pour une présentation complète. Le LLM doit reformuler en langage naturel
+      — pas balancer le JSON brut.
   conversation.eval_pandas:
     display_name: Évaluation pandas libre (sandboxée)
     short_description: Expression pandas/numpy/lifelines évaluée après validation AST.
