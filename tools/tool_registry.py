@@ -31,6 +31,11 @@ _CAT_PATH = Path(__file__).parent / "catalogue.py"
 # Tools qui reçoivent un DataFrame comme premier argument
 _DF_TOOLS = {"statistical_analysis", "preprocessing", "conversation"}
 
+# Fonctions du namespace `conversation` qui nécessitent ALSO data_store en
+# argument (pour mutation des flags de session). Toutes les autres restent
+# en signature simple run(df, params).
+_CONVERSATION_DATA_FUNCTIONS = {"apply_normalization"}
+
 # Fonctions builder qui nécessitent le df seul comme premier argument (les autres utilisent data_store)
 _BUILDER_DF_FUNCTIONS = {"exposure"}
 
@@ -327,9 +332,12 @@ def call_tool(
 
     try:
         if tool_name in _DF_TOOLS:
-            # statistical_analysis : toujours run(df, params)
             if df is None:
                 return {"erreur": f"{tool_name} nécessite un DataFrame (df=None)."}
+            # conversation.apply_normalization a besoin de muter data_store
+            # (flags column_mapping_confirmed / records_normalized / etc.).
+            if tool_name == "conversation" and function_name in _CONVERSATION_DATA_FUNCTIONS:
+                return mod.run(df, params, data=data)
             return mod.run(df, params)
 
         elif tool_name == "builder":

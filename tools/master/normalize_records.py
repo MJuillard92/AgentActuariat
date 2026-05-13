@@ -54,6 +54,8 @@ def run(data: dict, params: dict) -> dict:
     for column, mapping in value_mapping.items():
         if not mapping or column not in out.columns:
             continue
-        out[column] = out[column].map(lambda v, m=mapping: m.get(v, v))
+        # astype(str) avant map : pd.read_json infère "1"/"2" → int et
+        # un dict {"1": "H"} (clés str) ne matcherait pas l'int 1.
+        out[column] = out[column].astype(str).map(lambda v, m=mapping: m.get(v, v))
 
     return {"normalized_records": out}

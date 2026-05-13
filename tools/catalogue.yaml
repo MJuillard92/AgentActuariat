@@ -3,6 +3,37 @@
 # Re-generate with: python tools/catalogue.py --force
 
 tools:
+  conversation.apply_normalization:
+    display_name: Normalisation du fichier (chat-driven)
+    short_description: Renomme colonnes, mappe valeurs, parse dates, clip sentinelles.
+    description: Déclenche la normalisation complète du fichier de données depuis le chat (sans passer par le clic UI). Auto-détecte
+      les mappings colonnes/valeurs si non encore définis, applique le parsing des dates et le clipping des sentinelles, écrit
+      le Parquet propre sur disque, met à jour data_store.
+    domain: conversation
+    capability_group: data_exploration
+    client_visible: true
+    when_to_use: L'utilisateur dit "normalise le fichier", "applique le mapping", "passe sur les noms canoniques", etc. Une
+      fois fait, tous les tools en aval travaillent automatiquement sur le fichier propre.
+    when_not_to_use: 'Si records_normalized est déjà True (vérifié en pré-condition). L''utilisateur peut demander à re-normaliser
+      : on relance proprement.'
+    prerequisites:
+      required_data_store_keys:
+      - dataset_ref (session_id) — pour localiser le Parquet original
+      note: si column_mapping / value_mapping absents du data_store, ils sont
+    params:
+      force:
+        type: bool
+        default: 'false'
+        note: Si True, relance même si records_normalized=True.
+    outputs:
+      return_payload:
+        records_normalized: bool        — True après l'exécution
+        dataset_ref_normalized: str         — chemin du Parquet propre
+        observation_end: str | None  — date ISO de fin d'observation détectée
+        column_mapping: 'dict        — mapping appliqué {canonical: csv_col}'
+        value_mapping: dict        — mapping enum appliqué
+        rows_in: int         — lignes en entrée
+        rows_out: int         — lignes en sortie
   conversation.data_inspect:
     display_name: Inspection rapide du DataFrame
     short_description: Headers, types, échantillon, distribution.

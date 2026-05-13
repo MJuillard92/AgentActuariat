@@ -124,6 +124,16 @@ class SessionState(BaseModel):
     column_mapping_unmatched: List[str]                = Field(default_factory=list)
     disambiguation_done:      bool                     = False
 
+    # ── Normalisation complète (étape 3 du pipeline) ───────────────────────────
+    # Sans ces champs, à la sortie d'un cycle Master, le `model_dump()` drop
+    # silencieusement value_mapping/records_normalized/dataset_ref_normalized
+    # et la normalisation est refaite à chaque tour (cf. bug methods réglé plus tôt).
+    value_mapping:            Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    value_mapping_confirmed:  bool                      = False
+    records_normalized:       bool                      = False
+    dataset_ref_normalized:   Optional[str]             = None
+    observation_end:          Optional[str]             = None
+
     # ── Référence dataset (écrite une seule fois) ─────────────────────────────
     dataset_meta:  Optional[DatasetMeta]  = None
 
@@ -158,6 +168,18 @@ class SessionState(BaseModel):
             ds["column_mapping"]           = self.column_mapping
             ds["column_mapping_confirmed"] = self.column_mapping_confirmed
             ds["column_mapping_unmatched"] = self.column_mapping_unmatched
+
+        # Normalisation : path du Parquet propre + flags
+        if self.value_mapping:
+            ds["value_mapping"] = self.value_mapping
+        if self.value_mapping_confirmed:
+            ds["value_mapping_confirmed"] = True
+        if self.records_normalized:
+            ds["records_normalized"] = True
+        if self.dataset_ref_normalized:
+            ds["dataset_ref_normalized"] = self.dataset_ref_normalized
+        if self.observation_end:
+            ds["observation_end"] = self.observation_end
 
         # Paramètres d'étude — avec dérivation automatique des champs calendaires
         sp = self.study_plan
@@ -217,6 +239,18 @@ class SessionState(BaseModel):
             self.column_mapping           = data_store.get("column_mapping") or self.column_mapping
             self.column_mapping_confirmed = data_store.get("column_mapping_confirmed", self.column_mapping_confirmed)
             self.column_mapping_unmatched = data_store.get("column_mapping_unmatched", self.column_mapping_unmatched)
+
+        # Normalisation (UI clic OU apply_normalization en chat)
+        if data_store.get("value_mapping"):
+            self.value_mapping = data_store["value_mapping"]
+        if data_store.get("value_mapping_confirmed"):
+            self.value_mapping_confirmed = True
+        if data_store.get("records_normalized"):
+            self.records_normalized = True
+        if data_store.get("dataset_ref_normalized"):
+            self.dataset_ref_normalized = data_store["dataset_ref_normalized"]
+        if data_store.get("observation_end"):
+            self.observation_end = data_store["observation_end"]
 
         # study_plan — merge aussi les scalaires exposure qui matchent des champs StudyPlan
         sp_data = data_store.get("study_plan") or {}
