@@ -29,7 +29,7 @@ import pandas as pd
 _CAT_PATH = Path(__file__).parent / "catalogue.py"
 
 # Tools qui reçoivent un DataFrame comme premier argument
-_DF_TOOLS = {"statistical_analysis", "preprocessing"}
+_DF_TOOLS = {"statistical_analysis", "preprocessing", "conversation"}
 
 # Fonctions builder qui nécessitent le df seul comme premier argument (les autres utilisent data_store)
 _BUILDER_DF_FUNCTIONS = {"exposure"}

@@ -413,14 +413,27 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
     """Convertit les colonnes date_* en datetime64 (format mixte, dayfirst).
     Clippe les dates sentinelles (31/12/2999, etc.) à la date du dernier
     décès observé (= fin d'observation réelle).
+
+    NB : pandas Timestamp est borné à ~[1677, 2262]. Les sentinelles 2999
+    sont donc détectées AVANT parsing (en string) et remplacées par un
+    placeholder ; sinon `pd.to_datetime` les renvoie en NaT.
     Retourne (df_modifié, obs_end_iso ou None)."""
     import pandas as pd
+    import re as _re
+    sentinel_re = _re.compile(r"\b(?:2999|9999|3000|3999)\b")
+    # 1ère passe : retirer les sentinelles textuelles AVANT parse
+    sentinel_masks: dict = {}
     for col in _DATE_COLUMNS_CANONICAL:
         if col in df.columns:
+            as_str = df[col].astype(str)
+            mask = as_str.str.contains(sentinel_re, na=False)
+            sentinel_masks[col] = mask
+            if mask.any():
+                df.loc[mask, col] = pd.NaT  # placeholder temporaire
             df[col] = pd.to_datetime(
                 df[col], format="mixed", dayfirst=True, errors="coerce",
             )
-    # Auto-détection observation_end : max(date_sortie) parmi décès
+    # Auto-détection observation_end : max(date_sortie) parmi décès (hors sentinelles)
     obs_end = None
     if "date_sortie" in df.columns and "cause_sortie" in df.columns:
         is_dead = df["cause_sortie"].astype(str).str.lower().isin(
@@ -430,10 +443,11 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
         ds = ds[ds.notna() & (ds.dt.year < 2100)]
         if len(ds) > 0:
             obs_end = ds.max()
-    # Clipping des sentinelles dans date_sortie
+    # Clipping : remplacer les sentinelles par obs_end (sinon NaT)
     if obs_end is not None and "date_sortie" in df.columns:
-        sentinel = df["date_sortie"].dt.year >= 2100
-        df.loc[sentinel, "date_sortie"] = obs_end
+        mask = sentinel_masks.get("date_sortie")
+        if mask is not None and mask.any():
+            df.loc[mask, "date_sortie"] = obs_end
     return df, (obs_end.isoformat() if obs_end is not None else None)
 
 

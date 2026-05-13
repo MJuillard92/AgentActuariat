@@ -3,6 +3,102 @@
 # Re-generate with: python tools/catalogue.py --force
 
 tools:
+  conversation.data_inspect:
+    display_name: Inspection rapide du DataFrame
+    short_description: Headers, types, échantillon, distribution.
+    description: Outil d'inspection rapide du DataFrame en mode conversationnel. Permet à l'utilisateur de vérifier le contenu
+      du fichier (colonnes, types, échantillons, distribution) sans lancer le pipeline actuariel.
+    domain: conversation
+    capability_group: data_exploration
+    depends_on: []
+    required_by: []
+    client_visible: true
+    when_to_use: 'Phase conversationnelle (kind=question). L''utilisateur veut "voir" le fichier avant de demander des calculs
+      : "quelles colonnes ?", "montre-moi les 5 premières lignes", "quelles valeurs prend STATUT ?".'
+    when_not_to_use: Pas en pipeline actuariel — utiliser builder.* ou statistical_analysis.* qui produisent des résultats
+      normés.
+    prerequisites:
+      required_data_store_keys: []
+      note: le DataFrame est passé directement (chargé par tools_node).
+    params:
+      function_name:
+        type: string
+        values: columns | shape | head | describe | value_counts | date_range
+        default: columns
+      column:
+        type: string
+        default: 'null'
+        note: Nom de colonne pour value_counts / date_range.
+      n:
+        type: int
+        default: '5'
+        note: Nombre de lignes pour head, top-n pour value_counts.
+    outputs:
+      return_payload:
+        function_name: str — fonction appelée
+        result: dict | list — payload sérialisable JSON (jamais de DataFrame)
+    reasoning_hint: Préférer `data_inspect.columns` pour découvrir la structure avant toute autre exploration. `value_counts`
+      sur une catégorielle pour voir les modalités (sexe, statut). `describe` sur les numériques.
+  conversation.eval_pandas:
+    display_name: Évaluation pandas libre (sandboxée)
+    short_description: Expression pandas/numpy/lifelines évaluée après validation AST.
+    description: 'Escape hatch d''analyse libre : exécute une expression Python générée par le LLM, restreinte à pandas /
+      numpy / scipy.stats / matplotlib / seaborn / lifelines, après validation AST stricte (pas d''import, pas de filesystem,
+      pas de réseau, pas de dunders).'
+    domain: conversation
+    capability_group: data_exploration
+    client_visible: true
+    when_to_use: 'Quand aucun tool structuré ne répond exactement au besoin : - Filtrage + agrégation ad hoc - Test statistique
+      non listé (chi2, log-rank, Cox quick fit) - Plot non-standard (KM superposés, heatmap…) La capture matplotlib auto retourne
+      le PNG produit.'
+    when_not_to_use: 'Si un tool structuré existe (data_inspect, plot_basic, statistical_analysis.*). Pas d''écriture filesystem
+      : `to_csv`, `savefig`, `read_*` sont bloqués.'
+    params:
+      expression:
+        type: string
+        note: Expression Python pure (pas de statement, pas d'assignation).
+    outputs:
+      return_payload:
+        value: any         — résultat sérialisable (scalaire / list / dict / records)
+        plots: list[str]   — paths des PNG capturés (si plt utilisé)
+        expression: str    — expression évaluée (echo)
+    reasoning_hint: 'Préférer une expression unique compacte. Pour plots, utiliser `df[''age''].hist()` ou `ll.KaplanMeierFitter().fit(...).plot()`
+      : les figures matplotlib sont capturées automatiquement.'
+  conversation.plot_basic:
+    display_name: Plots rapides
+    short_description: Histogram / time-series / bar / scatter via matplotlib.
+    description: Plots matplotlib courants — histogram, time_series, bar, scatter. Produit un PNG dans tmp/conversation_plots/
+      et retourne son path.
+    domain: conversation
+    capability_group: data_exploration
+    client_visible: true
+    when_to_use: Phase conversationnelle, plot standard sur 1-2 colonnes. Pour un plot complexe (multi-séries, KM, heatmap)
+      utiliser eval_pandas.
+    params:
+      function_name:
+        type: string
+        values: histogram | time_series | bar | scatter
+        default: histogram
+      column:
+        type: string
+        note: Colonne principale (histogram, bar).
+      x_col, y_col:
+        type: string
+        note: Pour scatter / time_series.
+      bins:
+        type: int
+        default: '30'
+        note: Nb de bins pour histogram.
+      agg:
+        type: string
+        default: sum
+        values: sum | mean | count
+        note: Agrégation pour time_series par année.
+    outputs:
+      return_payload:
+        function_name: str
+        png_path: str — chemin relatif du PNG généré
+        title: str — titre du plot
   build_pdf.generate_notebook:
     display_name: Notebook Python reproductible
     short_description: Génère un Jupyter notebook reproduisant toute la session d'analyse.

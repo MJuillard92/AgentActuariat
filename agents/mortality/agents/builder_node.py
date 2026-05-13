@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-# Tools accessibles au BuilderAgent (identique au MortalityAgent)
+# Tools accessibles au BuilderAgent (identique au MortalityAgent).
+# Note: "conversation" est volontairement absent — ces tools (data_inspect,
+# plot_basic, eval_pandas) sont réservés au mode conversationnel du Master
+# (cf. agents/master/conversation.py:CONVERSATIONAL_TOOLS). Le Builder doit
+# suivre le pipeline normalisé, pas faire de l'exploration libre.
 BUILDER_TOOLS = {
     "builder",
     "preprocessing",        # tools/preprocessing/clean_records (R1-R6)

@@ -53,10 +53,12 @@ master:
     temperature: 0.0
     max_tokens:  200
 
-  # Réponse conversationnelle (kind=question). Qualité pro indispensable
-  # car l'utilisateur est un actuaire — on ne lésine pas.
+  # Réponse conversationnelle (kind=question) avec tool-calling sur
+  # CONVERSATIONAL_TOOLS (data_inspect, plot_basic, eval_pandas,
+  # statistical_analysis.*). Tâche peu critique — nano suffit.
+  # Override : LLM_MODEL_MASTER_CONVERSATION=gpt-5.4-mini si besoin.
   conversation:
-    model:       gpt-5.4
+    model:       gpt-5.4-nano
     temperature: 0.3
     max_tokens:  1500
 

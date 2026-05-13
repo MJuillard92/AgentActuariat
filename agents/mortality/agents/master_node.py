@@ -935,37 +935,12 @@ def master_node(state: "AgentState") -> dict:
         return {"messages": [], "events": new_events, "data_store": data_store}
 
     elif intent == "question":
-        # Appel LLM conversationnel — seul cas où le LLM rédige la réponse
-        from agents.mortality.agents.mortality_node import (
-            _to_openai_dict, _from_openai_response, sanitize_openai_messages
-        )
-        from agents.mortality.agents._utils import call_with_retry
-        system_prompt = _augment_with_data_store(_build_system_prompt(), data_store, dataset_ref)
-        raw_msgs = messages_list[-20:]
-        messages = [{"role": "system", "content": system_prompt}]
-        messages += [_to_openai_dict(m) for m in raw_msgs]
-        messages = sanitize_openai_messages(messages)
-        try:
-            from agents.mortality.agents.llm_config import get_llm_config
-            cfg = get_llm_config("master.conversation")
-            client = openai.OpenAI()
-            response = call_with_retry(
-                client,
-                model=cfg["model"],
-                messages=messages,
-                tools=None,
-                max_tokens=cfg.get("max_tokens", 1500),
-                temperature=cfg.get("temperature", 0.3),
-            )
-            lc_msg = _from_openai_response(response.choices[0].message)
-            content = response.choices[0].message.content or ""
-            if content:
-                new_events.append({"type": "message", "content": content})
-            new_events.append({"type": "done"})
-            return {"messages": [lc_msg], "events": new_events, "data_store": data_store}
-        except Exception as exc:
-            new_events.append({"type": "error", "message": str(exc)})
-            return {"messages": [], "events": new_events, "data_store": data_store}
+        # Branche conversationnelle déléguée à agents.master.conversation.
+        # Le LLM y a accès à un set restreint de tools (data_inspect,
+        # plot_basic, eval_pandas, statistical_analysis.*) — pas aux tools
+        # actuariels du Builder.
+        from agents.master.conversation import respond_conversationally
+        return respond_conversationally(messages_list, data_store, dataset_ref)
 
     # unclear : demander à l'utilisateur de préciser
     new_events.append({"type": "done"})
