@@ -475,7 +475,7 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
@@ -533,7 +533,7 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
@@ -545,7 +545,7 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx %",                   format: pct2}
+          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 

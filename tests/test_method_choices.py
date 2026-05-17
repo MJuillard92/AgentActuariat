@@ -277,6 +277,24 @@ def test_time_series_clips_sentinel_dates():
     assert res["nb_annees"] <= 100
 
 
+def test_format_cell_delegates_to_fmt_no_desync():
+    """Régression : avant le fix, _format_cell de _04_redaction et _fmt
+    de table_renderer étaient deux fonctions distinctes. _format_cell
+    ne connaissait pas pct2 → tombait dans str(value) → '16.886858051057914'
+    affiché en raw dans le PDF. Maintenant les deux convergent."""
+    from agents.report.pipeline._04_redaction import _format_cell
+    from tools.build_pdf.table_renderer import _fmt
+    # Toute valeur formatée par _fmt doit donner le même résultat via _format_cell
+    for fmt in ("int", "float1", "float2", "float4", "pct1", "pct2", "sci"):
+        val = 16.886858051057914
+        assert _format_cell(val, fmt) == _fmt(val, fmt), (
+            f"Désync entre _format_cell et _fmt pour format={fmt}"
+        )
+    # Cas spécifique du bug : pct2 doit retourner "16.89 %" pas la valeur raw
+    assert _format_cell(16.886858051057914, "pct2") == "16.89 %"
+    assert "16.886858" not in _format_cell(16.886858051057914, "float1")
+
+
 def test_format_placeholder_value_no_scientific_notation():
     """Régression bug 4 : les nombres dans la narrative ne doivent
     jamais sortir en notation scientifique."""

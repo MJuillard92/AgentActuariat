@@ -49,33 +49,20 @@ def _get_formats() -> dict:
 
 def _format_cell(value: Any, fmt: str, na_display: str = "—",
                   thousand_sep: str = " ") -> str:
-    """Formate une valeur de cellule selon `fmt` (cf. formats.defaults YAML).
+    """Délègue à `tools.build_pdf.table_renderer._fmt` pour garder une
+    SEULE source de vérité (sinon désynchros silencieuses entre PDF et
+    contexte narrative — bug réel rencontré avec pct2 reconnu par _fmt
+    mais pas par cette fonction → valeurs brutes affichées).
 
-    Formats supportés : int, float1, float2, float4, pct, pct1, sci, str
-    (= passthrough). NaN/None → na_display.
-    """
+    `na_display` et `thousand_sep` sont conservés en signature pour
+    rétro-compat mais n'ont plus d'effet : _fmt utilise par convention
+    "—" pour les None/NaN et l'espace fine comme séparateur."""
     if value is None:
         return na_display
     if isinstance(value, float) and math.isnan(value):
         return na_display
-    try:
-        if fmt == "int":
-            return f"{int(value):,}".replace(",", thousand_sep)
-        if fmt == "float1":
-            return f"{float(value):,.1f}".replace(",", thousand_sep)
-        if fmt == "float2":
-            return f"{float(value):,.2f}".replace(",", thousand_sep)
-        if fmt == "float4":
-            return f"{float(value):,.4f}".replace(",", thousand_sep)
-        if fmt == "pct":
-            return f"{float(value):.1%}"
-        if fmt == "pct1":
-            return f"{float(value):.1f} %"
-        if fmt == "sci":
-            return f"{float(value):.3e}"
-    except (ValueError, TypeError):
-        pass
-    return str(value)
+    from tools.build_pdf.table_renderer import _fmt
+    return _fmt(value, fmt)
 
 _MAX_TOKENS_NARRATIVE = 1200
 _TEMPERATURE          = 0.4   # Faible : style professionnel, peu créatif
