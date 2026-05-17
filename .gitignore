@@ -87,3 +87,11 @@ base_de_connaissance/
 # Claude Code local
 .claude/
 tmp/
+
+# FAISS doctrine — index binaire reconstructible localement
+# (les chunks sources chunks_enriched.json restent versionnés ;
+#  l'index est régénéré via knowledge_base/rag_doctrine/ingest_doctrine.py)
+knowledge_base/rag_doctrine/index/
+
+# Pack RAG source (zip téléchargé une fois pour ingestion)
+agentactuariat-rag-pack.zip

@@ -159,6 +159,48 @@ tools:
         function_name: str
         png_path: str — chemin relatif du PNG généré
         title: str — titre du plot
+  conversation.search_doctrine:
+    display_name: Recherche doctrine actuarielle française
+    short_description: RAG hybride sur 142 chunks (méthodes + réglementaire FR).
+    description: 'Recherche dans la doctrine actuarielle française : 142 chunks indexés (FAISS dense + BM25 sparse + RRF fusion
+      + reranker optionnel) couvrant préparation données, estimateurs taux bruts, lissage, validation (chi², SMR, runs), fermeture
+      grands âges, tables prospectives (Lee-Carter, Brouhns-Denuit-Vermunt, Cairns-Blake-Dowd), cadre réglementaire FR (A132-18,
+      BCAC, arrêtés), tables réglementaires (TH/TF 00-02, TGH/TGF 05, TPRV 93, TD/TV 88-90), certification IA, prudence et
+      marges, Solvabilité 2, landscape international.'
+    domain: conversation
+    capability_group: data_exploration
+    client_visible: true
+    when_to_use: 'Mode conversation, l''utilisateur pose une QUESTION méthodologique ou réglementaire : - "C''est quoi le
+      lissage Whittaker-Henderson ?" - "Comment fonctionne le test du chi-2 sur les tables ?" - "Quelle est l''obligation
+      A132-18 ?" - "Différence entre table périodique et prospective ?" - "Comment calibrer le paramètre h ?" Le tool retourne
+      les chunks pertinents avec sources (doc_id, section_id) ; le LLM doit ensuite reformuler en langage naturel et CITER
+      ces sources.'
+    when_not_to_use: Pour les calculs actuariels (utiliser le pipeline Builder). Pour l'inspection du fichier user (utiliser
+      data_inspect / eval_pandas).
+    params:
+      query:
+        type: string
+        note: Question utilisateur reformulée pour la recherche.
+      k:
+        type: int
+        default: '5'
+        note: Nombre de chunks à retourner.
+      filters:
+        type: dict | null
+        default: 'null'
+        note: 'Filtres métadonnées optionnels :'
+      rerank:
+        type: bool
+        default: 'false'
+        note: Si true, applique le reranker cross-encoder (latence +500ms-1s,
+    outputs:
+      return_payload:
+        results: list[dict] — {chunk_id, doc_id, section_id, section_title,
+        n_returned: int
+        query_used: str
+    reasoning_hint: 'TOUJOURS reformuler la réponse en langage naturel — ne pas balancer le texte brut du chunk. CITER au
+      minimum le doc_id + section_title (ex: "selon D03.02 - Whittaker-Henderson 1D : ..."). Ne JAMAIS inventer des références
+      : si un chunk ne contient pas l''info, le dire honnêtement.'
   build_pdf.generate_notebook:
     display_name: Notebook Python reproductible
     short_description: Génère un Jupyter notebook reproduisant toute la session d'analyse.
