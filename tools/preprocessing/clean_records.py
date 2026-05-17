@@ -127,6 +127,26 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             "detail":     detail or {},
         })
 
+    # R0 — Dates non parsables (NaT après pd.to_datetime). Capture les
+    # sentinelles invalides type "0/0/0", "00/00/0000", chaînes vides,
+    # formats inattendus. Doit s'appliquer AVANT R1-R6 car les âges NaN
+    # ne sont jamais < 0 ni > 100 et ces lignes survivraient sinon, puis
+    # planteraient les tools aval (notamment crude_rates_kaplan_meier).
+    # Limité à date_naissance + date_entree : une date_sortie NaT peut
+    # être une sentinelle légitime (contrat encore actif, ramenée à
+    # obs_end par le clipping dans _ages).
+    _critical_cols = [c for c in ("date_naissance", "date_entree")
+                      if c in current.columns]
+    if _critical_cols:
+        nat_mask = pd.Series(False, index=current.index)
+        for c in _critical_cols:
+            parsed_c = pd.to_datetime(
+                current[c], format="mixed", dayfirst=True, errors="coerce",
+            )
+            nat_mask = nat_mask | parsed_c.isna()
+        _apply(nat_mask, "R0",
+               "Dates non parsables (naissance ou entrée invalides)")
+
     # R1 — Contrats sans effet
     mask = current["cause_sortie"].astype(str).str.lower() == "sans_objet"
     _apply(mask, "R1", "Contrats sans effet (cause de sortie \u00ab\u00a0sans objet\u00a0\u00bb)")

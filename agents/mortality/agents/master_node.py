@@ -838,6 +838,45 @@ def master_node(state: "AgentState") -> dict:
         if missing_keys:
             cycles = data_store.get("_master_builder_cycles", 0) + 1
             data_store["_master_builder_cycles"] = cycles
+
+            # Détection ANTICIPÉE d'erreur récurrente : si le même tool a
+            # produit une erreur ≥ 2 fois dans _call_log, inutile de
+            # continuer — stop net avec message clair. Évite d'attendre 6
+            # cycles quand on sait déjà que le pipeline est bloqué.
+            call_log = data_store.get("_call_log") or []
+            error_signatures: dict[str, int] = {}
+            last_error_msg = ""
+            for entry in call_log:
+                if not entry.get("has_error"):
+                    continue
+                sig = f"{entry.get('tool')}.{entry.get('function_name')}"
+                error_signatures[sig] = error_signatures.get(sig, 0) + 1
+                # Capture le dernier message d'erreur lisible
+                summary = entry.get("result_summary") or {}
+                msg = summary.get("erreur") or ""
+                if msg:
+                    last_error_msg = msg
+            stuck_tool = next(
+                (sig for sig, n in error_signatures.items() if n >= 2), None,
+            )
+            if stuck_tool:
+                new_events.append({
+                    "type":    "message",
+                    "content": (
+                        f"[MasterAgent] Le tool `{stuck_tool}` échoue de manière "
+                        f"récurrente ({error_signatures[stuck_tool]} fois). "
+                        f"Arrêt anticipé pour éviter une boucle. "
+                        f"Dernière erreur : {last_error_msg[:300]}"
+                    ),
+                })
+                new_events.append({"type": "done"})
+                return {
+                    "messages":     [],
+                    "events":       new_events,
+                    "active_agent": "master",
+                    "data_store":   data_store,
+                }
+
             # Limite portée à 6 : le mode full_report nécessite ~5 batchs
             # de tools (descriptifs → crude_rates → smoothing → validation
             # → aggregation_deciles). 3 cycles bloquait avant convergence.
