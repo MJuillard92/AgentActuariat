@@ -55,10 +55,13 @@ master:
 
   # Réponse conversationnelle (kind=question) avec tool-calling sur
   # CONVERSATIONAL_TOOLS (data_inspect, plot_basic, eval_pandas,
-  # statistical_analysis.*). Tâche peu critique — nano suffit.
-  # Override : LLM_MODEL_MASTER_CONVERSATION=gpt-5.4-mini si besoin.
+  # search_doctrine, statistical_analysis.*).
+  # Modèle : mini (vs nano précédemment). Nano ratait systématiquement
+  # le tool-calling sur les questions méthodologiques : il préférait
+  # répondre de mémoire avec une excuse fabriquée ("manque de contexte").
+  # Mini est ~5× plus cher mais ~10× plus fiable sur le choix de tool.
   conversation:
-    model:       gpt-5.4-nano
+    model:       gpt-5.4-mini
     temperature: 0.3
     max_tokens:  1500
 
