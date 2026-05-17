@@ -36,6 +36,12 @@ _DF_TOOLS = {"statistical_analysis", "preprocessing", "conversation"}
 # en signature simple run(df, params).
 _CONVERSATION_DATA_FUNCTIONS = {"apply_normalization"}
 
+# Fonctions du namespace `conversation` STATELESS qui n'ont besoin NI de
+# df NI de data_store. Doivent fonctionner même sans CSV chargé (typique :
+# question doctrinale "c'est quoi Whittaker-Henderson ?" alors qu'aucun
+# fichier n'est uploadé).
+_CONVERSATION_STATELESS_FUNCTIONS = {"search_doctrine", "describe_capabilities"}
+
 # Fonctions builder qui nécessitent le df seul comme premier argument (les autres utilisent data_store)
 _BUILDER_DF_FUNCTIONS = {"exposure"}
 
@@ -332,6 +338,11 @@ def call_tool(
 
     try:
         if tool_name in _DF_TOOLS:
+            # Stateless conversation tools (search_doctrine, describe_capabilities)
+            # tournent sans df ni data_store. Sans cette branche, on
+            # rejette à tort la question doctrinale faute de CSV chargé.
+            if tool_name == "conversation" and function_name in _CONVERSATION_STATELESS_FUNCTIONS:
+                return mod.run(df, params)
             if df is None:
                 return {"erreur": f"{tool_name} nécessite un DataFrame (df=None)."}
             # conversation.apply_normalization a besoin de muter data_store

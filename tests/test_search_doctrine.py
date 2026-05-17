@@ -116,6 +116,24 @@ def test_e2e_filter_by_doc_id():
 
 @pytest.mark.skipif(not _index_available(),
                     reason="FAISS index non construit (ingest_doctrine.py)")
+@pytest.mark.skipif(not _index_available(),
+                    reason="FAISS index non construit (ingest_doctrine.py)")
+def test_e2e_works_without_dataframe_loaded():
+    """Régression bug terrain : search_doctrine doit fonctionner sans
+    aucun CSV chargé (df=None côté tool_registry). Sans ce test, le
+    routing `if df is None: return erreur` du namespace conversation
+    bloquait l'appel et le LLM renvoyait 'aucun DataFrame disponible'."""
+    from tools.tool_registry import call_tool
+    res = call_tool("conversation", "search_doctrine",
+                    params={"query": "Whittaker-Henderson", "k": 2},
+                    df=None, data={})
+    assert "erreur" not in res, f"Bug : df=None bloque search_doctrine : {res}"
+    assert res.get("n_returned", 0) >= 1
+    assert res["results"][0]["doc_id"]
+
+
+@pytest.mark.skipif(not _index_available(),
+                    reason="FAISS index non construit (ingest_doctrine.py)")
 def test_e2e_result_has_citation_fields():
     """Chaque résultat contient les champs nécessaires à la citation
     (doc_id, section_id, section_title)."""
