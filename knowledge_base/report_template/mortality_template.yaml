@@ -370,10 +370,10 @@ sections:
         source: segmentations.sexe   # sub-path dans le dict `segmentations`
         columns:
           - {key: valeur,         label: "Sexe"}
-          - {key: nb_contrats,    label: "Exposition",                 format: int}
+          - {key: exposition_pa,  label: "Exposition (a.-p.)",         format: int}
           - {key: nb_deces,       label: "Décès",                      format: int}
-          - {key: pct_contrats,   label: "Part du portefeuille (%)",   format: float2}
-          - {key: pct_deces,      label: "Part des décès (%)",         format: float2}
+          - {key: pct_exposition, label: "Part de l'exposition (%)",   format: float1}
+          - {key: pct_deces,      label: "Part des décès (%)",         format: float1}
 
       - id: deaths_per_year
         type: chart

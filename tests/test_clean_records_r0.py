@@ -128,3 +128,31 @@ def test_master_stops_on_recurring_tool_error(monkeypatch):
     assert "builder.crude_rates" in joined, "Le tool fautif n'est pas nommé"
     # Pas de routing vers Builder (sinon boucle)
     assert out.get("active_agent") != "builder"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Segmentation : exposition en années-personne (pas nb_contrats)
+# ──────────────────────────────────────────────────────────────────────
+
+def test_segmentation_computes_exposition_pa_per_modality():
+    """Régression : 'exposition' doit être les années-personne agrégées,
+    pas le nombre de contrats. Sans ça le label du PDF était trompeur."""
+    import pandas as pd
+    from tools.statistical_analysis.segmentation import run
+    df = pd.DataFrame({
+        "date_entree":  ["01/01/2000", "01/01/2005", "01/01/2000"],
+        "date_sortie":  ["01/01/2010", "01/01/2010", "31/12/2999"],
+        "sexe":         ["H", "F", "H"],
+        "cause_sortie": ["deces", "deces", "vivant"],
+    })
+    res = run(df, {"columns": ["sexe"]})
+    assert "total_exposition_pa" in res
+    seg = {r["valeur"]: r for r in res["segmentations"]["sexe"]}
+    assert "exposition_pa" in seg["H"]
+    assert "pct_exposition" in seg["H"]
+    # H : 2000→2010 (10 ans) + 2000→2010 clippé (10 ans) = 20 a-p
+    assert abs(seg["H"]["exposition_pa"] - 20.0) < 0.1
+    # F : 2005→2010 = 5 a-p
+    assert abs(seg["F"]["exposition_pa"] - 5.0) < 0.1
+    # nb_contrats reste disponible (rétro-compat) mais valeur = count
+    assert seg["H"]["nb_contrats"] == 2

@@ -165,22 +165,64 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     total = len(df)
     total_deces = int(is_dead.sum())
 
+    # ── Exposition par ligne (années-personne) ────────────────────────────
+    # Sens actuariel : "exposition" = somme des années-personne observées,
+    # PAS le nombre de contrats. On la calcule ici une fois pour pouvoir
+    # l'agréger par modalité dans la boucle ci-dessous.
+    expo_per_row = None
+    if {"date_entree", "date_sortie"} <= set(df.columns):
+        de = pd.to_datetime(df["date_entree"], format="mixed",
+                            dayfirst=True, errors="coerce")
+        ds = pd.to_datetime(df["date_sortie"], format="mixed",
+                            dayfirst=True, errors="coerce")
+        # Cap sortie à la fin d'observation (dernier décès) — sinon
+        # sentinelles 2999 polluent l'expo
+        if is_dead.any():
+            obs_end_candidates = ds[is_dead & ds.notna() & (ds.dt.year < 2100)]
+            if len(obs_end_candidates) > 0:
+                obs_end = obs_end_candidates.max()
+                ds = ds.where(ds <= obs_end, obs_end)
+        expo_per_row = (ds - de).dt.days / 365.25
+        expo_per_row = expo_per_row.where(expo_per_row > 0, 0.0)
+
+    total_expo = float(expo_per_row.sum()) if expo_per_row is not None else 0.0
+
     result: dict = {
         "total_contrats": total,
         "total_deces": total_deces,
+        "total_exposition_pa": round(total_expo, 2),
         "segmentations": {},
     }
 
     for label, col_name in cols_to_analyze:
-        tab = (
-            df.groupby(df[col_name].astype(str).str.strip())
-            .agg(
-                nb_contrats=(col_name, "count"),
-                nb_deces=(col_name, lambda x: int(is_dead.loc[x.index].sum())),
-            )
-            .reset_index()
-            .rename(columns={col_name: "valeur"})
+        grouper = df[col_name].astype(str).str.strip()
+        agg_dict = dict(
+            nb_contrats=(col_name, "count"),
+            nb_deces=(col_name, lambda x: int(is_dead.loc[x.index].sum())),
         )
+        if expo_per_row is not None:
+            # On utilise une copie nommée pour pouvoir agréger via groupby
+            df_for_expo = df.assign(_expo_pa=expo_per_row.values)
+            tab = (
+                df_for_expo.groupby(grouper)
+                .agg(
+                    nb_contrats=(col_name, "count"),
+                    nb_deces=(col_name, lambda x: int(is_dead.loc[x.index].sum())),
+                    exposition_pa=("_expo_pa", "sum"),
+                )
+                .reset_index()
+                .rename(columns={col_name: "valeur"})
+            )
+            tab["exposition_pa"] = tab["exposition_pa"].round(2)
+            tab["pct_exposition"] = (tab["exposition_pa"] / total_expo * 100).round(1) \
+                if total_expo > 0 else 0.0
+        else:
+            tab = (
+                df.groupby(grouper)
+                .agg(**agg_dict)
+                .reset_index()
+                .rename(columns={col_name: "valeur"})
+            )
         tab["pct_contrats"] = (tab["nb_contrats"] / total * 100).round(1)
         tab["pct_deces"]    = (tab["nb_deces"] / total_deces * 100).round(1) if total_deces > 0 else 0.0
         result["segmentations"][label] = tab.to_dict(orient="records")
