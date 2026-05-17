@@ -82,6 +82,18 @@ def get_embedder(kind: str) -> Embedder:
         return HFEmbedder("BAAI/bge-m3")
     if kind == "me5-large":
         return HFEmbedder("intfloat/multilingual-e5-large", prefix="passage: ")
+    # MiniLM multilingue : 120 Mo, dim 384, ~10× plus rapide que bge-m3.
+    # Recall un peu inférieur sur les requêtes longues, mais largement
+    # suffisant pour les 142 chunks doctrinaux.
+    if kind in ("minilm", "minilm-mult", "paraphrase-multilingual-minilm"):
+        return HFEmbedder("paraphrase-multilingual-MiniLM-L12-v2")
+    # Auto-detect from meta.json — accepte le nom de modèle complet
+    if kind.startswith("paraphrase-multilingual-minilm"):
+        return HFEmbedder("paraphrase-multilingual-MiniLM-L12-v2")
+    if kind.startswith("baai/bge-m3") or "bge-m3" in kind:
+        return HFEmbedder("BAAI/bge-m3")
+    if "e5-large" in kind:
+        return HFEmbedder("intfloat/multilingual-e5-large", prefix="passage: ")
     raise ValueError(f"Embedder inconnu: {kind}")
 
 

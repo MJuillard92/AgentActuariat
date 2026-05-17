@@ -52,8 +52,12 @@ def main() -> int:
 
     texts = [c["text"] for c in chunks]
 
-    log.info("Chargement embedder bge-m3 (1er run = download ~2.3 Go HF Hub)…")
-    emb = HFEmbedder("BAAI/bge-m3")
+    # MiniLM multilingue : 120 Mo, dim 384, charge en ~1s vs ~5-10s pour
+    # bge-m3. Recall@5 légèrement inférieur (~-5pts sur les requêtes
+    # techniques) mais perceptiblement meilleur côté UX.
+    # Pour passer à bge-m3 : remplacer ci-dessous par HFEmbedder("BAAI/bge-m3").
+    log.info("Chargement embedder MiniLM multilingue (1er run = download ~120 Mo)…")
+    emb = HFEmbedder("paraphrase-multilingual-MiniLM-L12-v2")
     log.info(f"Embedder prêt : {emb.name}, dim={emb.dim}")
 
     log.info("Embedding des 142 chunks…")

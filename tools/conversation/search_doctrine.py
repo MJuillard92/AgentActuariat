@@ -99,15 +99,17 @@ log = logging.getLogger(__name__)
 _DOCTRINE_DIR  = Path(__file__).resolve().parent.parent.parent / "knowledge_base" / "rag_doctrine"
 _INDEX_PATH    = _DOCTRINE_DIR / "index" / "faiss.bin"
 _META_PATH     = _DOCTRINE_DIR / "index" / "meta.json"
-_EMBEDDER      = "bge-m3"   # cohérent avec l'index construit
 
-# Cache du retriever (chargement modèle ~5-10s, on évite de le faire
-# à chaque appel — réutilisé pour tous les appels de la session)
+# Cache du retriever (chargement modèle ~1-10s selon embedder).
+# Réutilisé pour tous les appels de la session pour éviter le cold start
+# à chaque question.
 _RETRIEVER_CACHE: dict[str, Any] = {}
 
 
 def _get_retriever():
-    """Lazy load du HybridRetriever. Modèle bge-m3 chargé en RAM au 1er appel."""
+    """Lazy load du HybridRetriever. L'embedder est auto-détecté depuis
+    le meta.json — garantit la cohérence entre l'index construit et les
+    requêtes (mismatch dim = recall nul)."""
     if "instance" in _RETRIEVER_CACHE:
         return _RETRIEVER_CACHE["instance"]
     if not _INDEX_PATH.exists() or not _META_PATH.exists():
@@ -115,11 +117,30 @@ def _get_retriever():
             f"Index FAISS doctrine absent ({_INDEX_PATH}). "
             "Lancer : python knowledge_base/rag_doctrine/ingest_doctrine.py"
         )
+    # Lire l'embedder utilisé pour construire l'index
+    import json as _json
+    with _META_PATH.open(encoding="utf-8") as f:
+        meta = _json.load(f)
+    embedder_name = meta.get("embedder", "bge-m3")
+    log.info("Chargement du retriever doctrine (embedder=%s) — cache RAM …",
+             embedder_name)
     from tools.conversation._retriever._pack_retriever import HybridRetriever
-    log.info("Chargement du retriever doctrine (bge-m3) — cache RAM …")
-    r = HybridRetriever.from_paths(_INDEX_PATH, _META_PATH, embedder=_EMBEDDER)
+    r = HybridRetriever.from_paths(_INDEX_PATH, _META_PATH, embedder=embedder_name)
     _RETRIEVER_CACHE["instance"] = r
     return r
+
+
+def warmup() -> bool:
+    """Pré-charge le retriever (modèle embedder + index FAISS) pour
+    éliminer le cold start au 1er appel utilisateur. À appeler une fois
+    au démarrage de l'application. Retourne True si OK, False sinon.
+    No-op si déjà chargé."""
+    try:
+        _get_retriever()
+        return True
+    except Exception as exc:
+        log.warning("warmup search_doctrine échoué : %s", exc)
+        return False
 
 
 def run(df=None, params: dict | None = None) -> dict:

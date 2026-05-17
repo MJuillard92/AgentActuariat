@@ -2110,5 +2110,22 @@ def submit_disambiguation(
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _warmup_doctrine_retriever() -> None:
+    """Pré-charge le modèle embedder + index FAISS pour la doctrine
+    actuarielle. Sans ça le 1er appel utilisateur à
+    conversation.search_doctrine subit un cold start de ~5s.
+    Lancé en background pour ne pas bloquer le démarrage de l'app."""
+    try:
+        from tools.conversation.search_doctrine import warmup
+        ok = warmup()
+        print(f"[warmup] Retriever doctrine prêt = {ok}", flush=True)
+    except Exception as exc:
+        print(f"[warmup] doctrine échec : {exc}", flush=True)
+
+
 if __name__ == "__main__":
+    # Pré-chargement asynchrone du retriever doctrine (~5s, non bloquant
+    # — l'app démarre immédiatement, le 1er appel doctrine sera instantané
+    # une fois le warmup terminé).
+    threading.Thread(target=_warmup_doctrine_retriever, daemon=True).start()
     app.run(debug=True, host="0.0.0.0", port=8050)
