@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 
 from agents.rag.memory.schemas import RAGTurn, RAGSummary
+from agents.rag.memory.summarizer import summarize_old_turns
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,27 @@ SUMMARY_TRIGGER         = 10
 VECTORSTORE_TOP_K       = 3
 VECTORSTORE_MIN_SCORE   = 0.7
 MAX_MEMORY_CHARS        = 4000
+
+
+def _sanitize_for_memory(text: str) -> str:
+    """Nettoie un texte avant insertion en mémoire conversationnelle.
+
+    1. Truncate à MAX_MEMORY_CHARS
+    2. Strip control chars (préserve \\n \\t)
+    3. Neutralise les marqueurs structurels (évite pollution multi-tour
+       si user injecte '[Conversation récente]' dans sa question)
+    """
+    if not text:
+        return ""
+    text = text[:MAX_MEMORY_CHARS]
+    text = "".join(c for c in text if c in ("\n", "\t") or ord(c) >= 32)
+    for marker in (
+        "[Conversation récente]", "[Résumé contexte antérieur]",
+        "[Échanges passés pertinents]", "[Nouvelle question]",
+        "[Question utilisateur]", "[Extraits doctrinaux]",
+    ):
+        text = text.replace(marker, "(neutralisé)")
+    return text
 
 
 class RAGMemoryStore:
@@ -42,6 +64,7 @@ class RAGMemoryStore:
         # Déclarés ici pour que les lecteurs voient TOUS les attributs d'instance.
         self._faiss_index = None  # IndexFlatIP | None — type lazy import pour éviter faiss à l'import
         self._indexed_turns: list[RAGTurn] = []
+        self._total_turns: int = 0   # compteur global pour summary trigger
 
     # ── Public API : lectures ────────────────────────────────────────────
 
@@ -190,3 +213,53 @@ class RAGMemoryStore:
                     pairs.append((pending_user, ai_content))
                 pending_user = None
         return pairs
+
+    # ── API publique : écriture (utilisée par run_pipeline RAG.7) ───────
+
+    def append_turn(self, user_q: str, rag_answer: str,
+                    sources: list[dict] | None = None) -> None:
+        """Ajoute un tour à la mémoire conversationnelle.
+
+        1. Sanitize (truncate + strip + neutralize markers)
+        2. Append au buffer (fifo)
+        3. Index dans le vectorstore (embedding MiniLM)
+        4. Trigger summary update si total_turns > SUMMARY_TRIGGER
+
+        Note : append_turn assume que le tour fourni n'est PAS déjà dans le
+        vectorstore (sinon double-indexing). Le caller (run_pipeline RAG.7)
+        garantit que append_turn n'est appelé qu'une fois par nouveau tour,
+        APRÈS que for_session(history) a populé la mémoire depuis l'history
+        passé (qui ne contient pas encore le tour courant).
+        """
+        user_q_clean     = _sanitize_for_memory(user_q)
+        rag_answer_clean = _sanitize_for_memory(rag_answer)
+        sources          = sources or []
+
+        # 1. Buffer (réutilise _append_buffer_only pour cohérence FIFO)
+        self._append_buffer_only(user_q_clean, rag_answer_clean, sources=sources)
+
+        # 2. Vectorstore (réutilise _index_turn_in_vectorstore)
+        self._index_turn_in_vectorstore(
+            RAGTurn(user_q=user_q_clean, rag_answer=rag_answer_clean,
+                    sources=sources)
+        )
+
+        # 3. Compteur
+        self._total_turns += 1
+
+        # 4. Trigger summary (strict > pour éviter compaction sur 0 ancien)
+        if self._total_turns > SUMMARY_TRIGGER:
+            old_turns = self._get_old_turns_for_summary()
+            self._summary = summarize_old_turns(old_turns, existing=self._summary)
+
+    def _get_old_turns_for_summary(self) -> list[RAGTurn]:
+        """Retourne les tours indexés au vectorstore qui ne sont pas dans le buffer.
+
+        Le buffer contient les BUFFER_SIZE derniers ; on prend les indexed_turns
+        plus anciens que ces BUFFER_SIZE derniers pour la compaction.
+        """
+        if not self._indexed_turns:
+            return []
+        if len(self._indexed_turns) <= BUFFER_SIZE:
+            return []
+        return self._indexed_turns[:-BUFFER_SIZE]
