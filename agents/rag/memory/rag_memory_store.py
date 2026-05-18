@@ -1,6 +1,9 @@
 """
 RAGMemoryStore — Mémoire conversationnelle 3-niveaux par session, RAM-only.
 
+**ÉTAT v0.5 (Task 5)** : seul le niveau 1 (buffer ring-fifo) est opérationnel.
+Niveaux 2 (summary) et 3 (vectorstore FAISS) livrés en Tasks 6/7/10.
+
 Niveau 1 : buffer ring-fifo des derniers BUFFER_SIZE tours (verbatim)
 Niveau 2 : RAGSummary mis à jour synchronement après SUMMARY_TRIGGER tours
 Niveau 3 : index FAISS de tous les Q/A embedded (MiniLM-384)
@@ -13,12 +16,8 @@ Cache module-level par session_id. Pas de TTL en v1.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from agents.rag.memory.schemas import RAGTurn, RAGSummary
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class RAGMemoryStore:
     # ── Méthode interne (testée à part) — sera enrobée par append_turn ──
 
     def _append_buffer_only(self, user_q: str, rag_answer: str,
-                             sources: list[dict]) -> None:
+                             sources: list[dict] | None = None) -> None:
         """Ajoute au buffer avec éviction FIFO. Pas de vectorstore ni summary."""
         turn = RAGTurn(user_q=user_q, rag_answer=rag_answer, sources=sources or [])
         self._buffer.append(turn)
