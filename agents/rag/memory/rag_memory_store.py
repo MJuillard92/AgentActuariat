@@ -190,6 +190,11 @@ class RAGMemoryStore:
                 self._index_turn_in_vectorstore(
                     RAGTurn(user_q=user_q, rag_answer=rag_answer, sources=[])
                 )
+        # Fix C1 (final code review) : restaurer _total_turns au nombre de
+        # paires reconstruites, sinon le SUMMARY_TRIGGER ne se déclenche
+        # jamais après un cold-start (Flask restart) — bug silencieux qui
+        # casse la promesse "summary regénéré au prochain hit du seuil".
+        self._total_turns = len(pairs)
 
     @staticmethod
     def _extract_qa_pairs(history: list) -> list[tuple[str, str]]:

@@ -230,3 +230,38 @@ def test_append_turn_does_not_trigger_summary_below_threshold():
         for i in range(SUMMARY_TRIGGER - 1):
             s.append_turn(f"q{i}", f"a{i}", sources=[])
     mock_sum.assert_not_called()
+
+
+def test_for_session_restores_total_turns_for_summary_trigger():
+    """Régression C1 (final code review) : _total_turns doit refléter le
+    nombre de tours reconstruits depuis history, sinon le SUMMARY_TRIGGER
+    ne se déclenche jamais après cold-start Flask.
+
+    Scénario : session avec 12 tours pré-existants (>SUMMARY_TRIGGER=10),
+    cold-rebuild via for_session, append d'un 13e tour → summary trigger
+    doit s'exécuter (12+1=13 > 10).
+    """
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore, SUMMARY_TRIGGER
+    from agents.rag.memory.schemas import RAGSummary
+    from langchain_core.messages import HumanMessage, AIMessage
+    from unittest.mock import patch
+
+    # 12 paires user/AI dans history (au-dessus du seuil de 10)
+    history = []
+    for i in range(12):
+        history.append(HumanMessage(content=f"question ancienne {i}"))
+        history.append(AIMessage(content=f"réponse ancienne {i} [D03.0{i % 9 + 1}]"))
+
+    s = RAGMemoryStore.for_session("session_cold_restart", history=history)
+    # Compteur doit refléter les 12 paires reconstruites
+    assert s._total_turns == 12
+
+    # Le 13e tour (1er append post-restart) doit déclencher le summary
+    fake_summary = RAGSummary(topics_covered=["t1"], n_turns_summarized=8)
+    with patch("agents.rag.memory.rag_memory_store.summarize_old_turns",
+               return_value=fake_summary) as mock_sum:
+        s.append_turn("nouveau tour 13", "nouvelle réponse [D03.02]", sources=[])
+    assert mock_sum.called, (
+        "Summary trigger raté après cold-start : _total_turns mal restauré"
+    )
+    assert s.get_summary() is fake_summary
