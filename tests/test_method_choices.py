@@ -641,3 +641,31 @@ def test_method_pending_with_question_routes_to_doctrine(monkeypatch):
     msg_content = out["messages"][0].content if out.get("messages") else ""
     assert "D02" in msg_content
     assert "Reprenons" in msg_content or "préciser" in msg_content
+
+
+def test_answer_question_via_doctrine_passes_history_to_pipeline():
+    """Le path pending doit propager _history + _session_id à run_pipeline."""
+    from agents.master.method_choices import answer_question_via_doctrine
+    from langchain_core.messages import HumanMessage, AIMessage
+    from unittest.mock import patch
+
+    history = [
+        HumanMessage(content="q1 ancienne"),
+        AIMessage(content="a1 [D03.02]"),
+    ]
+    data_store = {
+        "_session_id":   "pending_test_001",
+        "_history":      history,
+        "_stage_buffer": [],
+    }
+    captured_state = {}
+    def fake_run(state, verify=False):
+        captured_state["state"] = state
+        return {"answer": "ok", "sources": [], "stage_events": []}
+
+    with patch("agents.rag.pipeline.run_pipeline.run", side_effect=fake_run):
+        answer_question_via_doctrine("nouvelle question", data_store, pending=None)
+
+    state = captured_state["state"]
+    assert state.get("session_id") == "pending_test_001"
+    assert len(state.get("messages", [])) >= 2  # history + nouvelle question

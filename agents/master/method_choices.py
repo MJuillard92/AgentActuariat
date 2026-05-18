@@ -462,9 +462,24 @@ def answer_question_via_doctrine(
             "label": label,
         })
 
-    # On fabrique un mini-state minimal et on appelle le pipeline RAG pur
-    # (pas l'adapter LangGraph — on est dans un handler synchrone).
-    fake_state = {"messages": [HumanMessage(content=last_text)]}
+    # On fabrique un mini-state avec le full history + session_id pour que
+    # RAGMemoryStore.for_session puisse reconstruire la mémoire conversationnelle.
+    # Le dernier HumanMessage doit être la question actuelle — s'il n'est pas
+    # déjà dans le history (cas où answer_question est appelée hors-tour),
+    # on l'ajoute en fin.
+    history = list(data_store.get("_history") or [])
+    last_is_current_q = (
+        history
+        and isinstance(history[-1], HumanMessage)
+        and (history[-1].content or "").strip() == (last_text or "").strip()
+    )
+    if not last_is_current_q:
+        history.append(HumanMessage(content=last_text))
+
+    fake_state = {
+        "messages":   history,
+        "session_id": data_store.get("_session_id") or "pending_default",
+    }
     result = _run_rag(fake_state, verify=False)
 
     answer = result.get("answer") or ""
