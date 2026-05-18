@@ -14,6 +14,7 @@ le flag config `rag.safety.public_mode` — non implémenté en v1.
 from __future__ import annotations
 
 import re
+_re_module = re
 
 from agents.rag.pipeline._corpus_lexicon import get_lexicon
 
@@ -75,9 +76,41 @@ def detect_jailbreak(query: str) -> tuple[bool, str | None]:
 # terme actuariel explicite.
 _ANAPHORA_PATTERNS = (
     " les ", " ça ", " ca ", "cette ", "celle", "celui",
-    "et pour", "et avec", "et sur", "compare",
+    "et pour", "et avec", "et sur",
+    "compare-l", "comparons-l", "comparez-l",
     "leur ", "leurs ", " son ", " sa ", " ses ",
 )
+
+# Cache module-level : compiled regex (one big alternation) + lexicon id.
+# Invalidé quand le lexicon change (get_lexicon retourne un nouveau set).
+_SCOPE_REGEX_CACHE: "tuple[int, _re_module.Pattern[str]] | None" = None
+
+
+def _get_scope_regex(lexicon: set[str]) -> "_re_module.Pattern[str]":
+    """Construit ou récupère le regex alternation `\\b(t1|t2|...)\\b` cached.
+
+    Invalidé via `id(lexicon)` : si get_lexicon retourne un nouveau set
+    (re-ingest corpus → mtime invalidation), on recompile.
+    """
+    global _SCOPE_REGEX_CACHE
+    cache_id = id(lexicon)
+    if _SCOPE_REGEX_CACHE is not None and _SCOPE_REGEX_CACHE[0] == cache_id:
+        return _SCOPE_REGEX_CACHE[1]
+    # Trier par longueur décroissante pour matcher d'abord les termes les
+    # plus spécifiques (whittaker-henderson avant whittaker).
+    sorted_terms = sorted(lexicon, key=len, reverse=True)
+    # re.escape pour éviter qu'un terme contenant '.' ou '-' (D03.02,
+    # whittaker-henderson) soit interprété comme regex.
+    alternation = "|".join(_re_module.escape(t) for t in sorted_terms)
+    # \b avant et après pour éviter les substring false-positives.
+    # Note : \b ne marche pas idéalement avec les tirets (whittaker-henderson),
+    # mais re.escape transforme '-' en '\\-' et \b matche aux frontières
+    # alphanumérique/non-alphanumérique. Pour les termes hyphenés, le \b
+    # initial matche avant 'w' (frontière espace→w), le \b final matche après
+    # 'n' (frontière n→fin/espace).
+    pattern = _re_module.compile(rf"\b({alternation})\b", _re_module.IGNORECASE)
+    _SCOPE_REGEX_CACHE = (cache_id, pattern)
+    return pattern
 
 
 def has_anaphora(query: str) -> bool:
@@ -104,7 +137,8 @@ def is_in_scope(query: str, anaphora_present: bool = False) -> bool:
         # Corpus indispo : on ne peut pas filtrer scope → on laisse passer
         return True
     query_lower = query.lower()
-    return any(term in query_lower for term in lexicon)
+    pattern = _get_scope_regex(lexicon)
+    return bool(pattern.search(query_lower))
 
 
 # ── Messages de refus ──────────────────────────────────────────────────────
