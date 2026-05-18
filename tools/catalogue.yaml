@@ -192,7 +192,7 @@ tools:
       rerank:
         type: bool
         default: 'false'
-        note: Si true, applique le reranker cross-encoder (latence +500ms-1s,
+        note: ⚠️ Laisser FALSE par défaut. Activer rerank charge un modèle
     outputs:
       return_payload:
         results: list[dict] — {chunk_id, doc_id, section_id, section_title,

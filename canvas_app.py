@@ -2124,8 +2124,10 @@ def _warmup_doctrine_retriever() -> None:
 
 
 if __name__ == "__main__":
-    # Pré-chargement asynchrone du retriever doctrine (~5s, non bloquant
-    # — l'app démarre immédiatement, le 1er appel doctrine sera instantané
-    # une fois le warmup terminé).
-    threading.Thread(target=_warmup_doctrine_retriever, daemon=True).start()
+    import os
+    # Flask debug mode fork un reloader process → warmup serait exécuté
+    # 2 fois (parent + child). On le lance UNIQUEMENT dans le child final
+    # (où WERKZEUG_RUN_MAIN est posé) pour économiser ~5s au démarrage.
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.environ.get("FLASK_DEBUG") != "1":
+        threading.Thread(target=_warmup_doctrine_retriever, daemon=True).start()
     app.run(debug=True, host="0.0.0.0", port=8050)

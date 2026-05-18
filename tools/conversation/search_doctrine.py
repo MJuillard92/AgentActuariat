@@ -59,8 +59,10 @@ params:
   rerank:
     type    : bool
     default : false
-    note    : Si true, applique le reranker cross-encoder (latence +500ms-1s,
-              précision +5-10 pts recall@5). Réservé aux questions ambiguës.
+    note    : ⚠️ Laisser FALSE par défaut. Activer rerank charge un modèle
+              cross-encoder de 600 Mo (cold start +5-10s) — pas justifié
+              pour 99% des questions. Réservé aux cas où FAISS+BM25 ne
+              retournent que des résultats hors-sujet (rare sur 142 chunks).
 
 OUTPUTS
 -------
@@ -90,10 +92,20 @@ client_visible    : true
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Force HuggingFace en mode offline si les modèles sont déjà en cache.
+# Sans ça, sentence-transformers fait un HEAD HTTP à chaque chargement
+# pour check les updates → 2-5s de latence + risque "Connection reset"
+# observé en prod (HF rate-limit anonyme).
+_HF_HUB_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
+if _HF_HUB_CACHE.exists() and any(_HF_HUB_CACHE.iterdir()):
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # Chemins du corpus + index FAISS (immutable, embarqué avec le projet)
 _DOCTRINE_DIR  = Path(__file__).resolve().parent.parent.parent / "knowledge_base" / "rag_doctrine"
