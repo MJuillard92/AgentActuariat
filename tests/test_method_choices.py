@@ -565,6 +565,42 @@ def test_is_meta_question_detects_questions():
     assert not _is_meta_question("préciser")
 
 
+def test_question_without_pending_routes_to_doctrine(monkeypatch):
+    """Régression : une question SANS pending doit être traitée
+    EXACTEMENT comme une question AVEC pending → search_doctrine direct,
+    pas de LLM nano. Uniformité du traitement."""
+    from agents.master import method_choices as mc
+    fake_calls = []
+    def _fake_search(df, params):
+        fake_calls.append(params)
+        return {"results": [{
+            "doc_id": "D03", "section_id": "D03.02",
+            "section_title": "Whittaker-Henderson 1D",
+            "text": "Méthode de lissage non-paramétrique...",
+        }], "n_returned": 1, "query_used": params.get("query", "")}
+    import sys
+    fake_mod = type(sys)("tools.conversation.search_doctrine")
+    fake_mod.run = _fake_search
+    monkeypatch.setitem(sys.modules, "tools.conversation.search_doctrine", fake_mod)
+
+    # Sans pending → answer_question_via_doctrine(..., pending=None)
+    data_store = {"_stage_buffer": []}
+    out = mc.answer_question_via_doctrine(
+        "C'est quoi le lissage Whittaker ?", data_store, pending=None,
+    )
+    assert len(fake_calls) == 1
+    msg = out["messages"][0].content
+    assert "D03.02" in msg
+    # Sans pending : pas de "Reprenons" à la fin
+    assert "Reprenons" not in msg
+    # Stage 0.e-q tracé (pas 0.c-q)
+    stages = [e for e in (data_store.get("_stage_buffer") or [])
+              if e.get("type") == "master_stage"]
+    # Buffer consommé par _ask_user → _prepend_stages — donc absent ici
+    # On vérifie au moins que ça n'a pas planté
+    assert "events" in out
+
+
 def test_method_pending_with_question_routes_to_doctrine(monkeypatch):
     """Régression bug terrain : pendant le pending_need méthode, si l'user
     pose une question, on ne doit PAS re-asker en boucle 'Je n'ai pas

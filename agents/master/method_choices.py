@@ -410,53 +410,78 @@ _QUESTION_PATTERN = _re.compile(
 )
 
 
-def _is_meta_question(text: str) -> bool:
-    """Détecte si le message est une QUESTION (besoin d'info) plutôt qu'un
-    CHOIX de méthode. Heuristique : présence d'un signal interrogatif fort
-    (?, qu'est-ce, explique, rappelle, comment, pourquoi, différence,
-    donne moi, c'est quoi). Le fait que la phrase contienne un nom de
-    méthode n'invalide pas — l'utilisateur peut demander des explications
-    SUR la méthode (ex: 'explique-moi kaplan' est une question légitime)."""
+def is_meta_question(text: str) -> bool:
+    """Détecte si le message est une QUESTION (besoin d'info).
+    Heuristique : présence d'un signal interrogatif fort (?, qu'est-ce,
+    explique, rappelle, comment, pourquoi, différence, donne moi,
+    c'est quoi). Le fait que la phrase contienne un nom de méthode
+    n'invalide pas — l'utilisateur peut demander des explications SUR
+    la méthode (ex: 'explique-moi kaplan' est une question légitime).
+
+    Utilisé partout : dans le flux pending_need ET dans le flux générique
+    sans pending. Une question est TOUJOURS traitée par RAG doctrine,
+    indépendamment du contexte (uniformité de traitement)."""
     if not text:
         return False
     return bool(_QUESTION_PATTERN.search(text))
 
 
-def _answer_meta_question_keeping_pending(
-    pending: dict, last_text: str, data_store: dict,
+# Alias rétro-compat (ancien nom privé)
+_is_meta_question = is_meta_question
+
+
+def answer_question_via_doctrine(
+    last_text: str,
+    data_store: dict,
+    pending: dict | None = None,
 ) -> dict:
-    """L'utilisateur a posé une question pendant un pending_need méthode.
-    On appelle search_doctrine pour répondre, et on RE-POSE le pending
-    pour que la conversation reprenne après."""
-    # Stage tracking pour l'UI "internal agent"
+    """Traite UNIFORMÉMENT une question utilisateur via le RAG doctrine,
+    qu'on soit dans un pending_need actif ou non.
+
+    Args:
+      last_text  : texte de la question
+      data_store : état LangGraph (mute le _stage_buffer)
+      pending    : si fourni, on re-pose la question pending à la fin
+                   (utilisé dans le flux methods_choice). Si None, on
+                   répond simplement et on rend la main.
+
+    Pas d'appel LLM nano — formattage déterministe et rapide depuis les
+    chunks retournés par search_doctrine. Cite systématiquement les
+    sources (D03.02 etc.)."""
     if "_stage_buffer" in data_store and isinstance(data_store["_stage_buffer"], list):
+        stage_id = "0.c-q" if pending else "0.e-q"
+        label = ("Échappe-question pendant pending (RAG doctrine)" if pending
+                 else "Question utilisateur → RAG doctrine direct")
         data_store["_stage_buffer"].append({
             "type":  "master_stage",
-            "stage": "0.c-q",
-            "label": "Échappe-question pendant pending méthode (RAG doctrine)",
+            "stage": stage_id,
+            "label": label,
         })
+
     from tools.conversation.search_doctrine import run as _search
     res = _search(None, {"query": last_text, "k": 3})
 
     if "erreur" in res or not res.get("results"):
-        # Fallback : juste re-poser sans contexte enrichi
-        hint = (
-            f"Je n'ai pas trouvé de doc spécifique sur '{last_text[:80]}'. "
-            f"{pending.get('question', '')}"
+        # Fallback : pas de doc → message simple
+        suffix = (f" {pending.get('question', '')}" if pending else "")
+        return _ask_user(
+            data_store,
+            f"Je n'ai pas trouvé de doc spécifique sur '{last_text[:80]}'.{suffix}",
         )
-        return _ask_user(data_store, hint)
 
-    # Formuler une réponse courte via les chunks (le LLM nano ne tourne
-    # PAS ici — on fait du templating pour rester rapide et déterministe).
-    lines = [f"Voici ce que dit la doctrine sur votre question :\n"]
+    # Formattage template depuis les 3 chunks
+    lines = ["Voici ce que dit la doctrine sur votre question :\n"]
     for r in res["results"][:3]:
         title = f"{r['doc_id']}.{r['section_id']} — {r['section_title']}"
         excerpt = r["text"][:400].rsplit(" ", 1)[0] + "…"
         lines.append(f"\n**{title}**\n{excerpt}\n")
-    lines.append(
-        f"\n---\nReprenons : {pending.get('question', '')}"
-    )
+    if pending:
+        lines.append(f"\n---\nReprenons : {pending.get('question', '')}")
     return _ask_user(data_store, "\n".join(lines))
+
+
+# Alias rétro-compat
+_answer_meta_question_keeping_pending = lambda p, t, ds: answer_question_via_doctrine(t, ds, pending=p)
 
 
 def handle_methods_choice_response(

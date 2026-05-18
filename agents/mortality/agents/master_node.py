@@ -1001,14 +1001,20 @@ def master_node(state: "AgentState") -> dict:
         return {"messages": [], "events": new_events, "data_store": data_store}
 
     elif intent == "question":
-        # Branche conversationnelle déléguée à agents.master.conversation.
-        # Le LLM y a accès à un set restreint de tools (data_inspect,
-        # plot_basic, eval_pandas, statistical_analysis.*) — pas aux tools
-        # actuariels du Builder.
+        # Branche conversationnelle. Règle UNIFORME : si le message
+        # ressemble à une question (regex), on appelle TOUJOURS le RAG
+        # doctrine en direct (cohérent avec le flux pending_need). Le
+        # LLM nano n'intervient pas — réponse template rapide + sources
+        # citées (D03.02 etc.).
+        # Sinon (cas rare : message intent=question sans signal interrogatif,
+        # ex: "fais-moi une description"), on fallback sur respond_conversationally
+        # qui utilise le LLM nano + tool-calling.
         _stage("0.e", "Décision : réponse conversationnelle (mode question)")
+        from agents.master.method_choices import is_meta_question, answer_question_via_doctrine
+        if is_meta_question(last_human):
+            return answer_question_via_doctrine(last_human, data_store, pending=None)
         from agents.master.conversation import respond_conversationally
         result = respond_conversationally(messages_list, data_store, dataset_ref)
-        # Injecter les stages accumulés dans les events du retour
         buffered = data_store.pop("_stage_buffer", []) or []
         if buffered:
             result["events"] = buffered + list(result.get("events") or [])
