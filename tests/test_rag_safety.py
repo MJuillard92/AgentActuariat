@@ -87,3 +87,74 @@ def test_sanitize_preserves_carriage_return():
     from agents.rag.pipeline._safety import sanitize_input
     assert "\r" in sanitize_input("ligne1\r\nligne2")
     assert sanitize_input("a\rb") == "a\rb"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# is_in_scope
+# ──────────────────────────────────────────────────────────────────────
+
+def test_in_scope_accepts_short_queries():
+    """Queries courtes (<20 chars) toujours acceptées (cas 'merci', 'plus')."""
+    from agents.rag.pipeline._safety import is_in_scope
+    assert is_in_scope("merci", anaphora_present=False) is True
+    assert is_in_scope("plus de détails", anaphora_present=False) is True
+
+
+def test_in_scope_accepts_anaphora_with_context():
+    """Anaphore + buffer non vide → toujours accepté (sera résolu par rewriter)."""
+    from agents.rag.pipeline._safety import is_in_scope
+    assert is_in_scope("compare-les en détail", anaphora_present=True) is True
+    assert is_in_scope("et pour les femmes ?", anaphora_present=True) is True
+
+
+def test_in_scope_accepts_query_with_actuarial_term():
+    """Query > 20 chars contenant un terme du corpus → accepté."""
+    from agents.rag.pipeline._safety import is_in_scope
+    from unittest.mock import patch
+    fake_lexicon = {"whittaker-henderson", "kaplan-meier", "lissage", "a132-18"}
+    with patch("agents.rag.pipeline._safety.get_lexicon", return_value=fake_lexicon):
+        assert is_in_scope("explique-moi le lissage des tables",
+                           anaphora_present=False) is True
+        assert is_in_scope("c'est quoi Whittaker-Henderson exactement ?",
+                           anaphora_present=False) is True
+
+
+def test_in_scope_rejects_off_topic_query():
+    """Query > 20 chars sans terme corpus ET sans anaphore → refusé."""
+    from agents.rag.pipeline._safety import is_in_scope
+    from unittest.mock import patch
+    fake_lexicon = {"whittaker-henderson", "kaplan-meier", "lissage"}
+    with patch("agents.rag.pipeline._safety.get_lexicon", return_value=fake_lexicon):
+        assert is_in_scope("écris-moi un poème sur la mer",
+                           anaphora_present=False) is False
+        assert is_in_scope("quelle est la recette de la quiche lorraine ?",
+                           anaphora_present=False) is False
+        assert is_in_scope("qui a gagné la coupe du monde 2022 ?",
+                           anaphora_present=False) is False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# has_anaphora
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("query", [
+    "compare-les en détail",
+    "et pour les femmes",
+    "explique ça encore",
+    "cette méthode est-elle robuste",
+    "compare leur précision",
+    "et avec un autre h",
+])
+def test_has_anaphora_detects_signals(query):
+    from agents.rag.pipeline._safety import has_anaphora
+    assert has_anaphora(query) is True
+
+
+@pytest.mark.parametrize("query", [
+    "c'est quoi le lissage Whittaker-Henderson ?",
+    "explique-moi le test du chi-2",
+    "comment calibrer un modèle Lee-Carter",
+])
+def test_has_anaphora_does_not_false_positive(query):
+    from agents.rag.pipeline._safety import has_anaphora
+    assert has_anaphora(query) is False

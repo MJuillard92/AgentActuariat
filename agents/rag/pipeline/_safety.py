@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 
+from agents.rag.pipeline._corpus_lexicon import get_lexicon
+
 # ── Limites d'input ──────────────────────────────────────────────────────────
 
 MAX_INPUT_CHARS = 2000   # truncate avant tout traitement
@@ -66,7 +68,44 @@ def detect_jailbreak(query: str) -> tuple[bool, str | None]:
     return (False, None)
 
 
-# ── Scope filter (placeholder — la fonction is_in_scope vient à la Task 4) ──
+# ── Scope filter ─────────────────────────────────────────────────────────────
+
+# Marqueurs anaphoriques : si présents + buffer non vide, le rewriter pourra
+# résoudre la référence. On laisse passer ces queries malgré l'absence de
+# terme actuariel explicite.
+_ANAPHORA_PATTERNS = (
+    " les ", " ça ", " ca ", "cette ", "celle", "celui",
+    "et pour", "et avec", "et sur", "compare",
+    "leur ", "leurs ", " son ", " sa ", " ses ",
+)
+
+
+def has_anaphora(query: str) -> bool:
+    """Détecte les signaux anaphoriques (les, ça, cette, et pour, compare...)."""
+    if not query:
+        return False
+    padded = f" {query.lower()} "  # padding pour matcher " les ", " ça ", etc.
+    return any(p in padded for p in _ANAPHORA_PATTERNS)
+
+
+def is_in_scope(query: str, anaphora_present: bool = False) -> bool:
+    """Vérifie qu'au moins UN terme du corpus actuariel est dans la query.
+
+    Exceptions :
+    - Query courte (< SCOPE_MIN_LEN) : on laisse passer (merci, plus, etc.)
+    - Anaphore présente : le rewriter pourra résoudre via contexte
+    """
+    if not query or len(query) < SCOPE_MIN_LEN:
+        return True
+    if anaphora_present:
+        return True
+    lexicon = get_lexicon()
+    if not lexicon:
+        # Corpus indispo : on ne peut pas filtrer scope → on laisse passer
+        return True
+    query_lower = query.lower()
+    return any(term in query_lower for term in lexicon)
+
 
 # ── Messages de refus ──────────────────────────────────────────────────────
 
