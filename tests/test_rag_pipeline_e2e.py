@@ -44,10 +44,16 @@ def _sample_hits() -> dict:
     }
 
 
+_OLD_TEST_COUNTER = 0
+
+
 def _state_with_question(text: str) -> dict:
+    global _OLD_TEST_COUNTER
+    _OLD_TEST_COUNTER += 1
     return {
         "messages": [HumanMessage(content=text)],
         "data_store": {},
+        "session_id": f"test_old_{_OLD_TEST_COUNTER:03d}",
     }
 
 
@@ -67,7 +73,8 @@ def test_run_returns_answer_sources_and_stage_events():
                return_value=_sample_hits()), \
          patch("agents.rag.pipeline.answer_generator.openai.OpenAI"), \
          patch("agents.rag.pipeline.answer_generator.call_with_retry",
-               return_value=fake_answer):
+               return_value=fake_answer), \
+         patch("agents.rag.pipeline.run_pipeline.is_in_scope", return_value=True):
         result = run(state)
 
     assert "answer" in result
@@ -96,7 +103,8 @@ def test_run_normalizes_typo_before_retrieval():
          patch("agents.rag.pipeline.answer_generator.call_with_retry",
                return_value=fake_answer), \
          patch("agents.rag.pipeline.query_rewriter.rewrite",
-               side_effect=lambda q: q):  # no rewrite (pour isoler le test)
+               side_effect=lambda q, **kw: q), \
+         patch("agents.rag.pipeline.run_pipeline.is_in_scope", return_value=True):  # no rewrite (pour isoler le test)
         run(state)
 
     # Le query passé à search_doctrine doit contenir "whittaker" (forme canonique)
@@ -120,9 +128,10 @@ def test_run_skips_rewrite_for_short_technical_query():
         result = run(state)
 
     mock_rewrite.assert_not_called()
-    # Stage RAG.3 (rewrite) ne doit PAS apparaître
-    stage_ids = [s[0] for s in result["stage_events"]]
-    assert "RAG.3" not in stage_ids
+    # Stage RAG.3 doit apparaître mais en mode "Skip" (skip, pas de reformulation LLM)
+    stage_events_dict = {s[0]: s[1] for s in result["stage_events"]}
+    assert "RAG.3" in stage_events_dict
+    assert "Skip" in stage_events_dict["RAG.3"]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -150,7 +159,8 @@ def test_run_handles_zero_chunks_retrieved():
     with patch("tools.conversation.search_doctrine.run", return_value=empty_hits), \
          patch("agents.rag.pipeline.answer_generator.call_with_retry") as mock_llm, \
          patch("agents.rag.pipeline.query_rewriter.call_with_retry",
-               return_value=_mock_llm_response("ok")):
+               return_value=_mock_llm_response("ok")), \
+         patch("agents.rag.pipeline.run_pipeline.is_in_scope", return_value=True):
         result = run(state)
 
     assert "corpus" in result["answer"].lower()
