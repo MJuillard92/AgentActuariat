@@ -42,3 +42,45 @@ def test_get_buffer_with_n_limits_results():
         s._append_buffer_only(f"q{i}", f"a{i}", [])
     assert len(s.get_buffer(n=2)) == 2
     assert s.get_buffer(n=2)[-1].user_q == "q3"
+
+
+def test_vectorstore_add_then_retrieve_top_k():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    s = RAGMemoryStore(session_id="test_vec_001")
+    s._index_turn_in_vectorstore(
+        RAGTurn(user_q="qu'est-ce que Whittaker-Henderson ?",
+                rag_answer="...méthode de lissage [D03.02]...",
+                sources=[])
+    )
+    s._index_turn_in_vectorstore(
+        RAGTurn(user_q="explique Kaplan-Meier",
+                rag_answer="...estimateur non paramétrique [D02.01]...",
+                sources=[])
+    )
+    hits = s.retrieve_similar("lissage actuariel", k=2, min_score=0.0)
+    assert len(hits) >= 1
+    # Le top-1 doit ramener Whittaker (plus proche sémantiquement)
+    assert "Whittaker" in hits[0].user_q
+
+
+def test_vectorstore_filters_by_min_score():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    s = RAGMemoryStore(session_id="test_vec_002")
+    s._index_turn_in_vectorstore(
+        RAGTurn(user_q="qu'est-ce que Whittaker ?",
+                rag_answer="...lissage [D03.02]...", sources=[])
+    )
+    # Score impossible à atteindre — doit retourner liste vide
+    hits = s.retrieve_similar("query complètement hors-sujet", k=3, min_score=0.99)
+    assert hits == []
+
+
+def test_vectorstore_empty_returns_empty_list():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    s = RAGMemoryStore(session_id="test_vec_003")
+    hits = s.retrieve_similar("n'importe quoi", k=3, min_score=0.5)
+    assert hits == []
+
+
+# Import RAGTurn pour les tests ci-dessus
+from agents.rag.memory.schemas import RAGTurn
