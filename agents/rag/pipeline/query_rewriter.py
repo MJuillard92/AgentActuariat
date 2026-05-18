@@ -107,8 +107,12 @@ def _format_buffer(buffer: "list[RAGTurn] | None") -> str:
 
 
 def _format_summary(summary: "RAGSummary | None") -> str:
+    # Gate alignée sur le body : on émet le bloc UNIQUEMENT si au moins un
+    # des 3 champs effectivement rendus (topics/user_focus/citations) est non
+    # vide. Évite l'orphan header quand seul key_facts_stated est populé,
+    # et évite de droper silencieusement les citations.
     if not summary or not (summary.topics_covered or summary.user_focus
-                            or summary.key_facts_stated):
+                            or summary.citations_used):
         return ""
     lines = ["[Résumé contexte antérieur]"]
     if summary.topics_covered:
