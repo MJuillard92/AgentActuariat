@@ -351,6 +351,33 @@ def master_node(state: "AgentState") -> dict:
             "data_store": data_store,
         }
 
+    # ── 1bis. RAG_DONE : la réponse RAG vient d'être émise, on termine. ──────
+    # Symétrique du bloc WRITE_DONE ci-dessus. Sans ce short-circuit, Master
+    # re-classifie le même HumanMessage comme intent=question, renvoie
+    # active_agent="rag", et on boucle indéfiniment (GraphRecursionError
+    # après ~12 cycles). Un <RAG_DONE> n'est valide que si AUCUN nouveau
+    # HumanMessage user n'a été reçu depuis (sinon question de suivi).
+    last_rag_done = False
+    for m in reversed(messages_list):
+        content = getattr(m, "content", "") or ""
+        is_human = (
+            getattr(m, "type", "") == "human"
+            and (getattr(m, "additional_kwargs", None) or {}).get("source") != "master_synthetic"
+        )
+        if is_human:
+            break
+        if "<RAG_DONE>" in content:
+            last_rag_done = True
+            break
+    if last_rag_done:
+        data_store.pop("_intent", None)
+        return {
+            "messages":   [],
+            "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                           {"type": "done"}],
+            "data_store": data_store,
+        }
+
     # ── 1b. Accumuler les messages user dans data_store["_user_messages"] ────
     # Sert de source de vérité pour le filtre question_filter (Niveau 2).
     # Ne stocke QUE les vrais HumanMessages user — pas les synthétiques émis
@@ -1001,18 +1028,25 @@ def master_node(state: "AgentState") -> dict:
         return {"messages": [], "events": new_events, "data_store": data_store}
 
     elif intent == "question":
-        # Branche conversationnelle. Règle UNIFORME : si le message
-        # ressemble à une question (regex), on appelle TOUJOURS le RAG
-        # doctrine en direct (cohérent avec le flux pending_need). Le
-        # LLM nano n'intervient pas — réponse template rapide + sources
-        # citées (D03.02 etc.).
+        # Branche conversationnelle. Règle UNIFORME : si le message ressemble
+        # à une question (regex), on délègue à l'agent RAG top-level. Le
+        # graph LangGraph routera le tour suivant vers `rag_node` qui exécute
+        # le pipeline (normalize → rewrite → retrieve → generate) et rend
+        # immédiatement la main au Master avec la réponse + signal RAG_DONE.
         # Sinon (cas rare : message intent=question sans signal interrogatif,
         # ex: "fais-moi une description"), on fallback sur respond_conversationally
-        # qui utilise le LLM nano + tool-calling.
-        _stage("0.e", "Décision : réponse conversationnelle (mode question)")
-        from agents.master.method_choices import is_meta_question, answer_question_via_doctrine
+        # qui utilise le LLM mini + tool-calling.
+        _stage("0.e", "Décision : délégation à l'agent RAG (mode question)")
+        from agents.master.method_choices import is_meta_question
         if is_meta_question(last_human):
-            return answer_question_via_doctrine(last_human, data_store, pending=None)
+            # Flush du stage buffer dans les events pour visibilité immédiate UI
+            buffered = data_store.pop("_stage_buffer", []) or []
+            return {
+                "messages":     [],
+                "events":       buffered,
+                "active_agent": "rag",
+                "data_store":   data_store,
+            }
         from agents.master.conversation import respond_conversationally
         result = respond_conversationally(messages_list, data_store, dataset_ref)
         buffered = data_store.pop("_stage_buffer", []) or []

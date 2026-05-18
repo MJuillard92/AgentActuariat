@@ -24,6 +24,7 @@ _AGENT_SYSTEM_PROMPTS: dict[str, Path] = {
     "mortality": _PROJECT_ROOT / "agents" / "mortality" / "system_prompt_level1.md",
     "report":    _PROJECT_ROOT / "agents" / "report" / "system_prompt.md",
     "master":    _PROJECT_ROOT / "agents" / "master" / "system_prompt.md",
+    "rag":       _PROJECT_ROOT / "agents" / "rag" / "system_prompt.md",
 }
 
 # Pattern for inject directives: ## [INJECT] Title\nsource: path\n[format: format]

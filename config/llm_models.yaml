@@ -65,6 +65,36 @@ master:
     temperature: 0.3
     max_tokens:  1500
 
+# ── RAG ──────────────────────────────────────────────────────────────────
+# L'agent RAG (questions doctrinales) opère en 3 appels LLM :
+#   query_rewriter   : reformulation pour optimiser le retrieval (~200 tok)
+#   answer_generator : synthèse rédigée avec citations (~1500 tok, critique)
+#   grounding_check  : vérif optionnelle que les citations sont supportées
+rag:
+
+  # Reformulation user→search. Tâche très contrainte (max 15 mots, format
+  # affirmation), nano largement suffisant. Skip si query déjà courte.
+  query_rewriter:
+    model:       gpt-5.4-nano
+    temperature: 0.0
+    max_tokens:  200
+
+  # Synthèse finale : appel LLM le plus critique du pipeline. Mini pour
+  # la qualité du français rédigé et le respect strict du format citations
+  # `[Dxx.yy]` inline + section Sources finale.
+  answer_generator:
+    model:       gpt-5.4-mini
+    temperature: 0.3
+    max_tokens:  1500
+
+  # Vérification optionnelle (off par défaut) : chaque affirmation citée
+  # est-elle effectivement supportée par les chunks ? Active via param
+  # verify=True dans run_pipeline.
+  grounding_check:
+    model:       gpt-5.4-mini
+    temperature: 0.0
+    max_tokens:  500
+
 # ── Builder ──────────────────────────────────────────────────────────────
 # Le Builder orchestre les calculs actuariels via tool-calling.
 # Fiabilité tool-calling critique (un tool sauté → boucle).

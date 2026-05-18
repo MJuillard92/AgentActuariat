@@ -40,6 +40,7 @@ from agents.mortality.agents.state import AgentState
 from agents.mortality.agents.master_node import master_node
 from agents.mortality.agents.builder_node import builder_node
 from agents.mortality.agents.writer_node import writer_node
+from agents.mortality.agents.rag_node import rag_node
 from agents.mortality.agents.tools_node import execute_tools
 
 
@@ -57,6 +58,8 @@ def _router(state: AgentState) -> str:
         return "builder"
     if agent == "writer":
         return "writer"
+    if agent == "rag":
+        return "rag"
     return "master"
 
 
@@ -66,6 +69,8 @@ def _should_continue_master(state: AgentState) -> str:
         return "to_builder"
     if agent == "writer":
         return "to_writer"
+    if agent == "rag":
+        return "to_rag"
     msgs = state.get("messages") or []
     if not msgs:
         return END
@@ -118,6 +123,12 @@ def _should_continue_builder(state: AgentState) -> str:
     return END
 
 
+def _should_continue_rag(state: AgentState) -> str:
+    """Le rag_node force toujours active_agent='master' en fin de tour.
+    On rend la main au superviseur (1 cycle = 1 réponse complète)."""
+    return "to_master"
+
+
 def _should_continue_writer(state: AgentState) -> str:
     msgs = state.get("messages") or []
     if not msgs:
@@ -155,6 +166,11 @@ def _writer_node_w(state: AgentState) -> dict:
     return result
 
 
+def _rag_node_w(state: AgentState) -> dict:
+    """Wrapper — rag_node émet déjà agent_switch RAGAgent, on ne duplique pas."""
+    return rag_node(state)
+
+
 def _tools_node_w(
     approval_event: threading.Event | None,
     cancel_flag: list | None,
@@ -180,6 +196,7 @@ def build_graph(
     g.add_node("master",  _master_node_w)
     g.add_node("builder", _builder_node_w)
     g.add_node("writer",  _writer_node_w)
+    g.add_node("rag",     _rag_node_w)
     g.add_node("tools",   _tools_node_w(approval_event, cancel_flag))
 
     # Point d'entrée conditionnel
@@ -189,6 +206,7 @@ def build_graph(
             "master":  "master",
             "builder": "builder",
             "writer":  "writer",
+            "rag":     "rag",
         },
     )
 
@@ -199,7 +217,18 @@ def build_graph(
         {
             "to_builder": "builder",
             "to_writer":  "writer",
+            "to_rag":     "rag",
             END:          END,
+        },
+    )
+
+    # Edges rag : 1 cycle puis retour master
+    g.add_conditional_edges(
+        "rag",
+        _should_continue_rag,
+        {
+            "to_master": "master",
+            END:         END,
         },
     )
 

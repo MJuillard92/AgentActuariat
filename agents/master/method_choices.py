@@ -435,7 +435,7 @@ def answer_question_via_doctrine(
     data_store: dict,
     pending: dict | None = None,
 ) -> dict:
-    """Traite UNIFORMÉMENT une question utilisateur via le RAG doctrine,
+    """Traite UNIFORMÉMENT une question utilisateur via le pipeline RAG,
     qu'on soit dans un pending_need actif ou non.
 
     Args:
@@ -445,39 +445,48 @@ def answer_question_via_doctrine(
                    (utilisé dans le flux methods_choice). Si None, on
                    répond simplement et on rend la main.
 
-    Pas d'appel LLM nano — formattage déterministe et rapide depuis les
-    chunks retournés par search_doctrine. Cite systématiquement les
-    sources (D03.02 etc.)."""
+    Délègue au pipeline `agents.rag.pipeline.run_pipeline.run()` — même
+    qualité de réponse (normalisation typos, query rewriting, synthèse
+    rédigée avec citations groundées) que le path top-level qui passe par
+    `rag_node`. Évite la duplication du templating brut historique."""
+    from langchain_core.messages import HumanMessage
+    from agents.rag.pipeline.run_pipeline import run as _run_rag
+
     if "_stage_buffer" in data_store and isinstance(data_store["_stage_buffer"], list):
         stage_id = "0.c-q" if pending else "0.e-q"
-        label = ("Échappe-question pendant pending (RAG doctrine)" if pending
-                 else "Question utilisateur → RAG doctrine direct")
+        label = ("Échappe-question pendant pending (pipeline RAG)" if pending
+                 else "Question utilisateur → pipeline RAG direct")
         data_store["_stage_buffer"].append({
             "type":  "master_stage",
             "stage": stage_id,
             "label": label,
         })
 
-    from tools.conversation.search_doctrine import run as _search
-    res = _search(None, {"query": last_text, "k": 3})
+    # On fabrique un mini-state minimal et on appelle le pipeline RAG pur
+    # (pas l'adapter LangGraph — on est dans un handler synchrone).
+    fake_state = {"messages": [HumanMessage(content=last_text)]}
+    result = _run_rag(fake_state, verify=False)
 
-    if "erreur" in res or not res.get("results"):
-        # Fallback : pas de doc → message simple
+    answer = result.get("answer") or ""
+    if not answer:
         suffix = (f" {pending.get('question', '')}" if pending else "")
         return _ask_user(
             data_store,
             f"Je n'ai pas trouvé de doc spécifique sur '{last_text[:80]}'.{suffix}",
         )
 
-    # Formattage template depuis les 3 chunks
-    lines = ["Voici ce que dit la doctrine sur votre question :\n"]
-    for r in res["results"][:3]:
-        title = f"{r['doc_id']}.{r['section_id']} — {r['section_title']}"
-        excerpt = r["text"][:400].rsplit(" ", 1)[0] + "…"
-        lines.append(f"\n**{title}**\n{excerpt}\n")
+    # Pousse les stage_events RAG.* dans le buffer pour visibilité UI
+    if "_stage_buffer" in data_store and isinstance(data_store["_stage_buffer"], list):
+        for stage_id, sub_label in result.get("stage_events", []):
+            data_store["_stage_buffer"].append({
+                "type":  "master_stage",
+                "stage": stage_id,
+                "label": sub_label,
+            })
+
     if pending:
-        lines.append(f"\n---\nReprenons : {pending.get('question', '')}")
-    return _ask_user(data_store, "\n".join(lines))
+        answer = f"{answer}\n\n---\nReprenons : {pending.get('question', '')}"
+    return _ask_user(data_store, answer)
 
 
 # Alias rétro-compat
