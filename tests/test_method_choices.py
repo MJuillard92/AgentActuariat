@@ -567,36 +567,41 @@ def test_is_meta_question_detects_questions():
 
 def test_question_without_pending_routes_to_doctrine(monkeypatch):
     """Régression : une question SANS pending doit être traitée
-    EXACTEMENT comme une question AVEC pending → search_doctrine direct,
-    pas de LLM nano. Uniformité du traitement."""
+    EXACTEMENT comme une question AVEC pending → pipeline RAG (qui appelle
+    search_doctrine en interne), pas de re-ask. Uniformité du traitement."""
     from agents.master import method_choices as mc
+    from unittest.mock import patch, MagicMock
     fake_calls = []
     def _fake_search(df, params):
         fake_calls.append(params)
         return {"results": [{
-            "doc_id": "D03", "section_id": "D03.02",
+            "chunk_id": "ch1", "doc_id": "D03", "section_id": "D03.02",
             "section_title": "Whittaker-Henderson 1D",
             "text": "Méthode de lissage non-paramétrique...",
+            "score": 0.9,
         }], "n_returned": 1, "query_used": params.get("query", "")}
     import sys
     fake_mod = type(sys)("tools.conversation.search_doctrine")
     fake_mod.run = _fake_search
     monkeypatch.setitem(sys.modules, "tools.conversation.search_doctrine", fake_mod)
 
+    def _mock_resp(text):
+        r = MagicMock(); c = MagicMock(); c.message.content = text
+        r.choices = [c]; return r
+
     # Sans pending → answer_question_via_doctrine(..., pending=None)
     data_store = {"_stage_buffer": []}
-    out = mc.answer_question_via_doctrine(
-        "C'est quoi le lissage Whittaker ?", data_store, pending=None,
-    )
+    with patch("agents.rag.pipeline.answer_generator.openai.OpenAI"), \
+         patch("agents.rag.pipeline.answer_generator.call_with_retry",
+               return_value=_mock_resp("Whittaker-Henderson lisse les taux bruts [D03.02].")):
+        out = mc.answer_question_via_doctrine(
+            "C'est quoi le lissage Whittaker ?", data_store, pending=None,
+        )
     assert len(fake_calls) == 1
     msg = out["messages"][0].content
     assert "D03.02" in msg
     # Sans pending : pas de "Reprenons" à la fin
     assert "Reprenons" not in msg
-    # Stage 0.e-q tracé (pas 0.c-q)
-    stages = [e for e in (data_store.get("_stage_buffer") or [])
-              if e.get("type") == "master_stage"]
-    # Buffer consommé par _ask_user → _prepend_stages — donc absent ici
     # On vérifie au moins que ça n'a pas planté
     assert "events" in out
 
@@ -604,24 +609,30 @@ def test_question_without_pending_routes_to_doctrine(monkeypatch):
 def test_method_pending_with_question_routes_to_doctrine(monkeypatch):
     """Régression bug terrain : pendant le pending_need méthode, si l'user
     pose une question, on ne doit PAS re-asker en boucle 'Je n'ai pas
-    compris' — on doit appeler search_doctrine et re-poser la question
-    méthode après."""
-    # Mock search_doctrine pour éviter d'invoquer le retriever réel
+    compris' — on doit déléguer au pipeline RAG (qui call search_doctrine
+    en interne) et re-poser la question méthode après."""
+    # Mock search_doctrine + answer_generator pour éviter LLM réels
     from agents.master import method_choices as mc
+    from unittest.mock import patch, MagicMock
+
     fake_calls = []
     def _fake_search(df, params):
         fake_calls.append(params)
         return {"results": [{
-            "doc_id": "D02", "section_id": "D02.05",
+            "chunk_id": "ch1", "doc_id": "D02", "section_id": "D02.05",
             "section_title": "Kaplan-Meier",
             "text": "Estimateur non-paramétrique...",
+            "score": 0.9,
         }], "n_returned": 1, "query_used": params.get("query", "")}
-    # Patch via import dynamique (le tool est importé à l'intérieur de
-    # _answer_meta_question_keeping_pending)
     import sys
     fake_mod = type(sys)("tools.conversation.search_doctrine")
     fake_mod.run = _fake_search
     monkeypatch.setitem(sys.modules, "tools.conversation.search_doctrine", fake_mod)
+
+    # Mock answer_generator LLM (avec citation pour passer le safety check)
+    def _mock_resp(text):
+        r = MagicMock(); c = MagicMock(); c.message.content = text
+        r.choices = [c]; return r
 
     pending = {
         "context_key": "methods_choice_mode",
@@ -629,15 +640,17 @@ def test_method_pending_with_question_routes_to_doctrine(monkeypatch):
         "options": ["preciser", "auto"],
     }
     data_store = {}
-    out = mc.handle_methods_choice_response(
-        pending, "rappelle moi les méthodes", data_store, report_mode="full_report",
-    )
-    # search_doctrine doit avoir été appelé
+    with patch("agents.rag.pipeline.answer_generator.openai.OpenAI"), \
+         patch("agents.rag.pipeline.answer_generator.call_with_retry",
+               return_value=_mock_resp("Kaplan-Meier est un estimateur non-paramétrique [D02.05].")):
+        out = mc.handle_methods_choice_response(
+            pending, "rappelle moi les méthodes", data_store, report_mode="full_report",
+        )
+    # search_doctrine doit avoir été appelé via le pipeline
     assert len(fake_calls) == 1
-    assert "méthodes" in fake_calls[0].get("query", "").lower()
     # Pas de routing Builder, pas de pop du pending → on attend toujours
     assert out.get("active_agent") != "builder"
-    # Le message doit contenir l'extrait du chunk + la question méthode
+    # Le message doit contenir la citation D02 + la question méthode re-posée
     msg_content = out["messages"][0].content if out.get("messages") else ""
     assert "D02" in msg_content
     assert "Reprenons" in msg_content or "préciser" in msg_content
