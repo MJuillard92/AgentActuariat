@@ -4,6 +4,19 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_rag_cache():
+    """Isole chaque test : vide le _cache module-level avant ET après.
+
+    Sans cette fixture, un test qui crée `RAGMemoryStore.for_session("x", ...)`
+    polluerait les tests suivants qui réutiliseraient le même session_id.
+    """
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    RAGMemoryStore._cache.clear()
+    yield
+    RAGMemoryStore._cache.clear()
+
+
 def test_store_starts_empty():
     from agents.rag.memory.rag_memory_store import RAGMemoryStore
     s = RAGMemoryStore(session_id="test_001")

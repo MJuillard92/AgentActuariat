@@ -150,6 +150,12 @@ class RAGMemoryStore:
         Extrait les paires (HumanMessage, AIMessage) consécutives, ignore
         les HumanMessage marqués source='master_synthetic' (relances Master,
         pas de vraies questions user).
+
+        Note : le SUMMARY (niveau 2) n'est PAS reconstruit ici. Au prochain
+        passage du seuil SUMMARY_TRIGGER dans append_turn, il sera regénéré
+        from scratch sur les tours anciens disponibles. Comportement voulu :
+        évite un appel LLM coûteux au cold start, et le summary sera produit
+        à la demande quand vraiment utile.
         """
         pairs = self._extract_qa_pairs(history)
         # Buffer : les BUFFER_SIZE dernières paires
