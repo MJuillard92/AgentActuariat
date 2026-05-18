@@ -323,6 +323,13 @@ def stream_agent(
     # ── 4. Compaction si historique trop long ────────────────────────────────
     lc_messages = mm.trim_messages(lc_messages)
 
+    # ── 4bis. Propagation session_id + history dans data_store ───────────────
+    # Permet à RAG pipeline (via RAGMemoryStore.for_session) et à
+    # method_choices.answer_question_via_doctrine d'accéder à ces infos
+    # sans modifier les signatures des nodes LangGraph.
+    data_store["_session_id"] = thread_id
+    data_store["_history"]    = lc_messages
+
     if catalogue_level == "full":
         plan_established = True
     elif catalogue_level == "middle":

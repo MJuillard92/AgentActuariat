@@ -183,3 +183,39 @@ def test_clean_section_id_does_not_false_positive_on_d1_d10():
     assert _clean_section_id("", "D03.02") == "D03.02"
     assert _clean_section_id("D03", "") == "D03"
     assert _clean_section_id("D03", "D03") == "D03"
+
+
+def test_stream_agent_injects_session_id_and_history_in_data_store():
+    """method_choices.answer_question_via_doctrine doit pouvoir accéder
+    à data_store['_session_id'] et data_store['_history']."""
+    from agents.mortality.agents.graph import stream_agent
+    from langchain_core.messages import HumanMessage
+    from unittest.mock import patch
+
+    # On capture le data_store final via stream
+    history = [{"role": "user", "content": "test propagation"}]
+    captured = {}
+    with patch("agents.mortality.agents.graph.master_node") as mock_master:
+        # Mock master_node pour qu'il termine immédiatement et expose data_store
+        def fake_master(state):
+            captured["data_store"] = state.get("data_store") or {}
+            captured["session_id"] = captured["data_store"].get("_session_id")
+            captured["history"] = captured["data_store"].get("_history")
+            from langchain_core.messages import AIMessage
+            return {
+                "messages": [AIMessage(content="ok")],
+                "events": [{"type": "done"}],
+                "data_store": captured["data_store"],
+                "active_agent": "master",
+            }
+        mock_master.side_effect = fake_master
+
+        list(stream_agent(
+            history=history,
+            df=None,
+            data_store={},
+            thread_id="test_stream_001",
+        ))
+    assert captured.get("session_id") == "test_stream_001"
+    assert captured.get("history") is not None
+    assert len(captured["history"]) >= 1

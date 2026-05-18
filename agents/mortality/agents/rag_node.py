@@ -38,8 +38,14 @@ def rag_node(state: "AgentState") -> dict:
     """Adapter LangGraph : délègue à agents.rag.pipeline.run_pipeline."""
     data_store = dict(state.get("data_store") or {})
 
+    # Construire le state pour run_pipeline : ajout du session_id depuis
+    # data_store (peuplé par stream_agent en Task 15). Sans ça,
+    # RAGMemoryStore.for_session fallback sur "default" et perd l'isolation.
+    pipeline_state = dict(state)
+    pipeline_state["session_id"] = data_store.get("_session_id") or "default"
+
     try:
-        result = _run_rag_pipeline(state, verify=False)
+        result = _run_rag_pipeline(pipeline_state, verify=False)
     except Exception as exc:
         log.exception("[rag_node] pipeline failure")
         return {
