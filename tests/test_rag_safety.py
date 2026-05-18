@@ -180,7 +180,9 @@ def test_in_scope_rejects_off_topic_despite_substring_overlap(off_topic):
     # phrases respectives — \b les matcherait correctement, ce n'est pas un
     # faux positif. On teste uniquement les vrais cas de substring ("vie" dans
     # "évier", "exp" dans "expérience", "loi" dans "explique-moi la loi").
-    fake_lex = {"loi", "exp", "vie", "personnel",
+    # "loi" est désormais un stop-word : retiré du fake_lex pour refléter
+    # que le lexique réel ne le contient plus.
+    fake_lex = {"exp", "vie", "personnel",
                 "whittaker-henderson", "kaplan-meier"}
     with patch("agents.rag.pipeline._safety.get_lexicon", return_value=fake_lex):
         assert is_in_scope(off_topic, anaphora_present=False) is False, \
@@ -228,3 +230,22 @@ def test_has_anaphora_still_detects_compare_les():
     assert has_anaphora("compare-les en détail") is True
     assert has_anaphora("comparons-les sur la prudence") is True
     assert has_anaphora("comparez-les") is True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Régression I1 finale : lexique réel + stop-words étendus
+# ──────────────────────────────────────────────────────────────────────
+
+def test_in_scope_real_corpus_rejects_off_topic_with_common_words():
+    """Régression I1 finale : avec le LEXIQUE RÉEL, les queries hors-actuariat
+    contenant des mots français courts (loi, non, etc.) sont correctement
+    refusées (combine \\b regex + stop-words étendus)."""
+    from agents.rag.pipeline._safety import is_in_scope
+    off_topic_queries = [
+        "explique-moi la loi de la gravité de Newton",
+        "comment réparer mon évier non bouché ?",
+        "qui a gagné la coupe du monde 2022 ?",
+    ]
+    for q in off_topic_queries:
+        assert is_in_scope(q, anaphora_present=False) is False, \
+            f"Faux positif scope sur : {q!r}"

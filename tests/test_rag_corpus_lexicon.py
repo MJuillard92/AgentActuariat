@@ -81,3 +81,17 @@ def test_get_lexicon_invalidates_on_mtime_change(tmp_path, monkeypatch):
     cl._LEXICON_MTIME = 0.0
     lex1 = cl.get_lexicon()
     assert "whittaker-henderson" in lex1
+
+
+def test_lexicon_excludes_common_french_stop_words():
+    """Le lexique ne doit PAS contenir les mots courts génériques français
+    (loi, non, vie, exp, cas, avec, ...) qui causent des faux positifs
+    de _safety.is_in_scope sur des questions hors-actuariat."""
+    from agents.rag.pipeline._corpus_lexicon import get_lexicon
+    lex = get_lexicon()
+    problematic = {"loi", "lois", "non", "vie", "exp", "cas",
+                   "avec", "sans", "dans", "est", "sont", "ont",
+                   "plus", "moins", "qui", "que", "tout", "tous",
+                   "this", "that", "with", "from", "all", "any"}
+    leaked = problematic & lex
+    assert not leaked, f"Stop-words leaked into lexicon : {sorted(leaked)}"

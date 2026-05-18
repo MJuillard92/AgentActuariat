@@ -25,6 +25,28 @@ _STOP_WORDS = {
     "de", "du", "la", "le", "les", "des", "et", "ou", "un", "une", "à", "au",
     "en", "sur", "pour", "par", "ce", "cette", "the", "of", "and", "or", "in",
     "on", "for", "by", "1d", "2d", "code", "art", "ans",
+    # Mots français courts génériques — présents dans les titres de sections
+    # de façon incidentelle, mais non-techniques (causeraient des faux positifs
+    # dans is_in_scope sur des queries hors-actuariat).
+    "loi", "lois",
+    "non",
+    "vie",
+    "exp",
+    "cas",
+    "avec", "sans", "dans", "vers", "sous",
+    "est", "sont", "ont", "peut", "plus", "moins", "deux", "trois", "plusieurs",
+    "qui", "que", "quoi", "dont",
+    "tout", "tous", "toute", "toutes",
+    "tels", "telles",
+    "mais", "donc",
+    "très", "bien", "alors",
+    # Mots anglais courants — non-techniques malgré leur présence éventuelle
+    # dans des titres de sections en anglais.
+    "is", "are", "was", "were", "will", "would", "can", "may", "has", "had",
+    "it", "its", "this", "that", "these", "those",
+    "with", "from", "into", "over", "under", "after", "before",
+    "not", "no", "yes",
+    "all", "any", "some", "each", "every",
 }
 
 # Sépare les section_titles en tokens significatifs.
