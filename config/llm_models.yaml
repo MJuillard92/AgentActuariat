@@ -95,6 +95,23 @@ rag:
     temperature: 0.0
     max_tokens:  500
 
+  # Summarizer multi-turn : compaction incrémentale des tours anciens (>10).
+  # JSON mode, schéma Pydantic RAGSummary. Mode synchrone — pénalité ~1s
+  # sur ~1 tour sur 5. Activable async dans une v2.
+  summarizer:
+    model:       gpt-5.4-nano
+    temperature: 0.0
+    max_tokens:  500
+
+  # ── Sécurité ──────────────────────────────────────────────────────────
+  # Garde-fous Palier 1 (jailbreak regex + scope lexical + prompt hardening)
+  # sont TOUJOURS actifs (codés en dur dans agents/rag/pipeline/_safety.py).
+  # Le flag ci-dessous active le Palier 2 : LLM scope classifier paraphrase,
+  # rate limiting per session, audit adversarial, OpenAI moderation.
+  # OFF en v1 — à activer quand l'agent passe en API publique.
+  safety:
+    public_mode: false
+
 # ── Builder ──────────────────────────────────────────────────────────────
 # Le Builder orchestre les calculs actuariels via tool-calling.
 # Fiabilité tool-calling critique (un tool sauté → boucle).
