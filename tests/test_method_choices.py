@@ -544,3 +544,64 @@ def test_inject_user_method_uses_function_name_param_for_validation():
     study_plan = {"methods": {"builder.validation": "chi_square"}}
     _inject_user_method("builder", "validation", params, study_plan)
     assert params.get("function_name") == "chi_square"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Échappe-question pendant pending_need méthode
+# ──────────────────────────────────────────────────────────────────────
+
+def test_is_meta_question_detects_questions():
+    """Régression : 'rappelle moi les méthodes' doit être détecté comme
+    question (vs choix de méthode silencieusement rejeté en re-ask)."""
+    from agents.master.method_choices import _is_meta_question
+    assert _is_meta_question("rappelle moi les méthodes")
+    assert _is_meta_question("c'est quoi le central ?")
+    assert _is_meta_question("explique-moi kaplan")
+    assert _is_meta_question("comment ça marche ?")
+    # Faux positifs à éviter
+    assert not _is_meta_question("central")
+    assert not _is_meta_question("kaplan_meier")
+    assert not _is_meta_question("auto")
+    assert not _is_meta_question("préciser")
+
+
+def test_method_pending_with_question_routes_to_doctrine(monkeypatch):
+    """Régression bug terrain : pendant le pending_need méthode, si l'user
+    pose une question, on ne doit PAS re-asker en boucle 'Je n'ai pas
+    compris' — on doit appeler search_doctrine et re-poser la question
+    méthode après."""
+    # Mock search_doctrine pour éviter d'invoquer le retriever réel
+    from agents.master import method_choices as mc
+    fake_calls = []
+    def _fake_search(df, params):
+        fake_calls.append(params)
+        return {"results": [{
+            "doc_id": "D02", "section_id": "D02.05",
+            "section_title": "Kaplan-Meier",
+            "text": "Estimateur non-paramétrique...",
+        }], "n_returned": 1, "query_used": params.get("query", "")}
+    # Patch via import dynamique (le tool est importé à l'intérieur de
+    # _answer_meta_question_keeping_pending)
+    import sys
+    fake_mod = type(sys)("tools.conversation.search_doctrine")
+    fake_mod.run = _fake_search
+    monkeypatch.setitem(sys.modules, "tools.conversation.search_doctrine", fake_mod)
+
+    pending = {
+        "context_key": "methods_choice_mode",
+        "question": "Voulez-vous (a) préciser ou (b) auto ?",
+        "options": ["preciser", "auto"],
+    }
+    data_store = {}
+    out = mc.handle_methods_choice_response(
+        pending, "rappelle moi les méthodes", data_store, report_mode="full_report",
+    )
+    # search_doctrine doit avoir été appelé
+    assert len(fake_calls) == 1
+    assert "méthodes" in fake_calls[0].get("query", "").lower()
+    # Pas de routing Builder, pas de pop du pending → on attend toujours
+    assert out.get("active_agent") != "builder"
+    # Le message doit contenir l'extrait du chunk + la question méthode
+    msg_content = out["messages"][0].content if out.get("messages") else ""
+    assert "D02" in msg_content
+    assert "Reprenons" in msg_content or "préciser" in msg_content

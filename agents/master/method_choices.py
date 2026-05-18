@@ -389,6 +389,59 @@ def _ask_user(data_store: dict, question: str) -> dict:
     }
 
 
+# Regex de détection des questions génériques (vs choix de méthode).
+# Match : "?", "qu'est-ce", "rappelle", "explique", "c'est quoi",
+# "comment", "pourquoi", "différence entre", "donne moi". Insensible casse.
+import re as _re
+_QUESTION_PATTERN = _re.compile(
+    r"\?|qu['e]?st[\s-]?ce|rappelle|expliqu|c'?est quoi|comment\b|pourquoi"
+    r"|diff[ée]rence|donne[\s-]moi|d[ée]tail|c'?est quoi|aide|info\b",
+    _re.IGNORECASE,
+)
+
+
+def _is_meta_question(text: str) -> bool:
+    """Détecte si le message est une QUESTION (besoin d'info) plutôt qu'un
+    CHOIX de méthode. Heuristique : présence d'un signal interrogatif fort
+    (?, qu'est-ce, explique, rappelle, comment, pourquoi, différence,
+    donne moi, c'est quoi). Le fait que la phrase contienne un nom de
+    méthode n'invalide pas — l'utilisateur peut demander des explications
+    SUR la méthode (ex: 'explique-moi kaplan' est une question légitime)."""
+    if not text:
+        return False
+    return bool(_QUESTION_PATTERN.search(text))
+
+
+def _answer_meta_question_keeping_pending(
+    pending: dict, last_text: str, data_store: dict,
+) -> dict:
+    """L'utilisateur a posé une question pendant un pending_need méthode.
+    On appelle search_doctrine pour répondre, et on RE-POSE le pending
+    pour que la conversation reprenne après."""
+    from tools.conversation.search_doctrine import run as _search
+    res = _search(None, {"query": last_text, "k": 3})
+
+    if "erreur" in res or not res.get("results"):
+        # Fallback : juste re-poser sans contexte enrichi
+        hint = (
+            f"Je n'ai pas trouvé de doc spécifique sur '{last_text[:80]}'. "
+            f"{pending.get('question', '')}"
+        )
+        return _ask_user(data_store, hint)
+
+    # Formuler une réponse courte via les chunks (le LLM nano ne tourne
+    # PAS ici — on fait du templating pour rester rapide et déterministe).
+    lines = [f"Voici ce que dit la doctrine sur votre question :\n"]
+    for r in res["results"][:3]:
+        title = f"{r['doc_id']}.{r['section_id']} — {r['section_title']}"
+        excerpt = r["text"][:400].rsplit(" ", 1)[0] + "…"
+        lines.append(f"\n**{title}**\n{excerpt}\n")
+    lines.append(
+        f"\n---\nReprenons : {pending.get('question', '')}"
+    )
+    return _ask_user(data_store, "\n".join(lines))
+
+
 def handle_methods_choice_response(
     pending: dict,
     last_text: str,
@@ -397,12 +450,17 @@ def handle_methods_choice_response(
     report_mode: str,
 ) -> dict:
     """Traite la réponse user à la méta-question `methods_choice_mode`.
-    Trois branches :
+    Quatre branches :
+      - QUESTION → search_doctrine + ré-affichage du pending (sans le consommer)
       - "auto" / "b)" / "laisse"  → methods_auto=True, route Builder.
       - "préciser" / "a)"         → enchaîne la 1re question per-tool.
       - réponse libre             → inline-parse (regex) puis fallback LLM,
                                      puis re-ask si rien n'a marché.
     """
+    # Échappe-question : l'utilisateur veut info avant de choisir
+    if _is_meta_question(last_text):
+        return _answer_meta_question_keeping_pending(pending, last_text, data_store)
+
     ans_lc = (last_text or "").strip().lower()
     sp = data_store.setdefault("study_plan", {})
     data_store["_methods_question_done"] = True
@@ -487,7 +545,13 @@ def handle_per_tool_method_response(
 ) -> dict:
     """Traite la réponse user à une question per-tool (context_key
     démarre par 'method_'). Enchaîne la question suivante si plusieurs
-    tools restent à choisir, sinon route vers Builder."""
+    tools restent à choisir, sinon route vers Builder.
+    Échappe-question : si le user pose une question, on appelle
+    search_doctrine et on re-pose la question méthode."""
+    # Échappe-question : info avant choix
+    if _is_meta_question(last_text):
+        return _answer_meta_question_keeping_pending(pending, last_text, data_store)
+
     tool_name = pending.get("_method_tool", "")
     choices = pending.get("options") or []
     ans = (last_text or "").strip().lower()

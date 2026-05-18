@@ -255,6 +255,7 @@ def builder_node(state: "AgentState") -> dict:
     from agents.mortality.agents.mortality_node import _to_openai_dict, _from_openai_response, sanitize_openai_messages
 
     data_store = state.get("data_store") or {}
+    dataset_ref = state.get("dataset_ref")
 
     # ── Bloc C' : assimilation déterministe en mode raw_rates ───────────────
     # Si qx_table est présent et report_mode == "raw_rates", on copie les taux
@@ -268,6 +269,45 @@ def builder_node(state: "AgentState") -> dict:
              "q_x_lisse": r.get("q_x_brut") or r.get("qx")}
             for r in (data_store["qx_table"] or []) if r.get("age") is not None
         ]
+
+    # ── PRÉ-REQUIS clean_records : avant tout calcul actuariel ──────────────
+    # Sans cette branche, le LLM Builder peut sauter clean_records et appeler
+    # directement crude_rates / KM → plante sur les sentinelles 2999/0/0/0
+    # et hallucine ensuite "j'ai tenté un retraitement". On force ici.
+    if (not data_store.get("cleaned_records")
+            and dataset_ref):
+        try:
+            from session.dataset_store import DatasetStore
+            df_raw = DatasetStore.load_preferring_normalized(data_store, dataset_ref)
+            if df_raw is not None and len(df_raw) > 0:
+                # Renommage colonnes en mémoire si pas déjà fait (fallback
+                # quand l'utilisateur n'a pas validé via UI ni via chat).
+                mapping = data_store.get("column_mapping") or {}
+                if not mapping:
+                    from agents.mortality.dictionary.column_schema import (
+                        COLUMN_SCHEMA, find_col,
+                    )
+                    mapping = {role: find_col(df_raw, info["candidates"])
+                               for role, info in COLUMN_SCHEMA.items()}
+                    mapping = {k: v for k, v in mapping.items() if v}
+                rename_map = {v: k for k, v in mapping.items() if v in df_raw.columns}
+                if rename_map:
+                    df_raw = df_raw.rename(columns=rename_map)
+                from tools.preprocessing.clean_records import run as _clean
+                res = _clean(df_raw, {})
+                if "cleaned_records" in res:
+                    cr = res["cleaned_records"]
+                    import pandas as _pd
+                    if isinstance(cr, _pd.DataFrame):
+                        cr = cr.to_dict(orient="records")
+                    data_store["cleaned_records"]  = cr
+                    data_store["exclusion_report"] = res.get("exclusion_report") or {}
+                    final = (res.get("exclusion_report") or {}).get("final_count")
+                    if final is not None:
+                        data_store["total_records"] = final
+        except Exception as exc:
+            import sys as _sys
+            print(f"[builder_node] auto clean_records échec : {exc}", file=_sys.stderr)
 
     # ── Branches déterministes pour clés "dérivées" ─────────────────────────
     # Les tools `aggregation.exposure_deciles` et `builder.validation`
