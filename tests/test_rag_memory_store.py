@@ -84,3 +84,69 @@ def test_vectorstore_empty_returns_empty_list():
 
 # Import RAGTurn pour les tests ci-dessus
 from agents.rag.memory.schemas import RAGTurn
+
+
+def test_for_session_returns_same_instance_for_same_id():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    RAGMemoryStore._cache.clear()
+    s1 = RAGMemoryStore.for_session("session_X", history=[])
+    s2 = RAGMemoryStore.for_session("session_X", history=[])
+    assert s1 is s2
+
+
+def test_for_session_returns_different_instance_for_different_id():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    RAGMemoryStore._cache.clear()
+    s1 = RAGMemoryStore.for_session("session_A", history=[])
+    s2 = RAGMemoryStore.for_session("session_B", history=[])
+    assert s1 is not s2
+
+
+def test_for_session_rebuilds_buffer_from_history():
+    """Sur cold start (cache miss), reconstruit le buffer depuis history."""
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    from langchain_core.messages import HumanMessage, AIMessage
+    RAGMemoryStore._cache.clear()
+    history = [
+        HumanMessage(content="qu'est-ce que Whittaker ?"),
+        AIMessage(content="...lissage [D03.02]..."),
+        HumanMessage(content="et Kaplan-Meier ?"),
+        AIMessage(content="...estimateur [D02.01]..."),
+    ]
+    s = RAGMemoryStore.for_session("session_rebuild", history=history)
+    buf = s.get_buffer()
+    assert len(buf) == 2
+    assert "Whittaker" in buf[0].user_q
+    assert "Kaplan-Meier" in buf[1].user_q
+
+
+def test_for_session_skips_master_synthetic_messages():
+    """Les HumanMessage avec source='master_synthetic' sont des relances
+    du Master, pas des vraies questions user — à ignorer."""
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    from langchain_core.messages import HumanMessage, AIMessage
+    RAGMemoryStore._cache.clear()
+    history = [
+        HumanMessage(content="question user 1"),
+        AIMessage(content="réponse RAG 1"),
+        HumanMessage(
+            content="reformulation Master synthétique",
+            additional_kwargs={"source": "master_synthetic"},
+        ),
+        AIMessage(content="réponse Master, pas RAG"),
+        HumanMessage(content="question user 2"),
+        AIMessage(content="réponse RAG 2"),
+    ]
+    s = RAGMemoryStore.for_session("session_synth", history=history)
+    buf = s.get_buffer()
+    # Seulement les 2 vraies paires user/RAG
+    assert len(buf) == 2
+    assert buf[0].user_q == "question user 1"
+    assert buf[1].user_q == "question user 2"
+
+
+def test_for_session_handles_empty_history():
+    from agents.rag.memory.rag_memory_store import RAGMemoryStore
+    RAGMemoryStore._cache.clear()
+    s = RAGMemoryStore.for_session("session_empty", history=[])
+    assert s.get_buffer() == []

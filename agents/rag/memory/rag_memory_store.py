@@ -126,3 +126,61 @@ class RAGMemoryStore:
                 continue
             results.append(self._indexed_turns[idx])
         return results
+
+    # ── Lazy rebuild from history + module-level cache ──────────────────
+
+    @classmethod
+    def for_session(
+        cls,
+        session_id: str,
+        history: list | None = None,
+    ) -> "RAGMemoryStore":
+        """Retourne le store de la session (cache hit) ou en crée un nouveau
+        en reconstruisant depuis history (cache miss = cold start)."""
+        store = cls._cache.get(session_id)
+        if store is None:
+            store = cls(session_id)
+            store._rebuild_from_history(history or [])
+            cls._cache[session_id] = store
+        return store
+
+    def _rebuild_from_history(self, history: list) -> None:
+        """Reconstruit buffer + vectorstore depuis l'historique LangChain.
+
+        Extrait les paires (HumanMessage, AIMessage) consécutives, ignore
+        les HumanMessage marqués source='master_synthetic' (relances Master,
+        pas de vraies questions user).
+        """
+        pairs = self._extract_qa_pairs(history)
+        # Buffer : les BUFFER_SIZE dernières paires
+        for user_q, rag_answer in pairs[-BUFFER_SIZE:]:
+            self._append_buffer_only(user_q, rag_answer, sources=[])
+        # Vectorstore : toutes les paires (économie : skip si <2 paires)
+        if len(pairs) >= 2:
+            for user_q, rag_answer in pairs:
+                self._index_turn_in_vectorstore(
+                    RAGTurn(user_q=user_q, rag_answer=rag_answer, sources=[])
+                )
+
+    @staticmethod
+    def _extract_qa_pairs(history: list) -> list[tuple[str, str]]:
+        """Extrait les paires user/AI consécutives de l'historique LangChain.
+
+        Ignore les HumanMessage avec additional_kwargs.source='master_synthetic'.
+        """
+        from langchain_core.messages import HumanMessage, AIMessage
+        pairs: list[tuple[str, str]] = []
+        pending_user: str | None = None
+        for m in history:
+            if isinstance(m, HumanMessage):
+                kwargs = getattr(m, "additional_kwargs", None) or {}
+                if kwargs.get("source") == "master_synthetic":
+                    pending_user = None
+                    continue
+                pending_user = (m.content or "").strip() or None
+            elif isinstance(m, AIMessage) and pending_user:
+                ai_content = (m.content or "").strip()
+                if ai_content:
+                    pairs.append((pending_user, ai_content))
+                pending_user = None
+        return pairs
