@@ -28,14 +28,14 @@ def sanitize_input(text: str | None) -> str:
     if not text:
         return ""
     text = text[:MAX_INPUT_CHARS]
-    return "".join(c for c in text if c in ("\n", "\t") or ord(c) >= 32)
+    return "".join(c for c in text if c in ("\n", "\t", "\r") or ord(c) >= 32)
 
 
 # ── Jailbreak detection ─────────────────────────────────────────────────────
 
 _JAILBREAK_PATTERNS: list[re.Pattern[str]] = [
     # Anglais
-    re.compile(r"\bignore\s+(all\s+)?(previous|prior|the)\s+(instructions?|prompts?|rules?)", re.I),
+    re.compile(r"\bignore\s+(all\s+)?(the\s+)?(previous|prior|above)\s+(instructions?|prompts?|rules?)", re.I),
     re.compile(r"\bdisregard\s+(your|the|all)\s+(rules?|instructions?|guidelines?|prompts?)", re.I),
     re.compile(r"\b(reveal|show|print|display|tell\s+me|give\s+me)\s+(your|the)\s+(system\s+prompt|instructions?|rules?|guidelines?)", re.I),
     re.compile(r"\bact\s+as\s+(if\s+)?(you|a)\s+(are|jailbroken|DAN|unrestricted)", re.I),
