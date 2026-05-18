@@ -168,3 +168,21 @@ def test_chunks_format_does_not_duplicate_doc_id():
     # En revanche on doit bien y retrouver le section_id propre
     assert "D03.02" in formatted
     assert "D03.04" in formatted
+
+
+# ──────────────────────────────────────────────────────────────────────
+# answer_has_citation — helper safety check pour run_pipeline RAG.5
+# ──────────────────────────────────────────────────────────────────────
+
+def test_answer_lacks_citation_helper_returns_false():
+    """Détection : answer sans [Dxx.yy] dans le texte."""
+    from agents.rag.pipeline.answer_generator import answer_has_citation
+    assert answer_has_citation("Réponse sans citation aucune.") is False
+    assert answer_has_citation("") is False
+
+
+def test_answer_with_citation_helper_returns_true():
+    from agents.rag.pipeline.answer_generator import answer_has_citation
+    assert answer_has_citation("Whittaker pénalise [D03.02].") is True
+    assert answer_has_citation("Voir [D02.1] ou [D07].") is True
+    assert answer_has_citation("Réf : [D03.04]") is True

@@ -16,6 +16,7 @@ Stratégie de robustesse :
 from __future__ import annotations
 
 import logging
+import re as _re
 from pathlib import Path
 
 import openai
@@ -29,6 +30,19 @@ _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent
     / "agent_instructions" / "answer_generator_prompt.md"
 )
+
+# Capture les citations [Dxx], [Dxx.y], [Dxx.yy]. Utilisé par
+# answer_has_citation() pour le safety check post-RAG.5 dans run_pipeline :
+# si chunks fournis mais answer sans citation → rejet (injection probable
+# ou hallucination grossière).
+_CITATION_RE = _re.compile(r"\[[A-Z]\d{2}(?:\.\d{1,2})?\]")
+
+
+def answer_has_citation(answer: str) -> bool:
+    """True si l'answer contient au moins une citation `[Dxx.yy]`."""
+    if not answer:
+        return False
+    return bool(_CITATION_RE.search(answer))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
