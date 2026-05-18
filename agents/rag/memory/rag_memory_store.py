@@ -36,9 +36,12 @@ class RAGMemoryStore:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self._buffer:   list[RAGTurn] = []
-        self._summary:  RAGSummary | None = None
-        # vectorstore + ses méthodes arrivent à la Task 6
+        self._buffer:        list[RAGTurn] = []
+        self._summary:       RAGSummary | None = None
+        # Vectorstore (niveau 3) — init paresseuse au premier _index_turn_in_vectorstore.
+        # Déclarés ici pour que les lecteurs voient TOUS les attributs d'instance.
+        self._faiss_index = None  # IndexFlatIP | None — type lazy import pour éviter faiss à l'import
+        self._indexed_turns: list[RAGTurn] = []
 
     # ── Public API : lectures ────────────────────────────────────────────
 
@@ -75,24 +78,26 @@ class RAGMemoryStore:
 
     def _index_turn_in_vectorstore(self, turn: RAGTurn) -> None:
         """Embed le tuple (user_q + rag_answer) et l'ajoute à l'index FAISS."""
-        import numpy as np
         import faiss
 
-        # Stockage paresseux : init au premier ajout
-        if not hasattr(self, "_faiss_index") or self._faiss_index is None:
-            embedder = self._get_embedder()
-            dim = embedder.dim
-            self._faiss_index = faiss.IndexFlatIP(dim)
-            self._indexed_turns: list[RAGTurn] = []
-
         embedder = self._get_embedder()
+        # Init paresseuse de l'index FAISS au premier ajout
+        if self._faiss_index is None:
+            self._faiss_index = faiss.IndexFlatIP(embedder.dim)
+
         # Embed le texte concaténé Q + A
         text = f"{turn.user_q}\n{turn.rag_answer}"
         vec = embedder.embed([text])
         # Normalisation L2 pour utiliser le produit scalaire comme cosine
         faiss.normalize_L2(vec)
-        self._faiss_index.add(vec)
+        # Atomicité : append PUIS add, rollback si add échoue
         self._indexed_turns.append(turn)
+        try:
+            self._faiss_index.add(vec)
+        except Exception:
+            # Préserve l'alignement _indexed_turns[i] ↔ FAISS index i
+            self._indexed_turns.pop()
+            raise
 
     def retrieve_similar(
         self,
@@ -105,7 +110,7 @@ class RAGMemoryStore:
         Filtre par min_score (cosine similarity ∈ [-1, 1]). Retourne liste
         vide si l'index est vide ou si aucun hit ne dépasse min_score.
         """
-        if not getattr(self, "_faiss_index", None) or self._faiss_index.ntotal == 0:
+        if self._faiss_index is None or self._faiss_index.ntotal == 0:
             return []
         import faiss
         embedder = self._get_embedder()
