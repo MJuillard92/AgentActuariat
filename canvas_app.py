@@ -1333,6 +1333,7 @@ _AGENT_COLORS = {
 _INTERNALS_COLORS = {
     "new_turn":     "#888888",
     "agent_switch": "#569CD6",
+    "master_stage": "#FFD580",   # ambre clair — pour repérer le tracé Master
     "llm_input":    "#9CDCFE",
     "llm_output":   "#B5CEA8",
     "tool_call":    "#DCDCAA",
@@ -1346,6 +1347,7 @@ _INTERNALS_COLORS = {
 _INTERNALS_ICONS = {
     "new_turn":     "─────",
     "agent_switch": "▶",
+    "master_stage": "📍",
     "llm_input":    "→",
     "llm_output":   "←",
     "tool_call":    "🔧",
@@ -1376,6 +1378,21 @@ def _internals_entry(ev: dict) -> html.Div:
 
     elif ev_type == "agent_switch":
         text = f"{icon} {ev.get('agent', '')} actif"
+
+    elif ev_type == "master_stage":
+        stage = ev.get("stage", "?")
+        label = ev.get("label", "")
+        return html.Div(
+            f"{icon} [Master {stage}] {label}",
+            style={
+                "color":         color,
+                "marginBottom":  "2px",
+                "marginTop":     "2px",
+                "paddingLeft":   "12px",
+                "fontStyle":     "italic",
+                "fontWeight":    "500",
+            },
+        )
 
     elif ev_type == "llm_input":
         agent  = ev.get("agent", "")

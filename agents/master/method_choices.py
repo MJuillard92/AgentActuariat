@@ -372,21 +372,31 @@ def build_methods_meta_pending_need(
     }
 
 
+def _prepend_stages(updates: dict, data_store: dict) -> dict:
+    """Injecte les stages accumulés par master_node dans les events du
+    dict de retour. No-op si pas de buffer (cas tests unitaires)."""
+    buffered = data_store.pop("_stage_buffer", []) or []
+    if buffered:
+        existing = updates.get("events") or []
+        updates["events"] = list(buffered) + list(existing)
+    return updates
+
+
 def _route_to_builder(data_store: dict, instr_text: str, event_text: str) -> dict:
-    return {
+    return _prepend_stages({
         "messages":     [_master_instr(instr_text)],
         "events":       [_AGENT_SWITCH_EVENT, _msg_event(event_text)],
         "active_agent": "builder",
         "data_store":   data_store,
-    }
+    }, data_store)
 
 
 def _ask_user(data_store: dict, question: str) -> dict:
-    return {
+    return _prepend_stages({
         "messages":   [_ai_question(question)],
         "events":     [_AGENT_SWITCH_EVENT, _msg_event(question)],
         "data_store": data_store,
-    }
+    }, data_store)
 
 
 # Regex de détection des questions génériques (vs choix de méthode).
@@ -418,6 +428,13 @@ def _answer_meta_question_keeping_pending(
     """L'utilisateur a posé une question pendant un pending_need méthode.
     On appelle search_doctrine pour répondre, et on RE-POSE le pending
     pour que la conversation reprenne après."""
+    # Stage tracking pour l'UI "internal agent"
+    if "_stage_buffer" in data_store and isinstance(data_store["_stage_buffer"], list):
+        data_store["_stage_buffer"].append({
+            "type":  "master_stage",
+            "stage": "0.c-q",
+            "label": "Échappe-question pendant pending méthode (RAG doctrine)",
+        })
     from tools.conversation.search_doctrine import run as _search
     res = _search(None, {"query": last_text, "k": 3})
 

@@ -298,6 +298,27 @@ def master_node(state: "AgentState") -> dict:
 
     messages_list = state.get("messages") or []
 
+    # ── Traçage des étapes Master pour l'UI "internal agent" ───────────────
+    # Chaque étape pousse un event `master_stage` dans data_store["_stage_buffer"].
+    # Le buffer est ensuite injecté dans `events` du dict de retour par
+    # _emit_stages_into(events) appelé juste avant chaque return.
+    data_store["_stage_buffer"] = []
+    def _stage(stage_id: str, label: str) -> None:
+        data_store["_stage_buffer"].append({
+            "type":  "master_stage",
+            "stage": stage_id,
+            "label": label,
+        })
+    def _ret(updates: dict) -> dict:
+        """Injecte les stages accumulés au début des events sortants, vide
+        le buffer pour éviter doublons au tour suivant."""
+        buffered = data_store.pop("_stage_buffer", []) or []
+        if buffered:
+            existing = updates.get("events") or []
+            updates["events"] = buffered + list(existing)
+        return updates
+    _stage("0.a", "Récupération de la mémoire de session")
+
     # ── 1. WRITE_DONE : cycle complet — nettoyer et terminer ─────────────────
     # IMPORTANT (cf. Bug #7 BUILD_DONE) : un <WRITE_DONE> n'est valide que si
     # AUCUN nouveau HumanMessage n'a été reçu depuis. Sinon on est sur un
@@ -429,6 +450,7 @@ def master_node(state: "AgentState") -> dict:
         from agents.master.question_filter import extract_user_answer
         last_text = getattr(last_real_human, "content", "") or ""
         ctx_key = pending.get("context_key", "?")
+        _stage("0.c", f"Réponse à une question pendante ({ctx_key})")
 
         # ─── Désambiguation méthodes : déléguée à agents.master ──────────
         # Toute la logique (méta-question, branches auto/préciser,
@@ -595,6 +617,7 @@ def master_node(state: "AgentState") -> dict:
                 }
             # Normalisation automatique des records si les deux mappings
             # sont confirmés (US-14). No-op si l'un des drapeaux manque.
+            _stage("0.b", "Préparation du fichier propre (Parquet normalisé)")
             try:
                 from agents.master.disambiguation import maybe_normalize_records
                 df_json_for_norm: str | None = None
@@ -669,8 +692,10 @@ def master_node(state: "AgentState") -> dict:
                                         else "D'accord, je lance les calculs sans rapport."),
             }
         else:
+            _stage("0.d", "Classification de l'intention (LLM)")
             classification = _classify_intent(last_human, data_store, dataset_ref)
     else:
+        _stage("0.d", "Classification de l'intention (LLM)")
         classification = _classify_intent(last_human, data_store, dataset_ref)
     intent       = classification.get("intent", "unclear")
     reply        = classification.get("reply", "")
@@ -949,21 +974,23 @@ def master_node(state: "AgentState") -> dict:
                 + hint_extra
                 + "Émets <BUILD_DONE> quand toutes les clés ci-dessus sont dans le data_store."
             )
-            return {
+            _stage("0.e", "Décision : route vers Builder (calculs)")
+            return _ret({
                 "messages":     [HumanMessage(content=instr, additional_kwargs={"source": "master_synthetic"})],
                 "events":       new_events,
                 "active_agent": "builder",
                 "data_store":   data_store,
-            }
+            })
 
         # ── Toutes les clés sont présentes : route selon write ──────────────
         if write == "yes":
-            return {
+            _stage("0.e", "Décision : route vers Writer (rédaction PDF)")
+            return _ret({
                 "messages":     [],
                 "events":       new_events,
                 "active_agent": "writer",
                 "data_store":   data_store,
-            }
+            })
         # write == "no" → done. L'utilisateur peut demander un rapport plus tard,
         # le data_store est persisté et Master routera direct vers le Writer.
         new_events.append({
@@ -978,8 +1005,14 @@ def master_node(state: "AgentState") -> dict:
         # Le LLM y a accès à un set restreint de tools (data_inspect,
         # plot_basic, eval_pandas, statistical_analysis.*) — pas aux tools
         # actuariels du Builder.
+        _stage("0.e", "Décision : réponse conversationnelle (mode question)")
         from agents.master.conversation import respond_conversationally
-        return respond_conversationally(messages_list, data_store, dataset_ref)
+        result = respond_conversationally(messages_list, data_store, dataset_ref)
+        # Injecter les stages accumulés dans les events du retour
+        buffered = data_store.pop("_stage_buffer", []) or []
+        if buffered:
+            result["events"] = buffered + list(result.get("events") or [])
+        return result
 
     # unclear : demander à l'utilisateur de préciser
     new_events.append({"type": "done"})
