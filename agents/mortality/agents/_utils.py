@@ -8,9 +8,11 @@ import time
 
 log = logging.getLogger(__name__)
 
-# Délais de retry en secondes pour les erreurs TPM/RPM (30k tokens/min sur gpt-4o)
-# Stratégie : attendre suffisamment pour que la fenêtre 1-minute se renouvelle
-_RETRY_WAITS = [15, 30, 60]  # 3 tentatives : 15s, 30s, 60s
+# Délais de retry en secondes. HOTFIX-pre-refacto-2026-05 (Bug 4) :
+# réduit de [15, 30, 60] (105s total) à [3, 8, 20] (31s total) pour que
+# l'utilisateur reçoive un échec rapide en cas de panne réseau, au lieu
+# d'attendre 105s. Sera remplacé par circuit breaker au Lot 11.
+_RETRY_WAITS = [3, 8, 20]  # 3 tentatives : 3s, 8s, 20s
 
 
 def _is_rate_limit(exc: Exception) -> bool:

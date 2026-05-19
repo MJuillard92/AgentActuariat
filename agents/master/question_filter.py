@@ -88,7 +88,7 @@ def _call_mini_for_inference(prompt: str) -> dict:
 
     cfg = get_llm_config("master.classify_intent")  # même profil mini
     try:
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         resp = call_with_retry(
             client,
             model=cfg["model"],

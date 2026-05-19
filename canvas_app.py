@@ -2142,9 +2142,12 @@ def _warmup_doctrine_retriever() -> None:
 
 if __name__ == "__main__":
     import os
-    # Flask debug mode fork un reloader process → warmup serait exécuté
-    # 2 fois (parent + child). On le lance UNIQUEMENT dans le child final
-    # (où WERKZEUG_RUN_MAIN est posé) pour économiser ~5s au démarrage.
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.environ.get("FLASK_DEBUG") != "1":
+    # HOTFIX-pre-refacto-2026-05 (Bug 4) : Flask debug mode fork un reloader
+    # process. Sans condition correcte, warmup s'exécute 2× (parent + child).
+    # Logique : si on est en debug Flask, lancer UNIQUEMENT dans le reloader
+    # child (WERKZEUG_RUN_MAIN posé). Sinon (prod), lancer normalement.
+    flask_debug = os.environ.get("FLASK_DEBUG") == "1"
+    is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if (not flask_debug) or is_reloader_child:
         threading.Thread(target=_warmup_doctrine_retriever, daemon=True).start()
     app.run(debug=True, host="0.0.0.0", port=8050)

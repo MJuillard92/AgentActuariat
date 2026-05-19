@@ -133,7 +133,7 @@ def _call_llm(prompt: str) -> dict:
         from agents.mortality.agents.llm_config import get_llm_config
 
         cfg = get_llm_config("writer.validation")
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         response = call_with_retry(
             client,
             model=cfg["model"],

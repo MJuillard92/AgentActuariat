@@ -67,7 +67,7 @@ def verify(answer: str, chunks: list[dict]) -> tuple[bool, str]:
     # Heuristique légère OK — pour un check sémantique plus fin, déléguer au LLM
     cfg = get_llm_config("rag.grounding_check")
     try:
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         user_payload = (
             f"Réponse :\n{answer}\n\n"
             f"Chunks fournis ({len(chunks)} disponibles) :\n"

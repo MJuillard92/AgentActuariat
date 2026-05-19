@@ -199,7 +199,7 @@ def llm_fallback_resolve_methods(
     try:
         from agents.mortality.agents.llm_config import get_llm_config
         cfg = get_llm_config("master.method_resolution")
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         resp = client.chat.completions.create(
             model=cfg.get("model", "gpt-5.4-mini"),
             messages=[{"role": "user", "content": prompt}],

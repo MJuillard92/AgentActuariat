@@ -155,7 +155,7 @@ def respond_conversationally(
     )
 
     cfg = get_llm_config("master.conversation")
-    client = openai.OpenAI()
+    client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
 
     raw_msgs = messages_list[-20:]
     messages = [{"role": "system", "content": system_prompt}]

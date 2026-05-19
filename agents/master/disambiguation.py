@@ -194,7 +194,7 @@ def _classify_with_llm(message: str, data_store: dict) -> dict | None:
         )
         from agents.mortality.agents.llm_config import get_llm_config
         cfg = get_llm_config("master.classify_intent")  # même profil : JSON court
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         response = call_with_retry(
             client,
             model=cfg["model"],
@@ -353,7 +353,7 @@ def _suggest_mapping_with_llm(
         )
         from agents.mortality.agents.llm_config import get_llm_config
         cfg = get_llm_config("master.classify_intent")  # même profil : JSON
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         response = call_with_retry(
             client,
             model=cfg["model"],

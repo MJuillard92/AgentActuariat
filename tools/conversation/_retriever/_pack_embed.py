@@ -18,9 +18,19 @@ import argparse
 import json
 import logging
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
+
+# HOTFIX-pre-refacto-2026-05 (Bug 4) : silence le FutureWarning émis par
+# sentence-transformers >=3.0 sur get_sentence_embedding_dimension renommé
+# en get_embedding_dimension. À supprimer quand on aligne la dépendance.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*get_sentence_embedding_dimension.*",
+    category=FutureWarning,
+)
 
 logger = logging.getLogger(__name__)
 

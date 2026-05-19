@@ -163,7 +163,7 @@ def _llm_classify(
     )
 
     cfg = get_llm_config("master.classify_intent")
-    client = openai.OpenAI()
+    client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
     resp = call_with_retry(
         client,
         model=cfg["model"],

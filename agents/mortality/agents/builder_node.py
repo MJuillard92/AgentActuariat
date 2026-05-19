@@ -373,7 +373,7 @@ def builder_node(state: "AgentState") -> dict:
     messages = sanitize_openai_messages(messages)
 
     from agents.mortality.agents._utils import call_with_retry
-    client = openai.OpenAI()
+    client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
     new_events: list[dict] = []
 
     # ── Event : données envoyées à l'API ─────────────────────────────────────

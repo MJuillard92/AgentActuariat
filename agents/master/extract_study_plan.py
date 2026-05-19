@@ -65,7 +65,7 @@ def extract_study_plan_from_history(messages: list[dict]) -> dict:
 
     try:
         cfg = get_llm_config("master.extract_study_plan")
-        client = openai.OpenAI()
+        client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
         response = call_with_retry(
             client,
             model=cfg["model"],
