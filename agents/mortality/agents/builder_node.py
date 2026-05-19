@@ -376,6 +376,14 @@ def builder_node(state: "AgentState") -> dict:
     client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
     new_events: list[dict] = []
 
+    # HOTFIX-pre-refacto-2026-05 (Bug 7) — Stage tracking BuilderAgent.
+    # type="master_stage" pour cohérence renderer canvas (préfixe BUILDER.* le distingue).
+    def _bstage(stage_id: str, label: str) -> None:
+        new_events.append({"type": "master_stage", "stage": stage_id, "label": label})
+
+    _bstage("BUILDER.0",
+            f"Initialisation (catalogue={level}, history={len(raw_msgs)} msgs, tools={len(tools)})")
+
     # ── Event : données envoyées à l'API ─────────────────────────────────────
     last_user = next(
         (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
@@ -397,6 +405,9 @@ def builder_node(state: "AgentState") -> dict:
     try:
         from agents.mortality.agents.llm_config import get_llm_config
         cfg = get_llm_config("builder.llm")
+        _bstage("BUILDER.1",
+                f"Appel LLM (model={cfg.get('model', '?')}, tools={len(tools)}, "
+                f"history={len(messages)} messages)")  # HOTFIX-pre-refacto-2026-05 (Bug 7)
         response = call_with_retry(
             client,
             model=cfg["model"],
@@ -450,6 +461,11 @@ def builder_node(state: "AgentState") -> dict:
         "total_tokens":       usage.total_tokens       if usage else None,
         "n_tool_calls":       len(msg_obj.tool_calls or []),
     })
+    # HOTFIX-pre-refacto-2026-05 (Bug 7) — Stage BUILDER.2 (réponse LLM)
+    _bstage("BUILDER.2",
+            f"Réponse LLM (finish_reason={choice.finish_reason}, "
+            f"tokens={usage.total_tokens if usage else '?'}, "
+            f"tool_calls={len(msg_obj.tool_calls or [])})")
 
     data_store["_builder_turns"] = data_store.get("_builder_turns", 0) + 1
 
@@ -468,6 +484,17 @@ def builder_node(state: "AgentState") -> dict:
     # active_agent="master" si BUILD_DONE — _should_continue_builder le détecte aussi
     # via data_store, mais on le signale explicitement pour la lisibilité
     content = msg_obj.content or ""
-    if "<BUILD_DONE>" in content or "<HANDOFF_WRITER>" in content:
+    detected_signal = None
+    if "<BUILD_DONE>" in content:
+        detected_signal = "BUILD_DONE"
+    elif "<HANDOFF_WRITER>" in content:
+        detected_signal = "HANDOFF_WRITER"
+    elif "<NEED_DATA" in content:
+        detected_signal = "NEED_DATA"
+    # HOTFIX-pre-refacto-2026-05 (Bug 7) — Stage BUILDER.3 (parsing + signal)
+    n_tc = len(msg_obj.tool_calls or [])
+    _bstage("BUILDER.3",
+            f"Parsing : tool_calls={n_tc} | Signal={detected_signal or 'aucun'}")
+    if detected_signal in ("BUILD_DONE", "HANDOFF_WRITER"):
         result["active_agent"] = "master"
     return result
