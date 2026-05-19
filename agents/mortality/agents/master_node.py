@@ -325,6 +325,20 @@ def master_node(state: "AgentState") -> dict:
             existing = updates.get("events") or []
             updates["events"] = buffered + list(existing)
         return updates
+    def _stage_pending(pending_key: str, decision: str,
+                       route_to: str | None = None) -> None:
+        """HOTFIX-pre-refacto-2026-05 (Bug 5).
+
+        Émet 2 stages standardisés pour les 5 paths pending_need qui
+        court-circuitent _classify_intent. Garantit que l'UI internal agent
+        voit la résolution d'une question pendante (jusqu'ici muette).
+        """
+        _stage("0.d-pending",
+               f"Résolution pending '{pending_key}' (déterministe, pas de LLM)")
+        if route_to:
+            _stage("0.e-pending", f"Décision pending: {decision} → {route_to}")
+        else:
+            _stage("0.e-pending", f"Décision pending: {decision}")
     _stage("0.a", "Récupération de la mémoire de session")
 
     # ── 1. WRITE_DONE : cycle complet — nettoyer et terminer ─────────────────
@@ -449,6 +463,10 @@ def master_node(state: "AgentState") -> dict:
                 default_val = need.get("default")
                 sp = data_store.setdefault("study_plan", {})
                 sp[need["context_key"]] = default_val
+                # HOTFIX-pre-refacto-2026-05 (Bug 5) — stage P3 PENDING_LIMIT
+                _stage_pending(need.get("context_key", "?"),
+                               f"limite {MAX_QUESTIONS} questions → default={default_val}",
+                               route_to="builder")
                 instr = _HMsg(
                     content=(
                         f"[Master] Limite de {MAX_QUESTIONS} questions atteinte dans ce cycle. "
@@ -456,7 +474,7 @@ def master_node(state: "AgentState") -> dict:
                     ),
                     additional_kwargs={"source": "master_synthetic"},
                 )
-                return {
+                return _ret({
                     "messages":     [instr],
                     "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                      {"type": "message",
@@ -465,7 +483,7 @@ def master_node(state: "AgentState") -> dict:
                                                  f"limite de {MAX_QUESTIONS} questions atteinte."}],
                     "active_agent": "builder",
                     "data_store":   data_store,
-                }
+                })
 
             user_msgs = data_store.get("_user_messages") or []
             resolution = resolve_builder_question(need, data_store, user_msgs)
@@ -475,6 +493,10 @@ def master_node(state: "AgentState") -> dict:
                 # Cache + injection dans Builder
                 sp = data_store.setdefault("study_plan", {})
                 sp[need["context_key"]] = resolution.value
+                # HOTFIX-pre-refacto-2026-05 (Bug 5) — stage P4 PENDING_ANSWERED
+                _stage_pending(need.get("context_key", "?"),
+                               f"answered={resolution.value} (source={resolution.source})",
+                               route_to="builder")
                 instr = _HMsg(
                     content=(
                         f"[Master] Réponse à ta question '{need.get('context_key')}' : "
@@ -482,7 +504,7 @@ def master_node(state: "AgentState") -> dict:
                     ),
                     additional_kwargs={"source": "master_synthetic"},
                 )
-                return {
+                return _ret({
                     "messages":     [instr],
                     "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                      {"type": "message",
@@ -490,16 +512,19 @@ def master_node(state: "AgentState") -> dict:
                                                  f"résolue automatiquement (source: {resolution.source})."}],
                     "active_agent": "builder",
                     "data_store":   data_store,
-                }
+                })
             else:  # forward
                 data_store["_pending_need"] = need
+                # HOTFIX-pre-refacto-2026-05 (Bug 5) — stage P5 PENDING_FORWARD
+                _stage_pending(need.get("context_key", "?"),
+                               "forward question to user (resolution non-automatique)")
                 question_msg = _AIMsg(content=need.get("question", "Précision nécessaire."))
-                return {
+                return _ret({
                     "messages":     [question_msg],
                     "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                      {"type": "message", "content": need.get("question", "")}],
                     "data_store":   data_store,
-                }
+                })
 
     # ── 1d. Si une question pendante existe et user vient de répondre ────────
     # IMPORTANT : tant que _pending_need est set, Master ne doit PAS classifier
@@ -535,34 +560,41 @@ def master_node(state: "AgentState") -> dict:
             sp = data_store.setdefault("study_plan", {})
             sp[pending["context_key"]] = value
             data_store.pop("_pending_need", None)
+            # HOTFIX-pre-refacto-2026-05 (Bug 5) — stage P6 PENDING_RESOLVED
+            _stage_pending(ctx_key,
+                           f"resolved={value}",
+                           route_to="builder")
             instr = _HMsg(
                 content=(
                     f"[Master] L'utilisateur a répondu '{pending.get('context_key')}' = {value}."
                 ),
                 additional_kwargs={"source": "master_synthetic"},
             )
-            return {
+            return _ret({
                 "messages":     [instr],
                 "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                  {"type": "message",
                                   "content": f"Réponse '{pending.get('context_key')}' enregistrée : {value}."}],
                 "active_agent": "builder",
                 "data_store":   data_store,
-            }
+            })
         # Extract a échoué — re-poser la question avec un hint sans classify
         options = pending.get("options") or []
         options_str = " ou ".join(repr(o) for o in options) if options else "une réponse claire"
+        # HOTFIX-pre-refacto-2026-05 (Bug 5) — stage P7 PENDING_REASK
+        _stage_pending(ctx_key,
+                       f"extract_user_answer=None → re-poser la question (options={options})")
         question_msg = _AIMsg(content=(
             f"Je n'ai pas bien compris votre réponse '{last_text}'. "
             f"Pour la question sur '{ctx_key}', "
             f"merci de répondre par {options_str}."
         ))
-        return {
+        return _ret({
             "messages":   [question_msg],
             "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
                            {"type": "message", "content": question_msg.content}],
             "data_store": data_store,
-        }
+        })
 
     # ── 2. BUILD_DONE : routing déterministe vers Writer ─────────────────────
     # IMPORTANT : un BUILD_DONE n'est valide que si AUCUN nouveau HumanMessage
