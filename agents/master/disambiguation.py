@@ -448,6 +448,20 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
         mask = sentinel_masks.get("date_sortie")
         if mask is not None and mask.any():
             df.loc[mask, "date_sortie"] = obs_end
+
+    # HOTFIX-pre-refacto-2026-05 (Bug 10) — Catch-all : toute date_sortie
+    # strictement supérieure à (aujourd'hui + 1 an) est traitée comme
+    # sentinelle implicite (contrat actif), peu importe l'année exacte
+    # (2099, 2199, 2299, ...). Évite de devoir maintenir une regex
+    # exhaustive de toutes les sentinelles possibles.
+    # Borne basée sur `now` (pas obs_end) pour ne pas clipper les dates
+    # futures réalistes < 1 an (échéances de contrats encore actifs).
+    if obs_end is not None and "date_sortie" in df.columns:
+        future_cutoff = pd.Timestamp.now() + pd.DateOffset(years=1)
+        far_future_mask = df["date_sortie"].notna() & (df["date_sortie"] > future_cutoff)
+        if far_future_mask.any():
+            df.loc[far_future_mask, "date_sortie"] = obs_end
+
     return df, (obs_end.isoformat() if obs_end is not None else None)
 
 
