@@ -189,6 +189,15 @@ def extract_user_answer(response_text: str, need: dict) -> Any:
     if not options:
         return response_text.strip()
 
+    # HOTFIX-pre-refacto-2026-05 (Bug 3) : aliases déterministes avant LLM
+    # pour les enums déjà couverts par un module de keywords. Évite l'aller-
+    # retour LLM (latence + confidence < 0.6 sur les paraphrases FR).
+    if need.get("context_key") == "gender_segmentation":
+        from agents.master.extract_gender import extract_gender_from_text
+        alias_match = extract_gender_from_text(response_text)
+        if alias_match is not None:
+            return alias_match
+
     prompt = (
         "Tu mappes la réponse d'un utilisateur vers l'une des options proposées.\n"
         f"Question initiale : {need.get('question', '?')}\n"
