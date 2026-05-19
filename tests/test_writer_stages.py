@@ -75,7 +75,9 @@ def test_writer_stage_4_includes_output_path_and_sections():
     stages = _extract_stage_events(result.get("events"))
     w4 = next((s for s in stages if s["stage"] == "WRITER.4"), None)
     assert w4 is not None
-    assert "/tmp/test.pdf" in w4["label"]
+    # Nouveau label user-friendly (Bug 13) : "PDF produit (15 sections)"
+    # Le chemin n'apparaît plus dans le label stage (visible via event report_ready).
+    assert "PDF" in w4["label"]
     assert "15 sections" in w4["label"]
 
 
@@ -98,8 +100,10 @@ def test_writer_emits_stage_3_on_need_data():
     stages = _extract_stage_events(result.get("events"))
     w3 = next((s for s in stages if s["stage"] == "WRITER.3"), None)
     assert w3 is not None
-    assert "NEED_DATA" in w3["label"]
-    assert "smr_par_decile" in w3["label"]
+    # Nouveau label user-friendly (Bug 13) : "Données insuffisantes (N champ(s) manquant(s))"
+    # Les noms de champs ne sont plus dans le label stage (visibles via le message).
+    assert "Données insuffisantes" in w3["label"] or "insuffisantes" in w3["label"]
+    assert "2" in w3["label"], f"Nombre de champs manquants attendu : {w3['label']}"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -121,5 +125,6 @@ def test_writer_emits_stage_3_on_error():
     stages = _extract_stage_events(result.get("events"))
     w3 = next((s for s in stages if s["stage"] == "WRITER.3"), None)
     assert w3 is not None
+    # Nouveau label user-friendly (Bug 13) : "Erreur lors de l'assemblage PDF"
+    # Le détail technique (validation_summary) est dans le message, pas le stage.
     assert "Erreur" in w3["label"]
-    assert "reportlab" in w3["label"]

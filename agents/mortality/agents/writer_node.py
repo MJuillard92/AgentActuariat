@@ -52,8 +52,12 @@ def writer_node(state: "AgentState") -> dict:
         new_events.append({"type": "master_stage", "stage": stage_id, "label": label})
 
     report_mode = data_store.get("report_mode", "full_report")
-    _wstage("WRITER.0",
-            f"Initialisation WriterAgent (report_mode={report_mode})")
+    _mode_label = {
+        "full_report":  "rapport complet",
+        "raw_rates":    "taux bruts",
+        "description":  "analyse descriptive",
+    }.get(report_mode, report_mode)
+    _wstage("WRITER.0", f"Préparation du rapport ({_mode_label})")
 
     new_events.append({
         "type":    "message",
@@ -67,8 +71,7 @@ def writer_node(state: "AgentState") -> dict:
     session_id  = data_store.get("session_id", "rapport")
     output_path = str(Path("/tmp") / f"rapport_{session_id}.pdf")
 
-    _wstage("WRITER.1",
-            f"Lancement pipeline rédaction (sortie : {output_path})")
+    _wstage("WRITER.1", "Rédaction des sections en cours…")
 
     try:
         from agents.report.pipeline.run_pipeline import run as run_pipeline
@@ -80,20 +83,24 @@ def writer_node(state: "AgentState") -> dict:
     except Exception as exc:
         log.error("[WriterAgent] pipeline error : %s", exc)
         # HOTFIX-pre-refacto-2026-05 (Bug 8)
-        _wstage("WRITER.3", f"Exception pipeline : {type(exc).__name__}")
+        _wstage("WRITER.3", f"Erreur technique : {type(exc).__name__}")
         new_events.append({"type": "error", "message": f"Erreur pipeline WriterAgent : {exc}"})
         new_events.append({"type": "done"})
         return {"messages": [], "events": new_events}
 
     # HOTFIX-pre-refacto-2026-05 (Bug 8)
-    _wstage("WRITER.2",
-            f"Pipeline terminé (status={result.status}, "
-            f"sections={getattr(result, 'nb_sections', '?')})")
+    _nb_sec = getattr(result, "nb_sections", "?")
+    if result.status in ("success", "success_with_warnings"):
+        _wstage("WRITER.2", f"Sections rédigées : {_nb_sec} ✓")
+    elif result.status == "need_data":
+        _wstage("WRITER.2", "Données manquantes détectées")
+    else:
+        _wstage("WRITER.2", f"Pipeline terminé (statut : {result.status})")
 
     # ── Erreur technique (assemblage, reportlab, etc.) ────────────────────────
     if result.status == "error":
         # HOTFIX-pre-refacto-2026-05 (Bug 8)
-        _wstage("WRITER.3", f"Erreur : {(result.validation_summary or '')[:100]}")
+        _wstage("WRITER.3", "Erreur lors de l'assemblage PDF")
         content = f"Erreur lors de la génération du rapport : {result.validation_summary}"
         new_events.append({"type": "error", "message": content})
         new_events.append({"type": "done"})
@@ -107,8 +114,9 @@ def writer_node(state: "AgentState") -> dict:
     # ── Données manquantes → retour au MasterAgent ────────────────────────────
     if result.status == "need_data":
         # HOTFIX-pre-refacto-2026-05 (Bug 8)
-        nd_str = ", ".join(result.need_data) if result.need_data else "(non identifiés)"
-        _wstage("WRITER.3", f"NEED_DATA : {nd_str[:80]}")
+        _n_missing = len(result.need_data) if result.need_data else 0
+        _wstage("WRITER.3",
+                f"Données insuffisantes ({_n_missing} champ(s) manquant(s))")
         # need_data vide = validation a bloqué sur des champs sans pouvoir les nommer
         if not result.need_data:
             content = (
@@ -173,9 +181,7 @@ def writer_node(state: "AgentState") -> dict:
         warnings_text = f"\n\n⚠ Points à noter :\n{anomaly_lines}"
 
     # HOTFIX-pre-refacto-2026-05 (Bug 8) — Stage WRITER.4 (PDF généré)
-    _wstage("WRITER.4",
-            f"PDF généré : {result.output_path} ({result.nb_sections} sections, "
-            f"status={result.status})")
+    _wstage("WRITER.4", f"PDF produit ({result.nb_sections} sections)")
 
     # HOTFIX-pre-refacto-2026-05 (Bug 12) — Auto-trigger notebook export.
     # Le LLM Builder appelait parfois build_pdf.generate_notebook explicitement,
@@ -198,7 +204,7 @@ def writer_node(state: "AgentState") -> dict:
         if nb_result.get("succes") or nb_result.get("output_path"):
             notebook_path = nb_result.get("output_path") or nb_out
             _wstage("WRITER.5",
-                    f"Notebook reproductible généré : {notebook_path} "
+                    f"Notebook reproductible livré "
                     f"({nb_result.get('nb_cellules', '?')} cellules)")
             new_events.append({
                 "type":        "notebook_ready",

@@ -120,7 +120,7 @@ def _llm_classify(
         if _stage:
             _stage(sid, label)
 
-    _emit("0.d.1", "Contexte construit (has_data, has_calcs)")
+    _emit("0.d.1", "Contexte de session préparé")
 
     history_block = _build_history_block(history)
 
@@ -214,7 +214,7 @@ def _llm_classify(
 
     cfg = get_llm_config("master.classify_intent")
     client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
-    _emit("0.d.2", "Prompt envoyé au LLM (classification)")
+    _emit("0.d.2", "Question envoyée au modèle de classification…")
     resp = call_with_retry(
         client,
         model=cfg["model"],
@@ -224,7 +224,7 @@ def _llm_classify(
         temperature=cfg.get("temperature", 0.0),
     )
     parsed = json.loads(resp.choices[0].message.content or "{}")
-    _emit("0.d.3", f"Intention reçue (kind={parsed.get('kind', '?')})")
+    _emit("0.d.3", f"Intention identifiée : {parsed.get('kind', '?')}")
     return parsed
 
 

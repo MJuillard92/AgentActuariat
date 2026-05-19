@@ -382,7 +382,7 @@ def builder_node(state: "AgentState") -> dict:
         new_events.append({"type": "master_stage", "stage": stage_id, "label": label})
 
     _bstage("BUILDER.0",
-            f"Initialisation (catalogue={level}, history={len(raw_msgs)} msgs, tools={len(tools)})")
+            f"Outils actuariels chargés ({len(tools)} disponibles)")
 
     # ── Event : données envoyées à l'API ─────────────────────────────────────
     last_user = next(
@@ -406,8 +406,7 @@ def builder_node(state: "AgentState") -> dict:
         from agents.mortality.agents.llm_config import get_llm_config
         cfg = get_llm_config("builder.llm")
         _bstage("BUILDER.1",
-                f"Appel LLM (model={cfg.get('model', '?')}, tools={len(tools)}, "
-                f"history={len(messages)} messages)")  # HOTFIX-pre-refacto-2026-05 (Bug 7)
+                f"Le Builder réfléchit ({cfg.get('model', '?')})…")  # HOTFIX-pre-refacto-2026-05 (Bug 7)
         response = call_with_retry(
             client,
             model=cfg["model"],
@@ -462,10 +461,17 @@ def builder_node(state: "AgentState") -> dict:
         "n_tool_calls":       len(msg_obj.tool_calls or []),
     })
     # HOTFIX-pre-refacto-2026-05 (Bug 7) — Stage BUILDER.2 (réponse LLM)
-    _bstage("BUILDER.2",
-            f"Réponse LLM (finish_reason={choice.finish_reason}, "
-            f"tokens={usage.total_tokens if usage else '?'}, "
-            f"tool_calls={len(msg_obj.tool_calls or [])})")
+    _n_calls = len(msg_obj.tool_calls or [])
+    if _n_calls > 0:
+        _tool_names = [tc.function.name for tc in (msg_obj.tool_calls or [])
+                       if hasattr(tc, "function")]
+        _short = ", ".join(_tool_names[:3]) + ("…" if len(_tool_names) > 3 else "")
+        _bstage("BUILDER.2",
+                f"Décision : {_n_calls} outil(s) à exécuter ({_short})")
+    else:
+        _toks = usage.total_tokens if usage else "?"
+        _bstage("BUILDER.2",
+                f"Réponse textuelle reçue ({_toks} tokens)")
 
     data_store["_builder_turns"] = data_store.get("_builder_turns", 0) + 1
 
@@ -493,8 +499,16 @@ def builder_node(state: "AgentState") -> dict:
         detected_signal = "NEED_DATA"
     # HOTFIX-pre-refacto-2026-05 (Bug 7) — Stage BUILDER.3 (parsing + signal)
     n_tc = len(msg_obj.tool_calls or [])
-    _bstage("BUILDER.3",
-            f"Parsing : tool_calls={n_tc} | Signal={detected_signal or 'aucun'}")
+    if detected_signal == "BUILD_DONE":
+        _bstage("BUILDER.3", "Calculs terminés ✓ — retour au Master")
+    elif detected_signal == "HANDOFF_WRITER":
+        _bstage("BUILDER.3", "Transmission au WriterAgent")
+    elif detected_signal == "NEED_DATA":
+        _bstage("BUILDER.3", "Données manquantes signalées au Master")
+    elif n_tc > 0:
+        _bstage("BUILDER.3", f"{n_tc} outil(s) prêt(s) à lancer")
+    else:
+        _bstage("BUILDER.3", "En attente d'instructions complémentaires")
     if detected_signal in ("BUILD_DONE", "HANDOFF_WRITER"):
         result["active_agent"] = "master"
     return result

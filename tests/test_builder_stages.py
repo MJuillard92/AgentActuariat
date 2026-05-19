@@ -80,7 +80,8 @@ def test_builder_stage_2_includes_finish_reason():
     stages = _extract_stage_events(result.get("events"))
     b2 = next((s for s in stages if s["stage"] == "BUILDER.2"), None)
     assert b2 is not None
-    assert "stop" in b2["label"]
+    # Nouveau label user-friendly (Bug 13) : "Réponse textuelle reçue" ou "Décision : N outil(s)"
+    assert ("Réponse textuelle" in b2["label"]) or ("outil" in b2["label"]), b2["label"]
 
 
 def test_builder_stage_3_detects_build_done_signal():
@@ -97,7 +98,8 @@ def test_builder_stage_3_detects_build_done_signal():
     stages = _extract_stage_events(result.get("events"))
     b3 = next((s for s in stages if s["stage"] == "BUILDER.3"), None)
     assert b3 is not None
-    assert "BUILD_DONE" in b3["label"]
+    # Nouveau label user-friendly (Bug 13) : "Calculs terminés ✓"
+    assert "Calculs terminés" in b3["label"], b3["label"]
     # Et active_agent=master (signal détecté)
     assert result.get("active_agent") == "master"
 
@@ -116,6 +118,7 @@ def test_builder_stage_3_handles_no_signal():
     stages = _extract_stage_events(result.get("events"))
     b3 = next((s for s in stages if s["stage"] == "BUILDER.3"), None)
     assert b3 is not None
-    assert "aucun" in b3["label"]
+    # Nouveau label user-friendly (Bug 13) : "En attente d'instructions"
+    assert "attente" in b3["label"].lower(), b3["label"]
     # Pas de transition active_agent
     assert "active_agent" not in result or result.get("active_agent") != "master"

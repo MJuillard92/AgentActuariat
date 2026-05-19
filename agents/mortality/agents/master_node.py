@@ -334,12 +334,12 @@ def master_node(state: "AgentState") -> dict:
         voit la résolution d'une question pendante (jusqu'ici muette).
         """
         _stage("0.d-pending",
-               f"Résolution pending '{pending_key}' (déterministe, pas de LLM)")
+               f"Réponse à la question '{pending_key}' (lecture directe)")
         if route_to:
-            _stage("0.e-pending", f"Décision pending: {decision} → {route_to}")
+            _stage("0.e-pending", f"Décision : {decision} → {route_to}")
         else:
-            _stage("0.e-pending", f"Décision pending: {decision}")
-    _stage("0.a", "Récupération de la mémoire de session")
+            _stage("0.e-pending", f"Décision : {decision}")
+    _stage("0.a", "Mémoire de session chargée")
 
     # ── 1. WRITE_DONE : cycle complet — nettoyer et terminer ─────────────────
     # IMPORTANT (cf. Bug #7 BUILD_DONE) : un <WRITE_DONE> n'est valide que si
@@ -427,7 +427,7 @@ def master_node(state: "AgentState") -> dict:
         )
         last_human_text = getattr(last_real_human, "content", "") or ""
         if is_capability_question(last_human_text):
-            _stage("0.cap", "Question méta-capacité — réponse depuis registry")
+            _stage("0.cap", "Question sur les capacités → réponse depuis le registre")
             answer_md = format_capabilities_answer()
             from langchain_core.messages import AIMessage as _AIMsg
             buffered = data_store.pop("_stage_buffer", []) or []
@@ -535,7 +535,7 @@ def master_node(state: "AgentState") -> dict:
         from agents.master.question_filter import extract_user_answer
         last_text = getattr(last_real_human, "content", "") or ""
         ctx_key = pending.get("context_key", "?")
-        _stage("0.c", f"Réponse à une question pendante ({ctx_key})")
+        _stage("0.c", f"Traitement de votre réponse ({ctx_key})")
 
         # ─── Désambiguation méthodes : déléguée à agents.master ──────────
         # Toute la logique (méta-question, branches auto/préciser,
@@ -709,7 +709,7 @@ def master_node(state: "AgentState") -> dict:
                 })
             # Normalisation automatique des records si les deux mappings
             # sont confirmés (US-14). No-op si l'un des drapeaux manque.
-            _stage("0.b", "Préparation du fichier propre (Parquet normalisé)")
+            _stage("0.b", "Fichier normalisé (colonnes, dates, sentinelles)")
             try:
                 from agents.master.disambiguation import maybe_normalize_records
                 df_json_for_norm: str | None = None
@@ -799,13 +799,13 @@ def master_node(state: "AgentState") -> dict:
                                         else "D'accord, je lance les calculs sans rapport."),
             }
         else:
-            _stage("0.d", "Classification de l'intention (LLM)")
+            _stage("0.d", "Analyse de la demande utilisateur")
             classification = _classify_intent(
                 last_human, data_store, dataset_ref,
                 _stage=_stage, history=_classify_history,
             )
     else:
-        _stage("0.d", "Classification de l'intention (LLM)")
+        _stage("0.d", "Analyse de la demande utilisateur")
         classification = _classify_intent(
             last_human, data_store, dataset_ref,
             _stage=_stage, history=_classify_history,
@@ -920,7 +920,7 @@ def master_node(state: "AgentState") -> dict:
         # ici pour éviter de router vers Builder + hallucination de colonnes.
         has_data = bool(dataset_ref or data_store.get("_dataset_ref"))
         if not has_data:
-            _stage("0.e", "Refus : calcul demandé sans dataset chargé")
+            _stage("0.e", "Refus : aucun fichier de données chargé")
             refusal = (
                 "Pour construire une table de mortalité, j'ai besoin d'un "
                 "fichier CSV de portefeuille. Uploadez votre fichier "
@@ -1108,7 +1108,7 @@ def master_node(state: "AgentState") -> dict:
                 + hint_extra
                 + "Émets <BUILD_DONE> quand toutes les clés ci-dessus sont dans le data_store."
             )
-            _stage("0.e", "Décision : route vers Builder (calculs)")
+            _stage("0.e", "Décision : lancer les calculs (Builder)")
             return _ret({
                 "messages":     [HumanMessage(content=instr, additional_kwargs={"source": "master_synthetic"})],
                 "events":       new_events,
@@ -1118,7 +1118,7 @@ def master_node(state: "AgentState") -> dict:
 
         # ── Toutes les clés sont présentes : route selon write ──────────────
         if write == "yes":
-            _stage("0.e", "Décision : route vers Writer (rédaction PDF)")
+            _stage("0.e", "Décision : produire le rapport PDF (Writer)")
             return _ret({
                 "messages":     [],
                 "events":       new_events,
@@ -1143,7 +1143,7 @@ def master_node(state: "AgentState") -> dict:
         # Sinon (cas rare : message intent=question sans signal interrogatif,
         # ex: "fais-moi une description"), on fallback sur respond_conversationally
         # qui utilise le LLM mini + tool-calling.
-        _stage("0.e", "Décision : délégation à l'agent RAG (mode question)")
+        _stage("0.e", "Décision : question doctrinale → agent RAG")
         from agents.master.method_choices import is_meta_question
         if is_meta_question(last_human):
             # Flush du stage buffer dans les events pour visibilité immédiate UI
