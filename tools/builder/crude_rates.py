@@ -101,6 +101,35 @@ import pandas as pd
 from tools.builder._nb_loader import load_nb
 
 
+def _clip_sentinel_dates_in_df(df: pd.DataFrame) -> pd.DataFrame:
+    """HOTFIX-pre-refacto-2026-05 (Bug 11) — Defense in depth.
+
+    Clippe les dates sentinelles (31/12/2999, 31/12/2099, ...) AVANT
+    pd.to_datetime, sinon OverflowError sur les dates hors plage pandas
+    [1677, 2262]. Devrait déjà être fait à la normalisation
+    (disambiguation._parse_and_clip_dates) mais on duplique ici comme
+    filet de sécurité — le KM crashait quand df_indiv venait du dataset
+    original (fallback de DatasetStore.load_preferring_normalized).
+    """
+    import re
+    if df is None or len(df) == 0:
+        return df
+    df = df.copy()
+    # Patterns d'années > 2099 (catch-all : tout XXXX >= 2099 dans la string)
+    sentinel_re = re.compile(r"\b(?:209\d|2[1-9]\d{2}|[3-9]\d{3})\b")
+    for col in ("date_sortie", "date_entree", "date_naissance"):
+        if col not in df.columns:
+            continue
+        as_str = df[col].astype(str)
+        mask = as_str.str.contains(sentinel_re, na=False)
+        if mask.any():
+            # Pour date_sortie : remplace par NaT (sera traité comme actif/censuré).
+            # Pour date_entree/date_naissance : on ne devrait PAS avoir de sentinelles,
+            # mais par sécurité on neutralise aussi.
+            df.loc[mask, col] = pd.NaT
+    return df
+
+
 def run(data: dict | None, params: dict | None = None) -> dict:
     data = data or {}
     params = params or {}
@@ -122,6 +151,8 @@ def run(data: dict | None, params: dict | None = None) -> dict:
         df_records = data.get("cleaned_records")
         if df_records and isinstance(df_records, list):
             df_indiv = pd.DataFrame(df_records)
+            # HOTFIX-pre-refacto-2026-05 (Bug 11) — defense in depth
+            df_indiv = _clip_sentinel_dates_in_df(df_indiv)
         else:
             # Fallback : charger le Parquet normalisé en priorité (colonnes
             # canoniques + dates parsées + sentinelles clippées). Sinon
@@ -136,6 +167,8 @@ def run(data: dict | None, params: dict | None = None) -> dict:
                 df_indiv = DatasetStore.load_preferring_normalized(data, ref)
                 if df_indiv is None:
                     raise FileNotFoundError(f"aucun dataset chargeable pour session {ref}")
+                # HOTFIX-pre-refacto-2026-05 (Bug 11) — defense in depth
+                df_indiv = _clip_sentinel_dates_in_df(df_indiv)
             except Exception as exc:
                 return {"erreur": f"impossible de charger le DataFrame pour KM : {exc}"}
         if df_indiv is None or len(df_indiv) == 0:
