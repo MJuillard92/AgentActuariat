@@ -76,11 +76,18 @@ def _llm_classify(
     has_data: bool,
     has_calcs: bool,
     known_context: dict | None = None,
+    _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2)
 ) -> dict:
     """Appel OpenAI — JSON mode, modèle configuré, temp=0."""
     import openai
     from agents.mortality.agents._utils import call_with_retry
     from agents.mortality.agents.llm_config import get_llm_config
+
+    def _emit(sid: str, label: str) -> None:
+        if _stage:
+            _stage(sid, label)
+
+    _emit("0.d.1", "Contexte construit (has_data, has_calcs)")
 
     ctx = (
         f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
@@ -164,6 +171,7 @@ def _llm_classify(
 
     cfg = get_llm_config("master.classify_intent")
     client = openai.OpenAI(timeout=30.0)  # HOTFIX-pre-refacto-2026-05 (Bug 4)
+    _emit("0.d.2", "Prompt envoyé au LLM (classification)")
     resp = call_with_retry(
         client,
         model=cfg["model"],
@@ -172,7 +180,9 @@ def _llm_classify(
         max_tokens=cfg.get("max_tokens", 400),
         temperature=cfg.get("temperature", 0.0),
     )
-    return json.loads(resp.choices[0].message.content or "{}")
+    parsed = json.loads(resp.choices[0].message.content or "{}")
+    _emit("0.d.3", f"Intention reçue (kind={parsed.get('kind', '?')})")
+    return parsed
 
 
 # ── Point d'entrée public ──────────────────────────────────────────────────
@@ -183,6 +193,7 @@ def classify_intent(
     has_data: bool = False,
     has_calcs: bool = False,
     known_context: dict | None = None,
+    _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2) — callback (id, label) -> None
 ) -> dict:
     """Classifie une demande utilisateur en 3 axes avec score de confiance.
 
@@ -204,7 +215,7 @@ def classify_intent(
     """
     try:
         parsed = _llm_classify(last_human, has_data, has_calcs,
-                               known_context=known_context)
+                               known_context=known_context, _stage=_stage)
     except Exception as exc:
         print(f"[classify_intent] LLM error: {exc}", file=sys.stderr)
         return {

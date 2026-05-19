@@ -162,7 +162,12 @@ def _extract_gender_from_text(text: str) -> str | None:
     return extract_gender_from_text(text)
 
 
-def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None) -> dict:
+def _classify_intent(
+    last_human: str,
+    data_store: dict,
+    dataset_ref: str | None,
+    _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2)
+) -> dict:
     """Wrapper rétro-compat. Voir `agents.master.classify_intent`.
 
     Calcule has_data / has_calcs depuis le contexte mortalité (builder_keys
@@ -190,6 +195,7 @@ def _classify_intent(last_human: str, data_store: dict, dataset_ref: str | None)
     return _generic_classify(
         last_human, has_data=has_data, has_calcs=has_calcs,
         known_context=known or None,
+        _stage=_stage,
     )
 
 
@@ -745,10 +751,10 @@ def master_node(state: "AgentState") -> dict:
             }
         else:
             _stage("0.d", "Classification de l'intention (LLM)")
-            classification = _classify_intent(last_human, data_store, dataset_ref)
+            classification = _classify_intent(last_human, data_store, dataset_ref, _stage=_stage)
     else:
         _stage("0.d", "Classification de l'intention (LLM)")
-        classification = _classify_intent(last_human, data_store, dataset_ref)
+        classification = _classify_intent(last_human, data_store, dataset_ref, _stage=_stage)
     intent       = classification.get("intent", "unclear")
     reply        = classification.get("reply", "")
     kind         = classification.get("kind", "task")

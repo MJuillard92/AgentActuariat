@@ -24,7 +24,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 def _fake_classify_returns(kind="task", write="ask", report_mode="full_report"):
     """Helper : produit un mock _classify_intent retournant des axes contrôlés."""
-    def _f(last_human, data_store, dataset_ref):
+    def _f(last_human, data_store, dataset_ref, **kwargs):
+        # **kwargs absorbe _stage (HOTFIX-pre-refacto-2026-05 Bug 2) et tout
+        # autre paramètre ajouté dans l'évolution future.
         return {
             "kind":        kind,
             "write":       write,

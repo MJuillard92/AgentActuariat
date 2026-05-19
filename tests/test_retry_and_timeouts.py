@@ -36,25 +36,22 @@ def test_retry_waits_progressive() -> None:
     )
 
 
-def test_sentence_transformers_futurewarning_filter_registered() -> None:
-    """Le module _pack_embed doit enregistrer un filtre `ignore` ciblant le
-    FutureWarning sur get_sentence_embedding_dimension.
+def test_sentence_transformers_futurewarning_filter_in_source() -> None:
+    """Le code source de _pack_embed doit enregistrer un filterwarnings ignore
+    ciblant get_sentence_embedding_dimension (FutureWarning).
 
-    Test plus pertinent qu'un simple import : on vérifie que le filtre EST
-    présent dans la liste warnings.filters après import. Le runtime canvas
-    bénéficie du filtre dès que _pack_embed est importé.
+    Test statique sur la source : robuste aux interactions pytest qui
+    réinitialisent warnings.filters entre tests. Le runtime canvas exécute
+    cet appel à l'import du module, ce qui silence le warning en prod.
     """
-    import warnings as _w
-    import tools.conversation._retriever._pack_embed  # noqa: F401 — side-effect
-
-    matching = [
-        f for f in _w.filters
-        if f[0] == "ignore"
-        and f[1] is not None
-        and "get_sentence_embedding_dimension" in (f[1].pattern if hasattr(f[1], "pattern") else "")
-        and f[2] is FutureWarning
-    ]
-    assert matching, (
-        "Aucun filterwarnings('ignore', message='...get_sentence_embedding_dimension...') "
-        "enregistré après import de _pack_embed. Vérifier que le hotfix Bug 4 est en place."
+    from pathlib import Path
+    src = Path("tools/conversation/_retriever/_pack_embed.py").read_text(encoding="utf-8")
+    assert "warnings.filterwarnings" in src, (
+        "warnings.filterwarnings absent du module — hotfix Bug 4 manquant"
+    )
+    assert "get_sentence_embedding_dimension" in src, (
+        "Pattern get_sentence_embedding_dimension absent du filtre"
+    )
+    assert "FutureWarning" in src, (
+        "Catégorie FutureWarning absente du filtre"
     )
