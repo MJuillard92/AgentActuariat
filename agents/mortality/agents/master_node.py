@@ -915,6 +915,27 @@ def master_node(state: "AgentState") -> dict:
         intent = "question"
 
     if intent in ("build_only", "build_and_write"):
+        # ── HOTFIX-pre-refacto-2026-05 (Bug 6) — Garde dataset_ref ──────────
+        # classify_intent connaît has_data mais ne bloque pas. Refus poli
+        # ici pour éviter de router vers Builder + hallucination de colonnes.
+        has_data = bool(dataset_ref or data_store.get("_dataset_ref"))
+        if not has_data:
+            _stage("0.e", "Refus : calcul demandé sans dataset chargé")
+            refusal = (
+                "Pour construire une table de mortalité, j'ai besoin d'un "
+                "fichier CSV de portefeuille. Uploadez votre fichier "
+                "(colonnes attendues : date_naissance, date_entree, "
+                "date_sortie, cause_sortie, sexe…) puis reformulez votre "
+                "demande."
+            )
+            return _ret({
+                "messages":   [LCAIMessage(content=refusal)],
+                "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                               {"type": "message",      "content": refusal},
+                               {"type": "done"}],
+                "data_store": data_store,
+            })
+
         # ── Désambiguation write=ask AVANT de lancer le Builder ──────────────
         # Objectif : ne pas exécuter un pipeline coûteux si l'utilisateur n'est
         # pas sûr de vouloir un rapport. On pose la question UNE FOIS.
