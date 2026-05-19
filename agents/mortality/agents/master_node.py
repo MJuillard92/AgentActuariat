@@ -619,16 +619,16 @@ def master_node(state: "AgentState") -> dict:
         data_store.pop("_master_builder_cycles", None)
         write = data_store.get("_write", "yes")
         if write == "yes":
-            return {
+            return _ret({
                 "messages": [],
                 "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
                              {"type": "message",
                               "content": "Calculs terminés — lancement du WriterAgent."}],
                 "active_agent": "writer",
                 "data_store":   data_store,
-            }
+            })
         # write=no (ou fallback d'un ask non résolu) : données prêtes, on termine.
-        return {
+        return _ret({
             "messages": [],
             "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
                          {"type": "message",
@@ -636,7 +636,7 @@ def master_node(state: "AgentState") -> dict:
                                      "dis-moi si tu veux un rapport."},
                          {"type": "done"}],
             "data_store": data_store,
-        }
+        })
 
     # ── 3. NEED_DATA : re-router vers Builder avec liste précise ─────────────
     _STUDY_PLAN_FIELDS = {
@@ -657,7 +657,7 @@ def master_node(state: "AgentState") -> dict:
                 + "Lance uniquement les outils manquants puis émet <BUILD_DONE>."
             )
             data_store["_need_data_attempts"] = attempts + 1
-            return {
+            return _ret({
                 "messages":     [HumanMessage(content=instr, additional_kwargs={"source": "master_synthetic"})],
                 "events":       [{"type": "agent_switch", "agent": "MasterAgent"},
                                  {"type": "message",
@@ -665,7 +665,7 @@ def master_node(state: "AgentState") -> dict:
                                              f"— tentative {attempts + 1}/2."}],
                 "active_agent": "builder",
                 "data_store":   data_store,
-            }
+            })
         elif not builder_fields:
             print(f"[MasterAgent] NEED_DATA study_plan uniquement ({need_data_fields}) "
                   "— mode dégradé.", file=sys.stderr)
@@ -684,7 +684,7 @@ def master_node(state: "AgentState") -> dict:
                 disam = {"status": "ready"}
 
             if disam["status"] == "needs_input":
-                return {
+                return _ret({
                     "messages": [],
                     "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
                                  {"type": "disambiguation_required",
@@ -697,16 +697,16 @@ def master_node(state: "AgentState") -> dict:
                                   "df_columns":                disam.get("df_columns", []),
                                   "form_fields":               disam.get("form_fields", [])}],
                     "data_store": data_store,
-                }
+                })
             elif disam["status"] == "unclear":
-                return {
+                return _ret({
                     "messages": [],
                     "events":   [{"type": "agent_switch", "agent": "MasterAgent"},
                                  {"type": "message",
                                   "content": disam.get("message",
                                              "Je n'ai pas bien compris. Pouvez-vous préciser ?")}],
                     "data_store": data_store,
-                }
+                })
             # Normalisation automatique des records si les deux mappings
             # sont confirmés (US-14). No-op si l'un des drapeaux manque.
             _stage("0.b", "Préparation du fichier propre (Parquet normalisé)")
@@ -844,12 +844,12 @@ def master_node(state: "AgentState") -> dict:
                 "• si vous voulez un rapport PDF ou juste les calculs ;\n"
                 "• une table unisex ou des tables H/F séparées ?"
             )
-            return {
+            return _ret({
                 "messages":   [LCAIMessage(content=q_text)],
                 "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
                                {"type": "message", "content": q_text}],
                 "data_store": data_store,
-            }
+            })
         # Compteur épuisé : on exécute quand même en mode dégradé.
         data_store["_reformulation_attempts"] = 0
     else:
@@ -942,11 +942,11 @@ def master_node(state: "AgentState") -> dict:
         if write == "ask" and not data_store.get("_write_question_asked"):
             data_store["_write_question_asked"] = True
             q = "Voulez-vous que je génère un rapport PDF à la fin des calculs ?"
-            return {
+            return _ret({
                 "messages":     [LCAIMessage(content=q)],
                 "events":       new_events + [{"type": "message", "content": q}],
                 "data_store":   data_store,
-            }
+            })
 
         # ── Désambiguation gender_segmentation AVANT le Builder ─────────────
         # Master doit savoir si l'analyse est unisex (table agrégée) ou by_sex
@@ -963,12 +963,12 @@ def master_node(state: "AgentState") -> dict:
                 "default":     "unisex",
             }
             q_msg = LCAIMessage(content=data_store["_pending_need"]["question"])
-            return {
+            return _ret({
                 "messages":     [q_msg],
                 "events":       new_events + [{"type": "message",
                                                 "content": data_store["_pending_need"]["question"]}],
                 "data_store":   data_store,
-            }
+            })
 
         # ── Désambiguation choix de méthodes (délégué à agents.master) ──────
         from agents.master.method_choices import build_methods_meta_pending_need
@@ -980,12 +980,12 @@ def master_node(state: "AgentState") -> dict:
                 and not data_store.get("_methods_question_done")):
             data_store["_pending_need"] = meta_pn
             q_msg = LCAIMessage(content=meta_pn["question"])
-            return {
+            return _ret({
                 "messages":   [q_msg],
                 "events":     new_events + [{"type": "message",
                                               "content": meta_pn["question"]}],
                 "data_store": data_store,
-            }
+            })
 
         # ── Sections actives dérivées de report_mode + gender_segmentation ──
         active_sections = _sections_for_mode(report_mode, gender)
@@ -1029,12 +1029,12 @@ def master_node(state: "AgentState") -> dict:
                     ),
                 })
                 new_events.append({"type": "done"})
-                return {
+                return _ret({
                     "messages":     [],
                     "events":       new_events,
                     "active_agent": "master",
                     "data_store":   data_store,
-                }
+                })
 
             # Limite portée à 6 : le mode full_report nécessite ~5 batchs
             # de tools (descriptifs → crude_rates → smoothing → validation
@@ -1050,12 +1050,12 @@ def master_node(state: "AgentState") -> dict:
                 # graph.py:_should_continue_master retourne END (sinon il
                 # voit active_agent="builder" de l'étape précédente et
                 # reboucle indéfiniment).
-                return {
+                return _ret({
                     "messages":     [],
                     "events":       new_events,
                     "active_agent": "master",
                     "data_store":   data_store,
-                }
+                })
 
             # Détecter si l'intention de l'utilisateur est suffisamment
             # explicite pour skipper la phase de confirmation (cf. step3_client_
