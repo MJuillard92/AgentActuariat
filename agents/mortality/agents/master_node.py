@@ -167,6 +167,7 @@ def _classify_intent(
     data_store: dict,
     dataset_ref: str | None,
     _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2)
+    history: list[dict] | None = None,  # HOTFIX-pre-refacto-2026-05 (Bug 1)
 ) -> dict:
     """Wrapper rétro-compat. Voir `agents.master.classify_intent`.
 
@@ -196,6 +197,7 @@ def _classify_intent(
         last_human, has_data=has_data, has_calcs=has_calcs,
         known_context=known or None,
         _stage=_stage,
+        history=history,
     )
 
 
@@ -705,6 +707,21 @@ def master_node(state: "AgentState") -> dict:
     if not last_human:
         return {"messages": [], "events": [], "data_store": data_store}
 
+    # ── 5.bis. Historique pour classify_intent ───────────────────────────────
+    # HOTFIX-pre-refacto-2026-05 (Bug 1) : sans historique, classify_intent
+    # confond les continuations RAG (« ok, mais pour calculer ... ? ») avec
+    # de nouvelles tâches. On passe les 8 derniers messages
+    # user/assistant (= ~4 tours). _build_history_block les tronquera ensuite.
+    from langchain_core.messages import HumanMessage as _HM, AIMessage as _AM
+    _classify_history = [
+        {
+            "role":    "user" if isinstance(m, _HM) else "assistant",
+            "content": str(getattr(m, "content", "") or ""),
+        }
+        for m in (messages_list or [])[-8:]
+        if isinstance(m, (_HM, _AM)) and getattr(m, "content", None)
+    ]
+
     # ── 5a. Court-circuit : réponse à la question PDF en attente ─────────────
     # Si `_write_question_asked=True`, Master a posé la question "voulez-vous
     # un PDF ?" au tour précédent. La réponse de l'utilisateur ("oui"/"non"/
@@ -751,10 +768,16 @@ def master_node(state: "AgentState") -> dict:
             }
         else:
             _stage("0.d", "Classification de l'intention (LLM)")
-            classification = _classify_intent(last_human, data_store, dataset_ref, _stage=_stage)
+            classification = _classify_intent(
+                last_human, data_store, dataset_ref,
+                _stage=_stage, history=_classify_history,
+            )
     else:
         _stage("0.d", "Classification de l'intention (LLM)")
-        classification = _classify_intent(last_human, data_store, dataset_ref, _stage=_stage)
+        classification = _classify_intent(
+            last_human, data_store, dataset_ref,
+            _stage=_stage, history=_classify_history,
+        )
     intent       = classification.get("intent", "unclear")
     reply        = classification.get("reply", "")
     kind         = classification.get("kind", "task")

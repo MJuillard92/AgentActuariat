@@ -71,12 +71,45 @@ def _derive_legacy_intent(kind: str, write: str) -> str:
 
 # ── Appel LLM ──────────────────────────────────────────────────────────────
 
+def _build_history_block(history: list[dict] | None) -> str:
+    """Construit un bloc texte récapitulant les derniers tours de conversation,
+    tronqué pour ne pas exploser le prompt.
+
+    HOTFIX-pre-refacto-2026-05 (Bug 1) : sans contexte, classify_intent
+    confond les continuations RAG (« ok, mais pour calculer ... ? ») avec
+    de nouvelles tâches.
+
+    Règles :
+      - garde les 4 derniers messages user/assistant
+      - chaque contenu capé à 300 caractères
+      - si vide ou None, retourne ""
+    """
+    if not history:
+        return ""
+    recent = history[-4:]
+    lines: list[str] = []
+    for m in recent:
+        role = m.get("role", "user")
+        label = "User" if role == "user" else "Assistant"
+        snippet = str(m.get("content", ""))[:300]
+        if snippet:
+            lines.append(f"{label}: {snippet}")
+    if not lines:
+        return ""
+    return (
+        "=== HISTORIQUE RÉCENT (4 derniers tours, contenu condensé) ===\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 def _llm_classify(
     last_human: str,
     has_data: bool,
     has_calcs: bool,
     known_context: dict | None = None,
     _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2)
+    history: list[dict] | None = None,  # HOTFIX-pre-refacto-2026-05 (Bug 1)
 ) -> dict:
     """Appel OpenAI — JSON mode, modèle configuré, temp=0."""
     import openai
@@ -88,6 +121,8 @@ def _llm_classify(
             _stage(sid, label)
 
     _emit("0.d.1", "Contexte construit (has_data, has_calcs)")
+
+    history_block = _build_history_block(history)
 
     ctx = (
         f"Fichier CSV chargé : {'oui' if has_data else 'non'}. "
@@ -115,10 +150,18 @@ def _llm_classify(
     prompt = (
         "Tu es un routeur pour un système actuariel. Classifie la demande "
         "en 4 axes orthogonaux ET fournis un score de confiance global.\n\n"
+        + history_block +
         "=== AXES ===\n\n"
         "Axe 1 — kind :\n"
         "  - task      : calculs / rapport / action concrète\n"
-        "  - question  : explication, conversation hors calculs\n\n"
+        "  - question  : explication, conversation hors calculs\n"
+        "  IMPORTANT — Continuation doctrinale : si l'historique récent contient\n"
+        "  une réponse de type doctrinal/explicatif (méthodes, formules, définitions)\n"
+        "  ET que le dernier message utilisateur est une précision/relance sur le\n"
+        "  même sujet (mots-clés : 'ok mais', 'et pour', 'comment calculer',\n"
+        "  'comment estimer', 'qu'en est-il de', 'et concernant', SANS verbe\n"
+        "  d'action clair type 'lance', 'calcule', 'génère', 'construit'),\n"
+        "  classer kind='question' (continuation RAG), PAS kind='task'.\n\n"
         "Axe 2 — write (uniquement si kind=task) :\n"
         "  - yes : l'utilisateur veut un rapport PDF (mots-clés clairs : "
         "          'rapport', 'PDF', 'document', 'rédige', ou réponse 'oui' "
@@ -194,6 +237,7 @@ def classify_intent(
     has_calcs: bool = False,
     known_context: dict | None = None,
     _stage=None,  # HOTFIX-pre-refacto-2026-05 (Bug 2) — callback (id, label) -> None
+    history: list[dict] | None = None,  # HOTFIX-pre-refacto-2026-05 (Bug 1)
 ) -> dict:
     """Classifie une demande utilisateur en 3 axes avec score de confiance.
 
@@ -215,7 +259,8 @@ def classify_intent(
     """
     try:
         parsed = _llm_classify(last_human, has_data, has_calcs,
-                               known_context=known_context, _stage=_stage)
+                               known_context=known_context, _stage=_stage,
+                               history=history)
     except Exception as exc:
         print(f"[classify_intent] LLM error: {exc}", file=sys.stderr)
         return {
