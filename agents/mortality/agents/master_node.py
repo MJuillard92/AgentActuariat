@@ -394,6 +394,31 @@ def master_node(state: "AgentState") -> dict:
         if content and (not history or history[-1] != content):
             history.append(content)
 
+    # ── 1b-bis. Question méta-capacité (avant tout LLM) ──────────────────────
+    # Si l'user demande "que sais-tu faire ?" / "liste tes outils" / etc.,
+    # on répond depuis le capability_registry (dict en mémoire, build au
+    # startup depuis agents/*/describe_capabilities.py). Pas d'appel LLM,
+    # pas de routing — réponse déterministe instantanée.
+    if last_real_human is not None:
+        from agents.master.capability_registry import (
+            is_capability_question, format_capabilities_answer,
+        )
+        last_human_text = getattr(last_real_human, "content", "") or ""
+        if is_capability_question(last_human_text):
+            _stage("0.cap", "Question méta-capacité — réponse depuis registry")
+            answer_md = format_capabilities_answer()
+            from langchain_core.messages import AIMessage as _AIMsg
+            buffered = data_store.pop("_stage_buffer", []) or []
+            return {
+                "messages":   [_AIMsg(content=answer_md)],
+                "events":     buffered + [
+                    {"type": "agent_switch", "agent": "MasterAgent"},
+                    {"type": "message",      "content": answer_md},
+                    {"type": "done"},
+                ],
+                "data_store": data_store,
+            }
+
     # ── 1c. Branche : need_user_input émis par le Builder ────────────────────
     # Le Builder peut émettre un AIMessage avec un marqueur additional_kwargs.
     # need_user_input. Master applique alors le filtre 3-niveaux : study_plan
