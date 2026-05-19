@@ -8,6 +8,70 @@ import time
 
 log = logging.getLogger(__name__)
 
+
+# ── Sérialisation msgpack-safe pour LangGraph MemorySaver ───────────────────
+# HOTFIX-pre-refacto-2026-05 (Bug 9) : promu depuis tools_node._msgpack_safe
+# au niveau _utils pour pouvoir être appelé par TOUS les nodes au retour,
+# pas uniquement par tools_node. Évite le crash :
+#   "Dict key must a type serializable with OPT_NON_STR_KEYS"
+# quand un tool écrit un dict avec clés int/tuple dans data_store.
+
+def msgpack_safe(obj):
+    """Convertit récursivement un objet en types Python natifs sérialisables
+    par ormsgpack (utilisé par LangGraph MemorySaver).
+
+    Couvre numpy/pandas scalaires + collections + dicts à clés non-str.
+    Ordre des checks important : numpy.bool_/integer/floating sont
+    sous-classes de bool/int/float → vérifier numpy AVANT Python natif.
+    """
+    import numpy as _np
+    import pandas as _pd
+    if obj is None:
+        return None
+    if isinstance(obj, _np.bool_):
+        return bool(obj)
+    if isinstance(obj, _np.integer):
+        return int(obj)
+    if isinstance(obj, _np.floating):
+        v = float(obj)
+        return v if v == v and v not in (float("inf"), float("-inf")) else None
+    if isinstance(obj, _np.ndarray):
+        return [msgpack_safe(x) for x in obj.tolist()]
+    if isinstance(obj, _pd.DataFrame):
+        return [msgpack_safe(r) for r in obj.to_dict(orient="records")]
+    if isinstance(obj, _pd.Series):
+        return [msgpack_safe(x) for x in obj.tolist()]
+    if isinstance(obj, _pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, float):
+        return obj if obj == obj and obj not in (float("inf"), float("-inf")) else None
+    if isinstance(obj, dict):
+        return {str(k): msgpack_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [msgpack_safe(x) for x in obj]
+    return obj
+
+
+def sanitize_node_result(result: dict) -> dict:
+    """HOTFIX-pre-refacto-2026-05 (Bug 9) : passe `data_store` et `events`
+    d'un retour de node à travers msgpack_safe avant que LangGraph ne
+    checkpointe l'état. Garantit l'absence de clés int/tuple/numpy dans
+    le state persisté.
+
+    Idempotent : safe à appeler plusieurs fois (les types déjà natifs
+    passent à travers sans transformation visible).
+    """
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+    if "data_store" in out and isinstance(out["data_store"], dict):
+        out["data_store"] = msgpack_safe(out["data_store"])
+    if "events" in out and isinstance(out["events"], list):
+        out["events"] = msgpack_safe(out["events"])
+    return out
+
 # Délais de retry en secondes. HOTFIX-pre-refacto-2026-05 (Bug 4) :
 # réduit de [15, 30, 60] (105s total) à [3, 8, 20] (31s total) pour que
 # l'utilisateur reçoive un échec rapide en cas de panne réseau, au lieu

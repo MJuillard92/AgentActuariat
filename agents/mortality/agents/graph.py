@@ -42,6 +42,7 @@ from agents.mortality.agents.builder_node import builder_node
 from agents.mortality.agents.writer_node import writer_node
 from agents.mortality.agents.rag_node import rag_node
 from agents.mortality.agents.tools_node import execute_tools
+from agents.mortality.agents._utils import sanitize_node_result  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 # ── Checkpointer global (partagé entre toutes les sessions) ──────────────────
@@ -151,24 +152,24 @@ def _should_continue_writer(state: AgentState) -> str:
 def _master_node_w(state: AgentState) -> dict:
     result = master_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "MasterAgent"})
-    return result
+    return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _builder_node_w(state: AgentState) -> dict:
     result = builder_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "BuilderAgent"})
-    return result
+    return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _writer_node_w(state: AgentState) -> dict:
     result = writer_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "WriterAgent"})
-    return result
+    return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _rag_node_w(state: AgentState) -> dict:
     """Wrapper — rag_node émet déjà agent_switch RAGAgent, on ne duplique pas."""
-    return rag_node(state)
+    return sanitize_node_result(rag_node(state))  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _tools_node_w(
@@ -177,7 +178,8 @@ def _tools_node_w(
 ):
     """Retourne un wrapper de execute_tools avec les flags step-by-step."""
     def _inner(state: AgentState) -> dict:
-        return execute_tools(state, approval_event=approval_event, cancel_flag=cancel_flag)
+        result = execute_tools(state, approval_event=approval_event, cancel_flag=cancel_flag)
+        return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
     return _inner
 
 
