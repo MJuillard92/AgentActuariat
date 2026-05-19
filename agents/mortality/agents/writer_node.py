@@ -177,10 +177,44 @@ def writer_node(state: "AgentState") -> dict:
             f"PDF généré : {result.output_path} ({result.nb_sections} sections, "
             f"status={result.status})")
 
+    # HOTFIX-pre-refacto-2026-05 (Bug 12) — Auto-trigger notebook export.
+    # Le LLM Builder appelait parfois build_pdf.generate_notebook explicitement,
+    # parfois non. On le déclenche systématiquement après PDF succès pour
+    # garantir la livraison du livrable reproductible. Best-effort : si le
+    # tool échoue, on log mais on n'invalide pas le PDF déjà généré.
+    notebook_path: str | None = None
+    try:
+        from tools.export.generate_notebook import run as _gen_nb
+        pdf_path = Path(result.output_path)
+        nb_out = str(pdf_path.with_suffix(".ipynb"))
+        nb_result = _gen_nb(
+            data_store,
+            params={
+                "output_path":    nb_out,
+                "csv_filename":   data_store.get("csv_filename", "portefeuille.csv"),
+                "portfolio_info": data_store.get("portfolio_info", ""),
+            },
+        )
+        if nb_result.get("succes") or nb_result.get("output_path"):
+            notebook_path = nb_result.get("output_path") or nb_out
+            _wstage("WRITER.5",
+                    f"Notebook reproductible généré : {notebook_path} "
+                    f"({nb_result.get('nb_cellules', '?')} cellules)")
+            new_events.append({
+                "type":        "notebook_ready",
+                "output_path": notebook_path,
+                "nb_cellules": nb_result.get("nb_cellules"),
+            })
+        else:
+            log.warning("[WriterAgent] notebook auto-gen returned no path: %r", nb_result)
+    except Exception as exc:
+        log.warning("[WriterAgent] notebook auto-gen failed (non-blocking): %s", exc)
+
     content = (
         f"Rapport généré avec succès ({result.nb_sections} sections).\n"
         f"Fichier : {result.output_path}\n"
-        f"{result.validation_summary}"
+        + (f"Notebook reproductible : {notebook_path}\n" if notebook_path else "")
+        + f"{result.validation_summary}"
         f"{warnings_text}\n\n"
         f"<WRITE_DONE: {result.output_path}>"
     )
