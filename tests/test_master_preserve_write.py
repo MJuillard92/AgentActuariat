@@ -48,10 +48,11 @@ def test_master_instruction_says_skip_confirmation_when_intent_explicit():
         "data_store":  {
             "_disambiguation_done":     True,
             "_methods_question_done":   True,
+            "_dataset_ref":             "test_session",  # bypass Bug 6 gate
             "study_plan":               {"gender_segmentation": "unisex",
                                          "methods_auto":        True},
         },
-        "dataset_ref": None,
+        "dataset_ref": "test_session",
     }
     with patch.object(mn, "_classify_intent",
                       _fake_classify_returns(write="yes", report_mode="raw_rates")):

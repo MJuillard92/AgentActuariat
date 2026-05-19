@@ -472,9 +472,10 @@ def test_master_asks_method_meta_question_when_choices_pending(monkeypatch):
         "messages":    [HumanMessage(content="taux bruts svp")],
         "data_store":  {
             "_disambiguation_done": True,
+            "_dataset_ref":         "test_session",  # bypass Bug 6 gate
             "study_plan":           {"gender_segmentation": "unisex"},
         },
-        "dataset_ref": None,
+        "dataset_ref": "test_session",
     }
     out = mn.master_node(state)
     pending = out["data_store"].get("_pending_need") or {}
@@ -490,10 +491,11 @@ def test_master_skips_method_question_when_methods_auto_already_set(monkeypatch)
         "data_store":  {
             "_disambiguation_done":   True,
             "_methods_question_done": True,
+            "_dataset_ref":           "test_session",  # bypass Bug 6 gate
             "study_plan":             {"gender_segmentation": "unisex",
                                        "methods_auto":        True},
         },
-        "dataset_ref": None,
+        "dataset_ref": "test_session",
     }
     out = mn.master_node(state)
     # méta-question NON posée → route vers Builder

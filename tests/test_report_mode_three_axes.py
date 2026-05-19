@@ -182,8 +182,10 @@ def test_master_asks_write_question_before_builder(monkeypatch):
 
     state = {
         "messages": [HumanMessage(content="construis une table de mortalité")],
-        "data_store": {"_disambiguation_done": True, "study_plan": {"gender_segmentation": "unisex"}},
-        "dataset_ref": None,
+        "data_store": {"_disambiguation_done": True,
+                       "_dataset_ref":         "test_session",  # bypass Bug 6 gate
+                       "study_plan": {"gender_segmentation": "unisex"}},
+        "dataset_ref": "test_session",
     }
     out = mn.master_node(state)
 
@@ -214,10 +216,11 @@ def test_master_routes_to_builder_when_write_yes(monkeypatch):
         "data_store": {
             "_disambiguation_done":   True,
             "_methods_question_done": True,
+            "_dataset_ref":           "test_session",  # bypass Bug 6 gate
             "study_plan":             {"gender_segmentation": "unisex",
                                        "methods_auto":        True},
         },
-        "dataset_ref": None,
+        "dataset_ref": "test_session",
     }
     out = mn.master_node(state)
     assert out.get("active_agent") == "builder"

@@ -45,6 +45,16 @@ def writer_node(state: "AgentState") -> dict:
         "type":  "agent_switch",
         "agent": "WriterAgent",
     })
+
+    # HOTFIX-pre-refacto-2026-05 (Bug 8) — Stage tracking WriterAgent.
+    # type="master_stage" pour cohérence renderer canvas (préfixe WRITER.* distingue).
+    def _wstage(stage_id: str, label: str) -> None:
+        new_events.append({"type": "master_stage", "stage": stage_id, "label": label})
+
+    report_mode = data_store.get("report_mode", "full_report")
+    _wstage("WRITER.0",
+            f"Initialisation WriterAgent (report_mode={report_mode})")
+
     new_events.append({
         "type":    "message",
         "content": "Lancement du pipeline de génération du rapport...",
@@ -57,6 +67,9 @@ def writer_node(state: "AgentState") -> dict:
     session_id  = data_store.get("session_id", "rapport")
     output_path = str(Path("/tmp") / f"rapport_{session_id}.pdf")
 
+    _wstage("WRITER.1",
+            f"Lancement pipeline rédaction (sortie : {output_path})")
+
     try:
         from agents.report.pipeline.run_pipeline import run as run_pipeline
         result = run_pipeline(
@@ -66,12 +79,21 @@ def writer_node(state: "AgentState") -> dict:
         )
     except Exception as exc:
         log.error("[WriterAgent] pipeline error : %s", exc)
+        # HOTFIX-pre-refacto-2026-05 (Bug 8)
+        _wstage("WRITER.3", f"Exception pipeline : {type(exc).__name__}")
         new_events.append({"type": "error", "message": f"Erreur pipeline WriterAgent : {exc}"})
         new_events.append({"type": "done"})
         return {"messages": [], "events": new_events}
 
+    # HOTFIX-pre-refacto-2026-05 (Bug 8)
+    _wstage("WRITER.2",
+            f"Pipeline terminé (status={result.status}, "
+            f"sections={getattr(result, 'nb_sections', '?')})")
+
     # ── Erreur technique (assemblage, reportlab, etc.) ────────────────────────
     if result.status == "error":
+        # HOTFIX-pre-refacto-2026-05 (Bug 8)
+        _wstage("WRITER.3", f"Erreur : {(result.validation_summary or '')[:100]}")
         content = f"Erreur lors de la génération du rapport : {result.validation_summary}"
         new_events.append({"type": "error", "message": content})
         new_events.append({"type": "done"})
@@ -84,6 +106,9 @@ def writer_node(state: "AgentState") -> dict:
 
     # ── Données manquantes → retour au MasterAgent ────────────────────────────
     if result.status == "need_data":
+        # HOTFIX-pre-refacto-2026-05 (Bug 8)
+        nd_str = ", ".join(result.need_data) if result.need_data else "(non identifiés)"
+        _wstage("WRITER.3", f"NEED_DATA : {nd_str[:80]}")
         # need_data vide = validation a bloqué sur des champs sans pouvoir les nommer
         if not result.need_data:
             content = (
@@ -146,6 +171,11 @@ def writer_node(state: "AgentState") -> dict:
             for a in result.anomalies
         )
         warnings_text = f"\n\n⚠ Points à noter :\n{anomaly_lines}"
+
+    # HOTFIX-pre-refacto-2026-05 (Bug 8) — Stage WRITER.4 (PDF généré)
+    _wstage("WRITER.4",
+            f"PDF généré : {result.output_path} ({result.nb_sections} sections, "
+            f"status={result.status})")
 
     content = (
         f"Rapport généré avec succès ({result.nb_sections} sections).\n"

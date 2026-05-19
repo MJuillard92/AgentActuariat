@@ -101,6 +101,7 @@ def test_master_stops_on_recurring_tool_error(monkeypatch):
         "data_store": {
             "_disambiguation_done":     True,
             "_methods_question_done":   True,
+            "_dataset_ref":             "test_session",  # bypass Bug 6 gate
             "study_plan":               {"gender_segmentation": "unisex",
                                          "methods_auto":        True},
             # Simuler : crude_rates a planté 2 fois sur la même erreur
@@ -113,7 +114,7 @@ def test_master_stops_on_recurring_tool_error(monkeypatch):
                  "has_error": True, "result_summary": {"erreur": "KeyError: date_naissance"}},
             ],
         },
-        "dataset_ref": None,
+        "dataset_ref": "test_session",
     }
     out = mn.master_node(state)
     events = out.get("events") or []
