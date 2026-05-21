@@ -67,8 +67,9 @@ def test_gate_refuses_calc_when_no_dataset() -> None:
     assert result.get("active_agent") != "builder"
 
 
-def test_gate_refuses_calc_when_dataset_raw() -> None:
-    """Fichier chargé mais pas de clone → refus + exigence de mapping."""
+def test_gate_opens_mapping_modal_when_dataset_raw() -> None:
+    """Fichier chargé mais pas de clone → le gate OUVRE le modal de mapping
+    (event disambiguation_required) au lieu de refuser à vide."""
     from agents.mortality.agents import master_node as mn
 
     data_store = {
@@ -83,11 +84,13 @@ def test_gate_refuses_calc_when_dataset_raw() -> None:
                                     "confidence": 1.0, "reply": ""}):
         result = mn.master_node(_calc_state(data_store))
 
-    text = " ".join(str(m.content) for m in (result.get("messages") or []))
-    assert "pas encore été mappé" in text or "base de données utilisable" in text
+    # Pas de routage Builder
     assert result.get("active_agent") != "builder"
-    # le mapping est forcé au tour suivant
-    assert result["data_store"].get("_disambiguation_done") is False
+    # Un event disambiguation_required est émis (ouverture du modal mapping)
+    disam = [e for e in (result.get("events") or [])
+             if e.get("type") == "disambiguation_required"]
+    assert len(disam) == 1, f"event disambiguation_required manquant : {result.get('events')}"
+    assert disam[0]["needs_column_mapping"] is True
 
 
 def test_gate_allows_calc_when_dataset_normalized() -> None:
