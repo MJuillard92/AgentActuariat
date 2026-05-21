@@ -133,17 +133,21 @@ def execute_tools(
     # contient déjà : colonnes renommées canoniques, valeurs enum mappées,
     # dates parsées en datetime64, sentinelles 2999 clippées.
     norm_path = data_store.get("dataset_ref_normalized")
+    _df_source = None  # HOTFIX-pre-refacto-2026-05 (Bug 15) — pour le stage 0.load
     if norm_path:
         try:
             from pathlib import Path
             if Path(norm_path).exists():
                 df = pd.read_parquet(norm_path)
+                _df_source = "normalisée"
         except Exception:
             df = None
     if df is None and dataset_ref:
         try:
             from session.memory_manager import MemoryManager
             df = MemoryManager(dataset_ref).load().load_dataframe()
+            if df is not None:
+                _df_source = "originale"
         except Exception:
             pass
 
@@ -205,6 +209,19 @@ def execute_tools(
     new_messages: list[ToolMessage] = []
     new_events: list[dict] = []
     pending: dict | None = None
+
+    # HOTFIX-pre-refacto-2026-05 (Bug 15) — Stage 0.load : annoncer le
+    # chargement de la base. Le DataFrame était chargé silencieusement.
+    if df is not None and _df_source is not None:
+        new_events.append({
+            "type":  "master_stage",
+            "stage": "0.load",
+            "label": (
+                f"Base de données chargée "
+                f"({len(df):,} lignes × {len(df.columns)} colonnes "
+                f"— source : {_df_source})".replace(",", " ")
+            ),
+        })
 
     for tc in tool_calls:
         fn_name = tc["name"]
