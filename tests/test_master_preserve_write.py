@@ -49,8 +49,6 @@ def test_master_instruction_says_skip_confirmation_when_intent_explicit():
             "_disambiguation_done":     True,
             "_methods_question_done":   True,
             "_dataset_ref":             "test_session",  # bypass Bug 6 gate
-            "records_normalized":       True,  # bypass Bug 22 gate
-            "dataset_ref_normalized":   "test_session_normalized.parquet",
             "study_plan":               {"gender_segmentation": "unisex",
                                          "methods_auto":        True},
         },
