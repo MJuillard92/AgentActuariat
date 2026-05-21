@@ -163,7 +163,7 @@ def crude_rates_kaplan_meier(df: pd.DataFrame,
     """
     df = df.copy()
     for col in [dob_col, entry_col, exit_col]:
-        df[col] = pd.to_datetime(df[col])
+        df[col] = pd.to_datetime(df[col], format="mixed", dayfirst=True, errors="coerce")  # HOTFIX-pre-refacto-2026-05 (Bug 14)
 
     # Compute exact ages at entry, exit, death
     df['_age_entry'] = (df[entry_col] - df[dob_col]).dt.days / 365.25

@@ -56,7 +56,7 @@ def compute_exposure_by_age(df: pd.DataFrame,
     """
     df = df.copy()
     for col in [dob_col, entry_col, exit_col]:
-        df[col] = pd.to_datetime(df[col])
+        df[col] = pd.to_datetime(df[col], format="mixed", dayfirst=True, errors="coerce")  # HOTFIX-pre-refacto-2026-05 (Bug 14)
 
     results = []
     for age in range(age_min, age_max + 1):
@@ -170,7 +170,7 @@ def compute_exposure_by_year(df: pd.DataFrame,
     """
     df = df.copy()
     for col in [dob_col, entry_col, exit_col]:
-        df[col] = pd.to_datetime(df[col])
+        df[col] = pd.to_datetime(df[col], format="mixed", dayfirst=True, errors="coerce")  # HOTFIX-pre-refacto-2026-05 (Bug 14)
 
     year_min = int(df[entry_col].dt.year.min())
     year_max = int(df[exit_col].dt.year.max())
