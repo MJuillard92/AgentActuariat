@@ -473,6 +473,8 @@ def test_master_asks_method_meta_question_when_choices_pending(monkeypatch):
         "data_store":  {
             "_disambiguation_done": True,
             "_dataset_ref":         "test_session",  # bypass Bug 6 gate
+            "records_normalized":       True,  # bypass Bug 22 gate
+            "dataset_ref_normalized":   "test_session_normalized.parquet",
             "study_plan":           {"gender_segmentation": "unisex"},
         },
         "dataset_ref": "test_session",
@@ -492,6 +494,8 @@ def test_master_skips_method_question_when_methods_auto_already_set(monkeypatch)
             "_disambiguation_done":   True,
             "_methods_question_done": True,
             "_dataset_ref":           "test_session",  # bypass Bug 6 gate
+            "records_normalized":       True,  # bypass Bug 22 gate
+            "dataset_ref_normalized":   "test_session_normalized.parquet",
             "study_plan":             {"gender_segmentation": "unisex",
                                        "methods_auto":        True},
         },

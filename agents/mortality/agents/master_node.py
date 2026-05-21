@@ -187,6 +187,31 @@ def _plan_stage_label(plan: dict) -> str:
             f"toutes les clés déjà présentes ({len(plan['required_keys'])})")
 
 
+def _dataset_state(data_store: dict, dataset_ref: str | None) -> str:
+    """État de la base de données pour cette session.
+
+    HOTFIX-pre-refacto-2026-05 (Bug 22) — le Builder ne doit JAMAIS travailler
+    sur la base brute. Seul le clone normalisé (renommage colonnes + mapping
+    valeurs + dates parsées + sentinelles clippées) constitue une base de
+    travail valide.
+
+    Retourne :
+      - 'none'       : aucun fichier chargé
+      - 'raw'        : fichier chargé mais pas encore mappé+normalisé (pas de clone)
+      - 'normalized' : clone normalisé disponible → base de travail prête
+    """
+    has_raw = bool(dataset_ref or data_store.get("_dataset_ref"))
+    if not has_raw:
+        return "none"
+    # État logique : le clone est « créé » dès que records_normalized est posé
+    # ET qu'un chemin de clone est référencé. La vérification physique du
+    # fichier parquet relève du point de chargement (load_preferring_normalized,
+    # qui retombe proprement sur l'original si le fichier a disparu).
+    if data_store.get("records_normalized") and data_store.get("dataset_ref_normalized"):
+        return "normalized"
+    return "raw"
+
+
 # ── Wrappers locaux (rétro-compat tests + signature mortality-aware) ─────────
 #
 # Les implémentations sont désormais dans `agents.master.*` (domain-agnostic).
@@ -824,7 +849,12 @@ def master_node(state: "AgentState") -> dict:
                 print(f"[MasterAgent] normalize error: {exc}", file=sys.stderr)
                 _stage("0.norm", f"Normalisation échouée : {type(exc).__name__}")
 
-            data_store["_disambiguation_done"] = True
+            # HOTFIX-pre-refacto-2026-05 (Bug 22) — la désambiguation n'est
+            # « terminée » que si le clone normalisé existe. Sinon le mapping
+            # doit être re-proposé au tour suivant (le gate base de données
+            # refusera tout calcul tant que le clone n'est pas créé).
+            if data_store.get("records_normalized"):
+                data_store["_disambiguation_done"] = True
 
     # ── 5. Classification d'intention (remplace GO_BUILD / GO_WRITE LLM) ─────
     last_human = next(
@@ -1010,11 +1040,13 @@ def master_node(state: "AgentState") -> dict:
         intent = "question"
 
     if intent in ("build_only", "build_and_write"):
-        # ── HOTFIX-pre-refacto-2026-05 (Bug 6) — Garde dataset_ref ──────────
-        # classify_intent connaît has_data mais ne bloque pas. Refus poli
-        # ici pour éviter de router vers Builder + hallucination de colonnes.
-        has_data = bool(dataset_ref or data_store.get("_dataset_ref"))
-        if not has_data:
+        # ── HOTFIX-pre-refacto-2026-05 (Bug 6/22) — Gate base de données ────
+        # Le Builder ne travaille QUE sur le clone normalisé. Trois états :
+        #   none       → aucun fichier → demander un upload
+        #   raw        → fichier chargé mais pas de clone → refuser, exiger le mapping
+        #   normalized → clone prêt → on continue
+        ds_state = _dataset_state(data_store, dataset_ref)
+        if ds_state == "none":
             _stage("0.e", "Refus : aucun fichier de données chargé")
             refusal = (
                 "Pour construire une table de mortalité, j'ai besoin d'un "
@@ -1030,6 +1062,31 @@ def master_node(state: "AgentState") -> dict:
                                {"type": "done"}],
                 "data_store": data_store,
             })
+        if ds_state == "raw":
+            # Fichier chargé mais pas de clone normalisé → pas de base de
+            # travail. On refuse le calcul et on force le passage par le
+            # mapping : _disambiguation_done remis à False pour que le tour
+            # suivant ré-ouvre l'étape de validation du mapping des colonnes.
+            _stage("0.e", "Refus : base non normalisée — mapping requis")
+            data_store["_disambiguation_done"] = False
+            data_store.pop("_pending_need", None)
+            refusal = (
+                "Votre fichier est bien chargé, mais il n'a pas encore été "
+                "mappé et normalisé : je ne dispose donc pas de base de "
+                "données utilisable. Je ne lance aucun calcul sur des "
+                "données brutes.\n\n"
+                "Validez d'abord le mapping des colonnes (le dictionnaire de "
+                "données proposé) — la base normalisée de travail sera alors "
+                "créée — puis reformulez votre demande de calcul."
+            )
+            return _ret({
+                "messages":   [LCAIMessage(content=refusal)],
+                "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                               {"type": "message",      "content": refusal},
+                               {"type": "done"}],
+                "data_store": data_store,
+            })
+        # ds_state == "normalized" → base de travail prête, on continue
 
         # ── Désambiguation write=ask AVANT de lancer le Builder ──────────────
         # Objectif : ne pas exécuter un pipeline coûteux si l'utilisateur n'est

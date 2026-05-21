@@ -24,6 +24,8 @@ def _state_for_builder_routing():
             "_disambiguation_done":   True,
             "_methods_question_done": True,
             "_dataset_ref":           "test_session",
+            "records_normalized":       True,  # bypass Bug 22 gate
+            "dataset_ref_normalized":   "test_session_normalized.parquet",
             "study_plan":             {"gender_segmentation": "unisex"},
         },
         "dataset_ref": "test_session",
