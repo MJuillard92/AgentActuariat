@@ -212,57 +212,6 @@ def _dataset_state(data_store: dict, dataset_ref: str | None) -> str:
     return "raw"
 
 
-def _format_clone_notice(audit: dict) -> str:
-    """Message visible décrivant la création du clone normalisé et les
-    modifications appliquées. HOTFIX-pre-refacto-2026-05 (Bug 23).
-
-    `audit` = data_store["_audit"]["normalization"] produit par
-    maybe_normalize_records (column_mapping, value_mapping, rows_in/out,
-    observation_end).
-    """
-    lines = [
-        "✅ Base de données de travail créée (clone normalisé — "
-        "le fichier original reste intact).",
-        "",
-        "Modifications appliquées :",
-    ]
-
-    col_map = audit.get("column_mapping") or {}
-    renames = [f"{csv} → {canon}" for canon, csv in col_map.items() if csv]
-    if renames:
-        lines.append("• Colonnes renommées : " + ", ".join(renames))
-
-    val_map = audit.get("value_mapping") or {}
-    val_parts = []
-    for col, mp in val_map.items():
-        if isinstance(mp, dict) and mp:
-            pairs = ", ".join(f"{o}→{c}" for o, c in mp.items())
-            val_parts.append(f"{col} ({pairs})")
-    if val_parts:
-        lines.append("• Valeurs normalisées : " + " ; ".join(val_parts))
-
-    lines.append(
-        "• Dates converties au format JJ/MM/AAAA ; sentinelles (31/12/2999, …) "
-        "traitées comme contrats actifs"
-    )
-
-    rows_in = audit.get("rows_in")
-    rows_out = audit.get("rows_out")
-    if rows_in is not None and rows_out is not None:
-        txt = (f"• {rows_in:,} lignes en entrée → {rows_out:,} lignes "
-               f"dans la base de travail")
-        dropped = rows_in - rows_out
-        if dropped > 0:
-            txt += f" ({dropped:,} ligne(s) exclue(s) au nettoyage)"
-        lines.append(txt.replace(",", " "))
-
-    obs_end = audit.get("observation_end")
-    if obs_end:
-        lines.append(f"• Fin d'observation détectée : {str(obs_end)[:10]}")
-
-    return "\n".join(lines)
-
-
 # ── Wrappers locaux (rétro-compat tests + signature mortality-aware) ─────────
 #
 # Les implémentations sont désormais dans `agents.master.*` (domain-agnostic).
@@ -869,16 +818,8 @@ def master_node(state: "AgentState") -> dict:
             _already_norm = bool(data_store.get("records_normalized"))
             try:
                 from agents.master.disambiguation import maybe_normalize_records
-                # HOTFIX-pre-refacto-2026-05 (Bug 23) — ne sérialiser le
-                # DataFrame (coûteux sur 500k+ lignes) QUE si les deux
-                # mappings sont confirmés ; sinon maybe_normalize_records
-                # retourne None d'emblée et le to_json serait gaspillé.
-                _mappings_ready = (
-                    data_store.get("column_mapping_confirmed")
-                    and data_store.get("value_mapping_confirmed")
-                )
                 df_json_for_norm: str | None = None
-                if dataset_ref and _mappings_ready:
+                if dataset_ref:
                     try:
                         from session.dataset_store import DatasetStore
                         df_loaded = DatasetStore.load_by_session(dataset_ref)
@@ -898,12 +839,6 @@ def master_node(state: "AgentState") -> dict:
                            f"Construction base de données synthétique : {_rows_txt}, "
                            f"colonnes renommées, dates parsées, sentinelles clippées "
                            f"→ parquet temporaire")
-                    # HOTFIX-pre-refacto-2026-05 (Bug 23) — message visible
-                    # détaillant la création du clone + les modifications.
-                    data_store.setdefault("_stage_buffer", []).append({
-                        "type":    "message",
-                        "content": _format_clone_notice(_audit),
-                    })
                 elif _already_norm:
                     _stage("0.norm", "Base synthétique réutilisée (cache)")
                 else:
@@ -1129,42 +1064,25 @@ def master_node(state: "AgentState") -> dict:
             })
         if ds_state == "raw":
             # Fichier chargé mais pas de clone normalisé → pas de base de
-            # travail. Plutôt qu'un refus à vide (deadlock), on FORCE le
-            # mapping : on ouvre le modal de validation des colonnes. Une
-            # fois validé, la base normalisée (clone) sera créée et le
-            # calcul pourra être relancé.
-            _stage("0.e", "Base non normalisée — ouverture du mapping des colonnes")
-            _df_cols: list = []
-            _suggestion: dict = {}
-            try:
-                from session.dataset_store import DatasetStore
-                from agents.mortality.dictionary.column_schema import build_mapping_report
-                _ref = dataset_ref or data_store.get("_dataset_ref")
-                _df_raw = DatasetStore.load_by_session(_ref) if _ref else None
-                if _df_raw is not None:
-                    _df_cols = list(_df_raw.columns)
-                    _suggestion = (build_mapping_report(_df_raw) or {}).get("matched") or {}
-            except Exception as exc:
-                print(f"[MasterAgent] mapping report error: {exc}", file=sys.stderr)
-            notice = (
-                "Avant tout calcul, je dois créer la base de données de "
-                "travail (clone normalisé de votre fichier). Validez le "
-                "mapping des colonnes ci-dessous : la base normalisée sera "
-                "alors construite, puis vous pourrez relancer votre calcul."
+            # travail. On refuse le calcul et on force le passage par le
+            # mapping : _disambiguation_done remis à False pour que le tour
+            # suivant ré-ouvre l'étape de validation du mapping des colonnes.
+            _stage("0.e", "Refus : base non normalisée — mapping requis")
+            data_store["_disambiguation_done"] = False
+            data_store.pop("_pending_need", None)
+            refusal = (
+                "Votre fichier est bien chargé, mais il n'a pas encore été "
+                "mappé et normalisé : je ne dispose donc pas de base de "
+                "données utilisable. Je ne lance aucun calcul sur des "
+                "données brutes.\n\n"
+                "Validez d'abord le mapping des colonnes (le dictionnaire de "
+                "données proposé) — la base normalisée de travail sera alors "
+                "créée — puis reformulez votre demande de calcul."
             )
             return _ret({
-                "messages":   [LCAIMessage(content=notice)],
+                "messages":   [LCAIMessage(content=refusal)],
                 "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
-                               {"type": "message", "content": notice},
-                               {"type": "disambiguation_required",
-                                "task_type":                 "mortality_table",
-                                "needs_column_mapping":       True,
-                                "needs_value_mapping":        False,
-                                "needs_form":                 False,
-                                "column_mapping_suggestion":  _suggestion,
-                                "value_mapping_suggestion":   {},
-                                "df_columns":                 _df_cols,
-                                "form_fields":                []},
+                               {"type": "message",      "content": refusal},
                                {"type": "done"}],
                 "data_store": data_store,
             })
