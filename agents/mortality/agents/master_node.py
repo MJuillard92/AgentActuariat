@@ -1009,6 +1009,20 @@ def master_node(state: "AgentState") -> dict:
         already_done = [k for k in required_keys if data_store.get(k)]
         missing_keys = [k for k in required_keys if not data_store.get(k)]
 
+        # HOTFIX-pre-refacto-2026-05 (Bug 17, A4) — Stage 0.plan : rendre
+        # visible le plan de calcul dérivé du YAML. Le Master lit le template
+        # (build_manifest → builder_outputs → clés des sections actives) ;
+        # jusqu'ici cette dérivation était silencieuse.
+        _gender_txt = gender or "unisex"
+        if missing_keys:
+            _stage("0.plan",
+                   f"Plan de calcul (YAML, mode {report_mode} {_gender_txt}) : "
+                   f"{len(missing_keys)} clé(s) à produire — {', '.join(missing_keys)}")
+        else:
+            _stage("0.plan",
+                   f"Plan de calcul (YAML, mode {report_mode} {_gender_txt}) : "
+                   f"toutes les clés déjà présentes ({len(required_keys)})")
+
         # ── Compteur cumulatif Master ↔ Builder (filet anti-boucle) ─────────
         if missing_keys:
             cycles = data_store.get("_master_builder_cycles", 0) + 1
