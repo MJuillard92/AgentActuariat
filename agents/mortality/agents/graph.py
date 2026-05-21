@@ -149,27 +149,67 @@ def _should_continue_writer(state: AgentState) -> str:
 
 # ── Wrappers avec injection d'events agent_switch ────────────────────────────
 
+# HOTFIX-pre-refacto-2026-05 (Bug 18, A3) — trigger générique [Switch model].
+_AGENT_LABEL = {
+    "master": "MasterAgent", "builder": "BuilderAgent",
+    "writer": "WriterAgent", "rag": "RAGAgent",
+}
+_SWITCH_REASON = {
+    "builder": "calculs à exécuter",
+    "writer":  "rédaction du rapport PDF",
+    "rag":     "question doctrinale",
+    "master":  "retour au superviseur",
+}
+
+
+def _emit_transition(state: AgentState, result: dict, to_key: str) -> dict:
+    """Émet un event `agent_transition` rendu `📍 [Switch model] from → to — reason`.
+
+    L'agent de départ est lu depuis data_store["_last_agent"] (posé par le
+    wrapper précédent). Pas de transition au tout premier nœud d'un tour
+    (from inconnu = entrée). `_last_agent` est mis à jour pour le suivant.
+    """
+    ds_in = state.get("data_store") or {}
+    from_key = ds_in.get("_last_agent")
+    events = result.setdefault("events", [])
+    if from_key and from_key != to_key:
+        events.insert(0, {
+            "type":   "agent_transition",
+            "from":   _AGENT_LABEL.get(from_key, from_key),
+            "to":     _AGENT_LABEL.get(to_key, to_key),
+            "reason": _SWITCH_REASON.get(to_key, ""),
+        })
+    ds_out = result.setdefault("data_store", dict(ds_in))
+    if isinstance(ds_out, dict):
+        ds_out["_last_agent"] = to_key
+    return result
+
+
 def _master_node_w(state: AgentState) -> dict:
     result = master_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "MasterAgent"})
+    result = _emit_transition(state, result, "master")
     return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _builder_node_w(state: AgentState) -> dict:
     result = builder_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "BuilderAgent"})
+    result = _emit_transition(state, result, "builder")
     return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _writer_node_w(state: AgentState) -> dict:
     result = writer_node(state)
     result.setdefault("events", []).insert(0, {"type": "agent_switch", "agent": "WriterAgent"})
+    result = _emit_transition(state, result, "writer")
     return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _rag_node_w(state: AgentState) -> dict:
     """Wrapper — rag_node émet déjà agent_switch RAGAgent, on ne duplique pas."""
-    return sanitize_node_result(rag_node(state))  # HOTFIX-pre-refacto-2026-05 (Bug 9)
+    result = _emit_transition(state, rag_node(state), "rag")
+    return sanitize_node_result(result)  # HOTFIX-pre-refacto-2026-05 (Bug 9)
 
 
 def _tools_node_w(

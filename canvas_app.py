@@ -22,6 +22,7 @@ from dash.exceptions import PreventUpdate
 
 from tools.tool_registry import get_capabilities
 from agents.mortality.dictionary.column_schema import COLUMN_SCHEMA, build_mapping_report
+from knowledge_base.rag_doctrine.manage import ui as doctrine_ui
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App
@@ -1013,9 +1014,13 @@ app.layout = dbc.Container([
                 children=_writer_tab()),
         dbc.Tab(label="DEV", tab_id="tab-dev",
                 children=_dev_tab()),
+        dbc.Tab(label="Doctrine RAG", tab_id="tab-doctrine",
+                children=doctrine_ui.doctrine_tab()),
     ], id="main-tabs", active_tab="tab-writer"),
 
 ], fluid=True, className="px-0")
+
+doctrine_ui.register_callbacks(app)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1378,6 +1383,26 @@ def _internals_entry(ev: dict) -> html.Div:
 
     elif ev_type == "agent_switch":
         text = f"{icon} {ev.get('agent', '')} actif"
+
+    elif ev_type == "agent_transition":
+        # HOTFIX-pre-refacto-2026-05 (Bug 18, A3) — trigger générique.
+        _frm = ev.get("from") or "?"
+        _to  = ev.get("to") or "?"
+        _rsn = ev.get("reason") or ""
+        _txt = f"📍 [Switch model] {_frm} → {_to}"
+        if _rsn:
+            _txt += f" — {_rsn}"
+        return html.Div(
+            _txt,
+            style={
+                "color":        "#C8A24A",
+                "marginBottom": "2px",
+                "marginTop":    "2px",
+                "paddingLeft":  "12px",
+                "fontStyle":    "italic",
+                "fontWeight":   "600",
+            },
+        )
 
     elif ev_type == "master_stage":
         stage = ev.get("stage", "?")
