@@ -146,6 +146,47 @@ def _get_required_keys_for_current_mode(data_store: dict) -> list[str]:
     return _keys_for_sections(sections)
 
 
+# ── Étape déterministe « récupérer le plan » ────────────────────────────────
+# HOTFIX-pre-refacto-2026-05 (Bug 19) — extrait pour être appelé sur les DEUX
+# chemins de routing vers le Builder (classification ET pending). Sans ça, un
+# tour qui répond à une question en attente lançait le Builder sans plan.
+
+def _derive_calculation_plan(
+    data_store: dict, report_mode: str, gender: str | None,
+) -> dict:
+    """Récupère le plan de calcul depuis le YAML — étape déterministe, SANS
+    interaction utilisateur ni LLM.
+
+    À partir de `report_mode` + `gender_segmentation` déjà résolus, dérive
+    les sections actives du template puis les clés `builder_outputs` à
+    produire. Retourne aussi le partage déjà fait / restant.
+    """
+    active_sections = _sections_for_mode(report_mode, gender)
+    required_keys = _keys_for_sections(active_sections)
+    already_done = [k for k in required_keys if data_store.get(k)]
+    missing_keys = [k for k in required_keys if not data_store.get(k)]
+    return {
+        "report_mode":     report_mode,
+        "gender":          gender,
+        "active_sections": active_sections,
+        "required_keys":   required_keys,
+        "already_done":    already_done,
+        "missing_keys":    missing_keys,
+    }
+
+
+def _plan_stage_label(plan: dict) -> str:
+    """Label du stage 0.plan pour un plan dérivé par `_derive_calculation_plan`."""
+    gtxt = plan["gender"] or "unisex"
+    mode = plan["report_mode"]
+    missing = plan["missing_keys"]
+    if missing:
+        return (f"Plan de calcul (YAML, mode {mode} {gtxt}) : "
+                f"{len(missing)} clé(s) à produire — {', '.join(missing)}")
+    return (f"Plan de calcul (YAML, mode {mode} {gtxt}) : "
+            f"toutes les clés déjà présentes ({len(plan['required_keys'])})")
+
+
 # ── Wrappers locaux (rétro-compat tests + signature mortality-aware) ─────────
 #
 # Les implémentations sont désormais dans `agents.master.*` (domain-agnostic).
@@ -564,9 +605,20 @@ def master_node(state: "AgentState") -> dict:
             _stage_pending(ctx_key,
                            f"resolved={value}",
                            route_to="builder")
+            # HOTFIX-pre-refacto-2026-05 (Bug 19) — étape « récupérer le plan »
+            # AUSSI sur ce chemin : sans ça le Builder démarrait sans checklist.
+            # Déterministe, sans interaction utilisateur.
+            _pl_report_mode = data_store.get("report_mode", "full_report")
+            _pl_gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
+            _plan = _derive_calculation_plan(data_store, _pl_report_mode, _pl_gender)
+            _stage("0.plan", _plan_stage_label(_plan))
             instr = _HMsg(
                 content=(
-                    f"[Master] L'utilisateur a répondu '{pending.get('context_key')}' = {value}."
+                    f"[Master] L'utilisateur a répondu '{pending.get('context_key')}' = {value}.\n"
+                    f"Mode de rapport : {_pl_report_mode}\n"
+                    f"Déjà produit (NE PAS relancer) : {_plan['already_done']}\n"
+                    f"Reste à produire : {_plan['missing_keys']}\n"
+                    f"Émets <BUILD_DONE> quand toutes ces clés sont dans le data_store."
                 ),
                 additional_kwargs={"source": "master_synthetic"},
             )
@@ -1003,25 +1055,16 @@ def master_node(state: "AgentState") -> dict:
                 "data_store": data_store,
             })
 
-        # ── Sections actives dérivées de report_mode + gender_segmentation ──
-        active_sections = _sections_for_mode(report_mode, gender)
-        required_keys = _keys_for_sections(active_sections)
-        already_done = [k for k in required_keys if data_store.get(k)]
-        missing_keys = [k for k in required_keys if not data_store.get(k)]
-
-        # HOTFIX-pre-refacto-2026-05 (Bug 17, A4) — Stage 0.plan : rendre
-        # visible le plan de calcul dérivé du YAML. Le Master lit le template
-        # (build_manifest → builder_outputs → clés des sections actives) ;
-        # jusqu'ici cette dérivation était silencieuse.
-        _gender_txt = gender or "unisex"
-        if missing_keys:
-            _stage("0.plan",
-                   f"Plan de calcul (YAML, mode {report_mode} {_gender_txt}) : "
-                   f"{len(missing_keys)} clé(s) à produire — {', '.join(missing_keys)}")
-        else:
-            _stage("0.plan",
-                   f"Plan de calcul (YAML, mode {report_mode} {_gender_txt}) : "
-                   f"toutes les clés déjà présentes ({len(required_keys)})")
+        # ── Étape « récupérer le plan » — déterministe, sans interaction ────
+        # HOTFIX-pre-refacto-2026-05 (Bug 17/19, A4) — dérivation du plan de
+        # calcul depuis le YAML + stage 0.plan visible. Helper partagé avec
+        # le chemin pending (cf. _derive_calculation_plan).
+        _plan = _derive_calculation_plan(data_store, report_mode, gender)
+        active_sections = _plan["active_sections"]
+        required_keys   = _plan["required_keys"]
+        already_done    = _plan["already_done"]
+        missing_keys    = _plan["missing_keys"]
+        _stage("0.plan", _plan_stage_label(_plan))
 
         # ── Compteur cumulatif Master ↔ Builder (filet anti-boucle) ─────────
         if missing_keys:
