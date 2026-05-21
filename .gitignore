@@ -27,6 +27,8 @@ logs/
 *.csv
 table_mortalite_*.csv
 stats_descriptives.csv
+# Exception : les fixtures de test doivent être versionnées.
+!tests/fixtures/*.csv
 
 # Rapports Word/PDF générés
 *.docx

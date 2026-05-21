@@ -145,53 +145,45 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     raw = df[death_col].astype(str).str.strip().str.lower()
     df[death_col] = raw.where(~raw.isin(_DEATH_VALUES), "deces")
 
-    # ── Nettoyage préventif ───────────────────────────────────────────────────
-    # Les dates sentinelles (31/12/2999) provoquent un OverflowError dans pandas.
-    # On les remplace par la date de fin d'observation (observation_end).
-    # Les dates réellement invalides (0/0/0) → lignes exclues.
-    import re as _re
+    # ── Nettoyage préventif des dates ─────────────────────────────────────────
+    # Chantier dates 2026-05-21 — détection/parsing délégués à
+    # tools._shared.date_parsing (règle « année > seuil futur », pas une regex
+    # de sentinelles énumérées qui ratait 2040/2050/2060…).
     from datetime import date as _date
-
-    # observation_end : défaut auto-détecté = dernière date avec un décès
-    # observé. Sinon on capote à 31/12/<année courante>. Sans ça, les
-    # contrats actifs (sentinelle 2999) sont comptés en exposition au-delà
-    # de la période d'observation réelle de l'assureur.
-    obs_end_str = params.get("observation_end")
-    if not obs_end_str:
-        try:
-            _parsed_exit = pd.to_datetime(df[exit_col], format="mixed",
-                                            dayfirst=True, errors="coerce")
-            _is_dead    = df[death_col].astype(str).str.lower().str.strip().eq("deces")
-            _real_exits = _parsed_exit[_is_dead & _parsed_exit.notna()
-                                       & (_parsed_exit.dt.year < 2100)]
-            if len(_real_exits) > 0:
-                obs_end_str = _real_exits.max().strftime("%d/%m/%Y")
-        except Exception:
-            obs_end_str = None
-    if not obs_end_str:
-        obs_end_str = f"31/12/{_date.today().year}"
-    obs_end = pd.to_datetime(str(obs_end_str), dayfirst=True)
+    from tools._shared.date_parsing import parse_dates_fr, is_sentinel
 
     df_clean = df.copy()
     n_before = len(df_clean)
 
-    _SENTINEL_RE = _re.compile(r"2999|9999|3000|0/0/0|00/00/0000|01/01/1900|01/01/1800",
-                                _re.IGNORECASE)
+    # Sentinelles de date_sortie (contrats actifs) AVANT parsing : on capture
+    # le masque pour les clipper à obs_end (censure à droite). parse_dates_fr
+    # les transforme en NaT.
+    exit_sentinel = is_sentinel(df_clean[exit_col])
 
-    # exit_col : remplacer les sentinelles par obs_end (contrats actifs, censurés à droite)
-    mask_sentinel_exit = df_clean[exit_col].astype(str).str.contains(_SENTINEL_RE, na=False)
-    df_clean.loc[mask_sentinel_exit, exit_col] = obs_end.strftime("%d/%m/%Y")
+    # Parsing centralisé : dates illisibles, hors-plage pandas et sentinelles
+    # → NaT, sans exception.
+    df_clean = parse_dates_fr(df_clean, columns=[dob_col, entry_col, exit_col])
 
-    # Autres colonnes de date : exclure les lignes avec valeur non parsable.
-    # Format-agnostique : on tente ISO (YYYY-MM-DD) puis dayfirst (DD/MM/YYYY).
-    # Une ligne n'est exclue que si AUCUN des deux formats ne fonctionne.
+    # observation_end : dernière date de sortie parmi les décès observés.
+    # Sans ça les contrats actifs seraient comptés en exposition au-delà de
+    # la période d'observation réelle de l'assureur.
+    obs_end_param = params.get("observation_end")
+    if obs_end_param:
+        obs_end = pd.to_datetime(str(obs_end_param), dayfirst=True)
+    else:
+        _is_dead = df_clean[death_col].astype(str).str.lower().str.strip().eq("deces")
+        _real_exits = df_clean.loc[_is_dead, exit_col].dropna()
+        obs_end = (_real_exits.max() if len(_real_exits) > 0
+                   else pd.Timestamp(f"{_date.today().year}-12-31"))
+
+    # exit_col : sentinelles (contrats actifs) → obs_end, censurées à droite.
+    if exit_sentinel.any():
+        df_clean.loc[exit_sentinel, exit_col] = obs_end
+
+    # dob/entry : exclure les lignes dont la date est non parsable (NaT).
+    # (Une sentinelle d'entrée/naissance est aberrante → ligne exclue.)
     for col in (dob_col, entry_col):
-        mask_sentinel = df_clean[col].astype(str).str.contains(_SENTINEL_RE, na=False)
-        df_clean = df_clean[~mask_sentinel].copy()
-        parsed_iso = pd.to_datetime(df_clean[col], format="%Y-%m-%d", errors="coerce")
-        parsed_eu  = pd.to_datetime(df_clean[col], dayfirst=True, errors="coerce")
-        valid = parsed_iso.notna() | parsed_eu.notna()
-        df_clean = df_clean[valid].copy()
+        df_clean = df_clean[df_clean[col].notna()].copy()
 
     n_dropped = n_before - len(df_clean)
 

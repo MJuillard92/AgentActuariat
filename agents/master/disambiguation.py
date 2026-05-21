@@ -405,62 +405,46 @@ def detect_value_mapping_stage(records, enum_specs: dict) -> dict:
 
 # Colonnes canoniques traitées comme des dates lors de la normalisation.
 _DATE_COLUMNS_CANONICAL = ("date_naissance", "date_entree", "date_sortie")
-# Regex des dates sentinelles (contrats actifs) à clipper.
-_SENTINEL_DATE_PATTERNS = ("2999", "9999", "3000")
 
 
 def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
-    """Convertit les colonnes date_* en datetime64 (format mixte, dayfirst).
-    Clippe les dates sentinelles (31/12/2999, etc.) à la date du dernier
-    décès observé (= fin d'observation réelle).
+    """Convertit les colonnes date_* en datetime64 et clippe les sentinelles
+    de `date_sortie` (contrats actifs) à la date du dernier décès observé
+    (= fin d'observation réelle).
 
-    NB : pandas Timestamp est borné à ~[1677, 2262]. Les sentinelles 2999
-    sont donc détectées AVANT parsing (en string) et remplacées par un
-    placeholder ; sinon `pd.to_datetime` les renvoie en NaT.
+    Chantier dates 2026-05-21 — la détection des sentinelles est déléguée à
+    `tools._shared.date_parsing` (règle « année > seuil futur », pas une
+    énumération de regex). Le catch-all `> now+1an` local est supprimé : la
+    règle centrale le couvre désormais (et capture aussi 2040/2050/2060…).
+
     Retourne (df_modifié, obs_end_iso ou None)."""
-    import pandas as pd
-    import re as _re
-    sentinel_re = _re.compile(r"\b(?:2999|9999|3000|3999)\b")
-    # 1ère passe : retirer les sentinelles textuelles AVANT parse
-    sentinel_masks: dict = {}
-    for col in _DATE_COLUMNS_CANONICAL:
-        if col in df.columns:
-            as_str = df[col].astype(str)
-            mask = as_str.str.contains(sentinel_re, na=False)
-            sentinel_masks[col] = mask
-            if mask.any():
-                df.loc[mask, col] = pd.NaT  # placeholder temporaire
-            df[col] = pd.to_datetime(
-                df[col], format="mixed", dayfirst=True, errors="coerce",
-            )
-    # Auto-détection observation_end : max(date_sortie) parmi décès (hors sentinelles)
+    from tools._shared.date_parsing import parse_dates_fr, is_sentinel
+
+    present = [c for c in _DATE_COLUMNS_CANONICAL if c in df.columns]
+
+    # Masque des sentinelles de date_sortie AVANT parsing (parse_dates_fr les
+    # transforme en NaT — on capture le masque pour les clipper à obs_end).
+    sortie_sentinel = None
+    if "date_sortie" in df.columns:
+        sortie_sentinel = is_sentinel(df["date_sortie"])
+
+    # Parsing centralisé : dates illisibles + hors-plage + sentinelles → NaT.
+    df = parse_dates_fr(df, columns=present)
+
+    # Auto-détection observation_end : max(date_sortie) parmi les décès.
     obs_end = None
     if "date_sortie" in df.columns and "cause_sortie" in df.columns:
         is_dead = df["cause_sortie"].astype(str).str.lower().isin(
             {"deces", "décès", "decede", "décédé", "d", "1", "true"}
         )
         ds = df.loc[is_dead, "date_sortie"]
-        ds = ds[ds.notna() & (ds.dt.year < 2100)]
+        ds = ds[ds.notna()]
         if len(ds) > 0:
             obs_end = ds.max()
-    # Clipping : remplacer les sentinelles par obs_end (sinon NaT)
-    if obs_end is not None and "date_sortie" in df.columns:
-        mask = sentinel_masks.get("date_sortie")
-        if mask is not None and mask.any():
-            df.loc[mask, "date_sortie"] = obs_end
 
-    # HOTFIX-pre-refacto-2026-05 (Bug 10) — Catch-all : toute date_sortie
-    # strictement supérieure à (aujourd'hui + 1 an) est traitée comme
-    # sentinelle implicite (contrat actif), peu importe l'année exacte
-    # (2099, 2199, 2299, ...). Évite de devoir maintenir une regex
-    # exhaustive de toutes les sentinelles possibles.
-    # Borne basée sur `now` (pas obs_end) pour ne pas clipper les dates
-    # futures réalistes < 1 an (échéances de contrats encore actifs).
-    if obs_end is not None and "date_sortie" in df.columns:
-        future_cutoff = pd.Timestamp.now() + pd.DateOffset(years=1)
-        far_future_mask = df["date_sortie"].notna() & (df["date_sortie"] > future_cutoff)
-        if far_future_mask.any():
-            df.loc[far_future_mask, "date_sortie"] = obs_end
+    # Clipping : les sentinelles de date_sortie (contrats actifs) → obs_end.
+    if obs_end is not None and sortie_sentinel is not None and sortie_sentinel.any():
+        df.loc[sortie_sentinel, "date_sortie"] = obs_end
 
     return df, (obs_end.isoformat() if obs_end is not None else None)
 

@@ -11,7 +11,54 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tools._shared.date_parsing import parse_dates_fr
+from tools._shared.date_parsing import parse_dates_fr, is_sentinel
+
+
+# ── Chantier dates 2026-05-21 : détection robuste (règle, pas énumération) ──
+
+@pytest.mark.parametrize("year", ["2040", "2050", "2060", "2080", "2090",
+                                   "2099", "2199", "2999", "9999"])
+def test_far_future_year_is_sentinel(year: str) -> None:
+    """Toute année future lointaine est une sentinelle — y compris 2040-2089
+    que l'ancienne regex `209\\d|2[1-9]\\d{2}|...` ratait."""
+    s = pd.Series([f"31/12/{year}"])
+    assert bool(is_sentinel(s).iloc[0]) is True, f"{year} devrait être sentinelle"
+    assert pd.isna(parse_dates_fr(s).iloc[0]), f"{year} devrait être NaT"
+
+
+def test_2050_no_longer_ignored() -> None:
+    """Régression du trou signalé : `31/12/2050` n'est plus traité comme une
+    vraie date — il est détecté comme sentinelle."""
+    s = pd.Series(["31/12/2018", "31/12/2050"])
+    assert bool(is_sentinel(s).iloc[0]) is False
+    assert bool(is_sentinel(s).iloc[1]) is True
+    out = parse_dates_fr(s)
+    assert out.iloc[0] == pd.Timestamp("2018-12-31")
+    assert pd.isna(out.iloc[1])
+
+
+def test_real_recent_date_not_sentinel() -> None:
+    """Une vraie date récente / proche n'est PAS une sentinelle."""
+    import datetime as _dt
+    this_year = _dt.date.today().year
+    s = pd.Series([f"30/06/{this_year}", "15/03/2015", "01/01/1980"])
+    mask = is_sentinel(s)
+    assert not mask.any()
+    out = parse_dates_fr(s)
+    assert out.notna().all()
+
+
+def test_is_sentinel_on_datetime64() -> None:
+    """is_sentinel fonctionne aussi sur une Series déjà datetime64."""
+    s = pd.to_datetime(pd.Series(["2015-01-01"]))  # date réelle
+    assert bool(is_sentinel(s).iloc[0]) is False
+
+
+def test_zero_date_not_flagged_sentinel_but_nat() -> None:
+    """0/0/0 : pas une sentinelle de censure (pas d'année), mais → NaT."""
+    s = pd.Series(["0/0/0"])
+    assert bool(is_sentinel(s).iloc[0]) is False
+    assert pd.isna(parse_dates_fr(s).iloc[0])
 
 
 def test_ambiguous_then_unambiguous_dates() -> None:
