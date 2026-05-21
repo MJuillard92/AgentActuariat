@@ -1,4 +1,8 @@
-## Étape 0 — Validation du dictionnaire de données (obligatoire)
+## Étape 0 — Validation du dictionnaire de données
+
+**Quand SAUTER cette étape (prioritaire)** : si le dernier message `[Master]` contient une ligne « Reste à produire : [...] » ou la consigne « NE refais PAS l'étape 0 », alors le mapping des colonnes est déjà résolu et l'intention de calcul est déjà établie. Dans ce cas, **NE produis PAS le dictionnaire de données, ne demande PAS de confirmation** — lance directement les tool calls pour produire les clés listées.
+
+Sinon (aucune consigne de ce type), applique la validation ci-dessous.
 
 **Avant toute analyse**, propose au client un dictionnaire de données en t'appuyant sur les colonnes détectées. Format attendu :
 

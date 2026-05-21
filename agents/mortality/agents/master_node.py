@@ -635,6 +635,16 @@ def master_node(state: "AgentState") -> dict:
                     f"Mode de rapport : {_pl_report_mode}\n"
                     f"Déjà produit (NE PAS relancer) : {_plan['already_done']}\n"
                     f"Reste à produire : {_plan['missing_keys']}\n"
+                    # HOTFIX-pre-refacto-2026-05 (Bug 21) — directive explicite :
+                    # le Builder doit SAUTER l'étape 0 (dictionnaire de données)
+                    # et lancer les tools. Sans ça il décrit le fichier et stalle
+                    # « En attente d'instructions complémentaires ».
+                    "L'intention de calcul est déjà établie et le mapping des "
+                    "colonnes est déjà résolu : NE refais PAS l'étape 0 "
+                    "(dictionnaire de données), ne demande PAS confirmation, "
+                    "n'émets PAS de réponse textuelle descriptive du fichier. "
+                    "LANCE DIRECTEMENT les tool calls nécessaires pour produire "
+                    "les clés listées ci-dessus.\n"
                     f"Émets <BUILD_DONE> quand toutes ces clés sont dans le data_store."
                 ),
                 additional_kwargs={"source": "master_synthetic"},
