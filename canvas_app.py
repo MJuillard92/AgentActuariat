@@ -304,6 +304,41 @@ def _mapping_badge(df: pd.DataFrame) -> dbc.ListGroup:
     return dbc.ListGroup(items, flush=True, className="small")
 
 
+def _format_clone_message(audit: dict) -> str:
+    """Message visible décrivant la base de travail créée + les modifications.
+    `audit` = data_store["_audit"]["normalization"] produit par
+    maybe_normalize_records."""
+    lines = [
+        "✅ Base de travail créée (clone normalisé — le fichier original "
+        "reste intact).",
+        "",
+        "Modifications appliquées :",
+    ]
+    col_map = audit.get("column_mapping") or {}
+    renames = [f"{csv} → {canon}" for canon, csv in col_map.items() if csv]
+    if renames:
+        lines.append("• Colonnes renommées : " + ", ".join(renames))
+    val_map = audit.get("value_mapping") or {}
+    vparts = []
+    for col, mp in val_map.items():
+        if isinstance(mp, dict) and mp:
+            vparts.append(f"{col} (" + ", ".join(f"{o}→{c}" for o, c in mp.items()) + ")")
+    if vparts:
+        lines.append("• Valeurs normalisées : " + " ; ".join(vparts))
+    lines.append(
+        "• Dates parsées (format JJ/MM/AAAA) ; sentinelles (31/12/2999, …) "
+        "traitées comme contrats actifs"
+    )
+    ri, ro = audit.get("rows_in"), audit.get("rows_out")
+    if ri is not None and ro is not None:
+        txt = (f"• {ri:,} lignes en entrée → {ro:,} lignes dans la base de "
+               f"travail").replace(",", " ")
+        lines.append(txt)
+    lines.append("")
+    lines.append("Vous pouvez maintenant lancer vos calculs.")
+    return "\n".join(lines)
+
+
 def _chat_bubble(role: str, content: str, extra: dict | None = None) -> html.Div:
     """Rend une bulle de chat."""
     is_user = role == "user"
@@ -1110,17 +1145,22 @@ def upload_csv(contents, filename):
     mm = MemoryManager(session_id)
     mm.load()
     mm.register_dataset(df, csv_filename=filename)
-    # Propager le column_mapping dans le SessionState
+    # Propager le column_mapping AUTO-DÉTECTÉ dans le SessionState.
+    # `column_mapping_confirmed` reste False : la validation du mapping est
+    # désormais l'action explicite du bouton « Valider le mapping » (plan
+    # bouton/clone). Tant qu'il n'est pas cliqué, le Master explore sur
+    # l'original ; aucun calcul Builder/Writer n'est autorisé.
     mm.state.column_mapping           = report["matched"]
-    mm.state.column_mapping_confirmed = len(report["unmatched"]) == 0
+    mm.state.column_mapping_confirmed = False
     mm.state.column_mapping_unmatched = list(report["unmatched"].keys())
     mm.save()
 
-    # Persister le mapping dans data_store (pour compatibilité agents)
+    # Persister le mapping auto-détecté dans data_store (exploration Master).
     with _writer_lock:
         ds = _writer_state["data_store"]
-        ds["column_mapping"] = report["matched"]
-        ds["column_mapping_confirmed"] = len(report["unmatched"]) == 0
+        ds["_dataset_ref"]             = session_id
+        ds["column_mapping"]           = report["matched"]
+        ds["column_mapping_confirmed"] = False
         ds["column_mapping_unmatched"] = list(report["unmatched"].keys())
 
     info = html.Div([
@@ -1133,6 +1173,14 @@ def upload_csv(contents, filename):
             color="success", className="mb-2 py-2",
         ),
         _mapping_badge(df),
+        # Bouton de validation du mapping → crée la base de travail (clone
+        # normalisé). Obligatoire avant tout calcul Builder/Writer.
+        dbc.Button(
+            [html.I(className="fa fa-check-double me-2"),
+             "Valider le mapping et créer la base de travail"],
+            id="btn-validate-mapping", color="primary", size="sm",
+            className="mt-2 w-100",
+        ),
     ])
     return df_json, info, [], 0
 
@@ -1992,6 +2040,34 @@ def _generate_fn_template(fn_name: str, description: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.callback(
+    Output("store-disambiguation", "data", allow_duplicate=True),
+    Input("btn-validate-mapping", "n_clicks"),
+    State("store-df-json", "data"),
+    prevent_initial_call=True,
+)
+def open_mapping_validation(n_clicks, df_json):
+    """Clic « Valider le mapping » → remplit store-disambiguation, ce qui
+    ouvre le modal de mapping éditable (pré-rempli avec l'auto-détection).
+    Le flag `source=validate_button` indique à submit_disambiguation de créer
+    le clone (et non de relancer l'agent)."""
+    if not n_clicks or not df_json:
+        raise PreventUpdate
+    from io import StringIO
+    df = pd.read_json(StringIO(df_json), orient="split")
+    report = build_mapping_report(df, get_capabilities())
+    return {
+        "source":                    "validate_button",
+        "task_type":                 "mortality_table",
+        "needs_column_mapping":      True,
+        "needs_value_mapping":       False,
+        "needs_form":                False,
+        "df_columns":                list(df.columns),
+        "column_mapping_suggestion": report["matched"],
+        "form_fields":               [],
+    }
+
+
+@app.callback(
     Output("modal-disambiguation", "is_open"),
     Output("modal-disambiguation-body", "children"),
     Input("store-disambiguation", "data"),
@@ -2079,6 +2155,57 @@ def submit_disambiguation(
         field = id_dict.get("field", "")
         if field and value:
             col_mapping[field] = value
+
+    # ── 1bis. Branche « Valider le mapping » : créer le clone normalisé ──────
+    # Déclenchée par le bouton btn-validate-mapping (source=validate_button).
+    # On crée la base de travail (clone) et on NE relance PAS l'agent — c'est
+    # un acte de préparation, le calcul sera demandé séparément par l'user.
+    if (disam_data or {}).get("source") == "validate_button":
+        from io import StringIO
+        from tools.conversation.apply_normalization import run as _apply_norm
+        from session.memory_manager import MemoryManager
+
+        history = list(history or [])
+        try:
+            if not df_json:
+                raise ValueError("Aucun fichier chargé.")
+            df = pd.read_json(StringIO(df_json), orient="split")
+            if len(df) == 0:
+                raise ValueError("Fichier vide.")
+            with _writer_lock:
+                ds = _writer_state["data_store"]
+                session_id = _writer_state.get("session_id")
+                if col_mapping:
+                    ds["column_mapping"] = col_mapping
+                ds["column_mapping_confirmed"] = True
+                ds["_dataset_ref"]             = session_id
+                res = _apply_norm(df, {"force": True}, ds)
+                if res.get("erreur"):
+                    raise RuntimeError(res["erreur"])
+                norm_ok   = bool(res.get("records_normalized"))
+                norm_path = res.get("dataset_ref_normalized")
+                audit     = (ds.get("_audit") or {}).get("normalization") or {}
+                ds["mapping_validated"]      = True
+                ds["records_normalized"]     = norm_ok
+                ds["dataset_ref_normalized"] = norm_path
+            # Persister dans le SessionState (durable au-delà de la session live)
+            mm = MemoryManager(session_id)
+            mm.load()
+            mm.state.column_mapping           = col_mapping or mm.state.column_mapping
+            mm.state.column_mapping_confirmed = True
+            mm.state.records_normalized       = norm_ok
+            mm.state.dataset_ref_normalized   = norm_path
+            mm.state.cinematic_state["mapping_validated"] = True
+            mm.save()
+            history.append({"role": "assistant",
+                             "content": _format_clone_message(audit)})
+            return False, history, True, "Base de travail prête", "success", dash.no_update
+        except Exception as exc:
+            history.append({
+                "role": "assistant",
+                "content": f"⚠️ Échec de la création de la base de travail : {exc}",
+            })
+            return False, history, True, "Erreur", "danger", dash.no_update
 
     # ── 2. Construire les prérequis du formulaire ────────────────────────────
     prereqs: dict[str, str] = {}
