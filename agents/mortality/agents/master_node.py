@@ -572,6 +572,23 @@ def master_node(state: "AgentState") -> dict:
     # le message user comme une nouvelle intention. Soit on extrait la réponse,
     # soit on re-pose la question avec un hint. Jamais de fallthrough.
     pending = data_store.get("_pending_need")
+
+    # HOTFIX-pre-refacto-2026-05 (Bug 20) — garde anti-pending périmé.
+    # Si la clé visée par `_pending_need` est DÉJÀ résolue dans study_plan,
+    # le pending est un résidu (persistance / tour précédent non nettoyé).
+    # Sans cette garde, un message de continuation type « oui » est lu à
+    # tort comme la réponse à une question déjà répondue (gender, etc.) et
+    # la question est re-posée en boucle.
+    if pending:
+        _stale_key = pending.get("context_key", "")
+        _sp_existing = data_store.get("study_plan") or {}
+        if _stale_key and _sp_existing.get(_stale_key) is not None:
+            data_store.pop("_pending_need", None)
+            _stage("0.c-stale",
+                   f"Question '{_stale_key}' déjà résolue "
+                   f"({_sp_existing.get(_stale_key)}) — pending périmé ignoré")
+            pending = None
+
     if pending and last_real_human is not None:
         from agents.master.question_filter import extract_user_answer
         last_text = getattr(last_real_human, "content", "") or ""
