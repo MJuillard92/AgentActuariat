@@ -61,6 +61,41 @@ def test_zero_date_not_flagged_sentinel_but_nat() -> None:
     assert pd.isna(parse_dates_fr(s).iloc[0])
 
 
+def test_return_report_counts_unreadable_dates() -> None:
+    """return_report compte les dates RÉELLEMENT illisibles (hors sentinelles,
+    hors NaT d'entrée)."""
+    s = pd.Series(["31/12/2018", "pas une date", "0/0/0", "31/12/2999"])
+    parsed, report = parse_dates_fr(s, return_report=True)
+    # "pas une date" + "0/0/0" = 2 illisibles ; 2999 = sentinelle (pas comptée)
+    assert report["n_coerced"] == 2
+    assert 0.0 < report["pct_coerced"] <= 1.0
+
+
+def test_return_report_zero_when_all_clean() -> None:
+    """Aucune date illisible → n_coerced = 0."""
+    s = pd.Series(["31/12/2018", "01/06/2015", "31/12/2999"])  # 2999 = sentinelle
+    _, report = parse_dates_fr(s, return_report=True)
+    assert report["n_coerced"] == 0
+
+
+def test_return_report_dataframe_by_column() -> None:
+    """Sur un DataFrame, le rapport ventile par colonne."""
+    df = pd.DataFrame({
+        "date_naissance": ["01/01/1950", "01/01/1960"],
+        "date_sortie":    ["xx/xx/xxxx", "31/12/2018"],
+    })
+    _, report = parse_dates_fr(df, return_report=True)
+    assert report["n_coerced"] == 1
+    assert report["by_column"]["date_sortie"] == 1
+    assert report["by_column"]["date_naissance"] == 0
+
+
+def test_return_report_false_keeps_legacy_signature() -> None:
+    """Sans return_report, la signature reste rétro-compatible (pas de tuple)."""
+    out = parse_dates_fr(pd.Series(["31/12/2018"]))
+    assert isinstance(out, pd.Series)
+
+
 def test_ambiguous_then_unambiguous_dates() -> None:
     """Le cas du crash : 11/04/2009 (ambiguë, jour 11) PUIS 28/11/2007
     (jour 28 > 12). Sans dayfirst, pandas infère US et crashe sur la 2e."""

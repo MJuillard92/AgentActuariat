@@ -30,7 +30,7 @@ def test_sentinel_year_is_clipped(sentinel_year: int) -> None:
     from agents.master.disambiguation import _parse_and_clip_dates
 
     df = _build_df_with_sentinel(sentinel_year)
-    df_out, obs_end_iso = _parse_and_clip_dates(df.copy(), dataset_ref="test")
+    df_out, obs_end_iso, _ = _parse_and_clip_dates(df.copy(), dataset_ref="test")
 
     assert obs_end_iso is not None, "obs_end devrait être détecté depuis le décès 2015"
     obs_end = pd.Timestamp(obs_end_iso)
@@ -54,7 +54,7 @@ def test_legitimate_future_within_horizon_preserved() -> None:
         "cause_sortie": ["deces",      "actif"],
         "date_naissance": ["01/01/1950", "01/01/1960"],
     })
-    df_out, _ = _parse_and_clip_dates(df.copy(), dataset_ref="test")
+    df_out, _, _ = _parse_and_clip_dates(df.copy(), dataset_ref="test")
 
     sortie = pd.to_datetime(df_out["date_sortie"], errors="coerce")
     # La date 2024 doit être préservée (≈ obs_end)
@@ -71,7 +71,7 @@ def test_no_sentinel_no_change() -> None:
         "cause_sortie": ["deces"],
         "date_naissance": ["01/01/1950"],
     })
-    df_out, obs_end_iso = _parse_and_clip_dates(df.copy(), dataset_ref="test")
+    df_out, obs_end_iso, _ = _parse_and_clip_dates(df.copy(), dataset_ref="test")
 
     assert obs_end_iso is not None
     sortie = pd.to_datetime(df_out["date_sortie"], errors="coerce")

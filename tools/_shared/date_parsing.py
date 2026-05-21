@@ -22,9 +22,16 @@ API :
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 import re
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
+
+# Au-delà de ce taux de dates coercées en NaT (hors sentinelles), on émet un
+# WARNING : signe probable d'un format de date inattendu, pas d'un cas isolé.
+_COERCE_WARN_THRESHOLD = 0.005  # 0,5 %
 
 # Placeholders « date inconnue » — chaînes exactes connues (2 constantes
 # documentées, PAS une énumération d'années sentinelles).
@@ -89,33 +96,78 @@ def _parse_one_series(s: pd.Series) -> pd.Series:
     return parsed
 
 
-def parse_dates_fr(obj, columns: list[str] | None = None):
+def _coerce_report(raw: pd.Series, parsed: pd.Series, col: str = "") -> dict:
+    """Compte les dates devenues NaT alors qu'elles étaient présentes en
+    entrée et ne sont PAS des sentinelles — i.e. les dates RÉELLEMENT
+    illisibles (format inattendu, garbage). Logge un WARNING si le taux
+    dépasse le seuil.
+
+    `errors="coerce"` est silencieux par conception : sans ce compteur,
+    une colonne au mauvais format perdrait des milliers de lignes en NaT
+    sans aucun signal — exposition sous-estimée → table fausse.
+    """
+    if pd.api.types.is_datetime64_any_dtype(raw):
+        input_present = raw.notna()
+    else:
+        as_str = raw.astype(str).str.strip()
+        input_present = raw.notna() & (as_str != "") & (as_str.str.lower() != "nan")
+    sentinel = is_sentinel(raw)
+    coerced = input_present & parsed.isna() & ~sentinel
+    n = int(coerced.sum())
+    total = int(input_present.sum())
+    pct = (n / total) if total else 0.0
+    if pct > _COERCE_WARN_THRESHOLD:
+        log.warning(
+            "[date_parsing] colonne %r : %d date(s) illisible(s) coercée(s) "
+            "en NaT (%.1f%%) — format de date inattendu probable.",
+            col or "?", n, pct * 100,
+        )
+    return {"n_coerced": n, "pct_coerced": round(pct, 4)}
+
+
+def parse_dates_fr(obj, columns: list[str] | None = None,
+                   return_report: bool = False):
     """Parse des dates françaises JJ/MM/AAAA en datetime64.
 
     Args:
-        obj     : pd.Series OU pd.DataFrame.
-        columns : si obj est un DataFrame, liste des colonnes à parser.
-                  None → toutes les colonnes dont le nom contient "date".
+        obj           : pd.Series OU pd.DataFrame.
+        columns       : si obj est un DataFrame, colonnes à parser.
+                        None → toutes les colonnes dont le nom contient "date".
+        return_report : si True, retourne aussi un rapport de coercition.
 
     Returns:
-        - Series datetime64 si obj est une Series.
-        - DataFrame (copie) avec les colonnes ciblées converties si obj est
-          un DataFrame.
+        - `return_report=False` (défaut) : Series datetime64 ou DataFrame.
+        - `return_report=True` : tuple `(obj_parsé, report)` où `report` =
+          `{"n_coerced": int, "pct_coerced": float, "by_column": {...}}`
+          (`by_column` absent pour une Series).
 
     Idempotent : une colonne déjà datetime64 passe à travers (les sentinelles
     futur-lointain y sont quand même neutralisées).
     Robuste : valeurs non parsables et sentinelles → NaT, jamais d'exception.
     """
     if isinstance(obj, pd.Series):
-        return _parse_one_series(obj)
+        parsed = _parse_one_series(obj)
+        if return_report:
+            return parsed, _coerce_report(obj, parsed)
+        return parsed
 
     if isinstance(obj, pd.DataFrame):
         df = obj.copy()
         if columns is None:
             columns = [c for c in df.columns if "date" in str(c).lower()]
+        by_col: dict[str, int] = {}
+        total_coerced = 0
         for col in columns:
             if col in df.columns:
-                df[col] = _parse_one_series(df[col])
+                raw_col = df[col]
+                parsed_col = _parse_one_series(raw_col)
+                if return_report:
+                    rep = _coerce_report(raw_col, parsed_col, col)
+                    by_col[col] = rep["n_coerced"]
+                    total_coerced += rep["n_coerced"]
+                df[col] = parsed_col
+        if return_report:
+            return df, {"n_coerced": total_coerced, "by_column": by_col}
         return df
 
     raise TypeError(

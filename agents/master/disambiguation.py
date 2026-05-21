@@ -417,7 +417,7 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
     énumération de regex). Le catch-all `> now+1an` local est supprimé : la
     règle centrale le couvre désormais (et capture aussi 2040/2050/2060…).
 
-    Retourne (df_modifié, obs_end_iso ou None)."""
+    Retourne (df_modifié, obs_end_iso ou None, date_report)."""
     from tools._shared.date_parsing import parse_dates_fr, is_sentinel
 
     present = [c for c in _DATE_COLUMNS_CANONICAL if c in df.columns]
@@ -429,7 +429,8 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
         sortie_sentinel = is_sentinel(df["date_sortie"])
 
     # Parsing centralisé : dates illisibles + hors-plage + sentinelles → NaT.
-    df = parse_dates_fr(df, columns=present)
+    # Le rapport compte les dates RÉELLEMENT illisibles (hors sentinelles).
+    df, date_report = parse_dates_fr(df, columns=present, return_report=True)
 
     # Auto-détection observation_end : max(date_sortie) parmi les décès.
     obs_end = None
@@ -446,7 +447,7 @@ def _parse_and_clip_dates(df, dataset_ref: str | None) -> tuple:
     if obs_end is not None and sortie_sentinel is not None and sortie_sentinel.any():
         df.loc[sortie_sentinel, "date_sortie"] = obs_end
 
-    return df, (obs_end.isoformat() if obs_end is not None else None)
+    return df, (obs_end.isoformat() if obs_end is not None else None), date_report
 
 
 def _write_normalized_parquet(df, dataset_ref: str) -> str | None:
@@ -511,7 +512,7 @@ def maybe_normalize_records(
     df_out = result["normalized_records"]
 
     # Parsing dates + clipping sentinelles
-    df_out, obs_end_iso = _parse_and_clip_dates(df_out, dataset_ref)
+    df_out, obs_end_iso, date_report = _parse_and_clip_dates(df_out, dataset_ref)
 
     # Persistance Parquet (zéro re-parsing dans les tools en aval)
     normalized_path = _write_normalized_parquet(df_out, dataset_ref or "")
@@ -523,6 +524,10 @@ def maybe_normalize_records(
         "rows_out":        len(df_out),
         "observation_end": obs_end_iso,
         "parquet_path":    normalized_path,
+        # Chantier dates : nb de dates illisibles coercées en NaT (hors
+        # sentinelles) — visibilité sur d'éventuelles pertes silencieuses.
+        "dates_coerced":   date_report.get("n_coerced", 0),
+        "dates_by_column": date_report.get("by_column", {}),
     }
     existing_audit = dict(data_store.get("_audit") or {})
     existing_audit["normalization"] = audit_entry
