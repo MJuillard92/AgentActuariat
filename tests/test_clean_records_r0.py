@@ -102,6 +102,7 @@ def test_master_stops_on_recurring_tool_error(monkeypatch):
             "_disambiguation_done":     True,
             "_methods_question_done":   True,
             "_dataset_ref":             "test_session",  # bypass Bug 6 gate
+            "mapping_validated":        True,  # gate calcul : clone validé
             "study_plan":               {"gender_segmentation": "unisex",
                                          "methods_auto":        True},
             # Simuler : crude_rates a planté 2 fois sur la même erreur

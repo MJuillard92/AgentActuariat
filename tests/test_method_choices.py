@@ -473,6 +473,7 @@ def test_master_asks_method_meta_question_when_choices_pending(monkeypatch):
         "data_store":  {
             "_disambiguation_done": True,
             "_dataset_ref":         "test_session",  # bypass Bug 6 gate
+            "mapping_validated":        True,  # gate calcul : clone validé
             "study_plan":           {"gender_segmentation": "unisex"},
         },
         "dataset_ref": "test_session",
@@ -492,6 +493,7 @@ def test_master_skips_method_question_when_methods_auto_already_set(monkeypatch)
             "_disambiguation_done":   True,
             "_methods_question_done": True,
             "_dataset_ref":           "test_session",  # bypass Bug 6 gate
+            "mapping_validated":        True,  # gate calcul : clone validé
             "study_plan":             {"gender_segmentation": "unisex",
                                        "methods_auto":        True},
         },

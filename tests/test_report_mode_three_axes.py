@@ -184,6 +184,7 @@ def test_master_asks_write_question_before_builder(monkeypatch):
         "messages": [HumanMessage(content="construis une table de mortalité")],
         "data_store": {"_disambiguation_done": True,
                        "_dataset_ref":         "test_session",  # bypass Bug 6 gate
+                       "mapping_validated":        True,  # gate calcul : clone validé
                        "study_plan": {"gender_segmentation": "unisex"}},
         "dataset_ref": "test_session",
     }
@@ -217,6 +218,7 @@ def test_master_routes_to_builder_when_write_yes(monkeypatch):
             "_disambiguation_done":   True,
             "_methods_question_done": True,
             "_dataset_ref":           "test_session",  # bypass Bug 6 gate
+            "mapping_validated":        True,  # gate calcul : clone validé
             "study_plan":             {"gender_segmentation": "unisex",
                                        "methods_auto":        True},
         },

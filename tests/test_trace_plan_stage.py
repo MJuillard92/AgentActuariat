@@ -24,6 +24,7 @@ def _state_for_builder_routing():
             "_disambiguation_done":   True,
             "_methods_question_done": True,
             "_dataset_ref":           "test_session",
+            "mapping_validated":        True,  # gate calcul : clone validé
             "study_plan":             {"gender_segmentation": "unisex"},
         },
         "dataset_ref": "test_session",

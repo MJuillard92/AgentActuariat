@@ -1010,9 +1010,8 @@ def master_node(state: "AgentState") -> dict:
         intent = "question"
 
     if intent in ("build_only", "build_and_write"):
-        # ── HOTFIX-pre-refacto-2026-05 (Bug 6) — Garde dataset_ref ──────────
-        # classify_intent connaît has_data mais ne bloque pas. Refus poli
-        # ici pour éviter de router vers Builder + hallucination de colonnes.
+        # ── Gate base de données — calcul actuariel ─────────────────────────
+        # Garde dataset_ref : pas de fichier → refus.
         has_data = bool(dataset_ref or data_store.get("_dataset_ref"))
         if not has_data:
             _stage("0.e", "Refus : aucun fichier de données chargé")
@@ -1022,6 +1021,27 @@ def master_node(state: "AgentState") -> dict:
                 "(colonnes attendues : date_naissance, date_entree, "
                 "date_sortie, cause_sortie, sexe…) puis reformulez votre "
                 "demande."
+            )
+            return _ret({
+                "messages":   [LCAIMessage(content=refusal)],
+                "events":     [{"type": "agent_switch", "agent": "MasterAgent"},
+                               {"type": "message",      "content": refusal},
+                               {"type": "done"}],
+                "data_store": data_store,
+            })
+        # Gate clone normalisé : BuilderAgent ET WriterAgent (tout calcul
+        # actuariel) exigent que la base de travail normalisée ait été créée
+        # via le bouton « Valider le mapping ». Refus TERMINAL (event done) :
+        # le chemin pour débloquer = un clic UI hors boucle agent, donc aucun
+        # risque de boucle (cf. plan, garde anti-régression).
+        if not data_store.get("mapping_validated"):
+            _stage("0.e", "Refus : base de travail non validée (mapping requis)")
+            refusal = (
+                "Pour lancer les calculs actuariels, la base de travail "
+                "normalisée doit d'abord être créée. Cliquez sur "
+                "« Valider le mapping » sous votre fichier CSV, ajustez les "
+                "colonnes si besoin et confirmez — puis relancez votre "
+                "demande de calcul."
             )
             return _ret({
                 "messages":   [LCAIMessage(content=refusal)],

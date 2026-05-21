@@ -297,6 +297,9 @@ class SessionState(BaseModel):
             "report_mode",
             "_write_question_asked",
             "_reformulation_attempts",
+            # Le clic « Valider le mapping » pose mapping_validated=True ;
+            # doit survivre aux tours pour que le gate Builder/Writer le voie.
+            "mapping_validated",
         }
         for key in _CINEMATIC_KEYS:
             if key in data_store:
