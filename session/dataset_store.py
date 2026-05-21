@@ -22,6 +22,41 @@ _DATA_DIR      = Path(__file__).resolve().parent / "data"
 _ARTIFACTS_DIR = _DATA_DIR / "artifacts"
 
 
+def _parse_dates_at_construction(df: pd.DataFrame) -> pd.DataFrame:
+    """HOTFIX-pre-refacto-2026-05 (Bug 14) — Option B-full.
+
+    Parse les colonnes date du DataFrame en datetime64 dès la construction
+    du dataset (1ʳᵉ écriture parquet), AVANT toute analyse. Garantit que
+    chaque tool downstream relit du datetime64 et ne re-parse jamais une
+    string ambiguë (cause du crash crude_rates sur "28/11/2007").
+
+    Détection des colonnes via COLUMN_SCHEMA (rôles date_entree/date_sortie/
+    date_naissance) — gère les noms bruts type CTREFFET / DATE_SORTIE / CLINAISS.
+
+    Garde-fou : si la détection ou le parsing échoue, retourne le df inchangé
+    (le filet défensif notebooks + crude_rates prend le relais).
+    """
+    try:
+        from agents.mortality.dictionary.column_schema import find_col_by_role
+        from tools._shared.date_parsing import parse_dates_fr
+    except Exception:
+        return df
+
+    date_cols: list[str] = []
+    for role in ("date_entree", "date_sortie", "date_naissance"):
+        col = find_col_by_role(df, role)
+        if col and col not in date_cols:
+            date_cols.append(col)
+
+    if not date_cols:
+        return df
+
+    try:
+        return parse_dates_fr(df, columns=date_cols)
+    except Exception:
+        return df
+
+
 class DatasetStore:
     """
     Gère la persistance du DataFrame initial d'une session.
@@ -61,7 +96,11 @@ class DatasetStore:
                 created_at = datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
             )
 
-        # Première écriture
+        # Première écriture — HOTFIX-pre-refacto-2026-05 (Bug 14) :
+        # parsing des dates dès la construction (Option B-full). Le parquet
+        # stocke des colonnes datetime64 ; tous les tools downstream les
+        # relisent sans re-parser de string ambiguë.
+        df = _parse_dates_at_construction(df)
         df.to_parquet(path, index=False)
         sha = DatasetStore._sha256(df)
         return DatasetMeta(
