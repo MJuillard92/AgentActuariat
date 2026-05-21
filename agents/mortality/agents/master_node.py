@@ -709,7 +709,9 @@ def master_node(state: "AgentState") -> dict:
                 })
             # Normalisation automatique des records si les deux mappings
             # sont confirmés (US-14). No-op si l'un des drapeaux manque.
-            _stage("0.b", "Fichier normalisé (colonnes, dates, sentinelles)")
+            # HOTFIX-pre-refacto-2026-05 (Bug 16, A2) : stage 0.norm émis
+            # APRÈS la normalisation, avec le détail réel (ou "réutilisée").
+            _already_norm = bool(data_store.get("records_normalized"))
             try:
                 from agents.master.disambiguation import maybe_normalize_records
                 df_json_for_norm: str | None = None
@@ -726,8 +728,22 @@ def master_node(state: "AgentState") -> dict:
                 )
                 if norm_updates:
                     data_store.update(norm_updates)
+                    _audit = (norm_updates.get("_audit") or {}).get("normalization") or {}
+                    _rows = _audit.get("rows_out") or _audit.get("rows_in")
+                    _rows_txt = f"{_rows:,} lignes".replace(",", " ") if _rows else "lignes"
+                    _stage("0.norm",
+                           f"Construction base de données synthétique : {_rows_txt}, "
+                           f"colonnes renommées, dates parsées, sentinelles clippées "
+                           f"→ parquet temporaire")
+                elif _already_norm:
+                    _stage("0.norm", "Base synthétique réutilisée (cache)")
+                else:
+                    _stage("0.norm",
+                           "Normalisation différée (mappings non confirmés) — "
+                           "dates déjà parsées à la construction du dataset")
             except Exception as exc:
                 print(f"[MasterAgent] normalize error: {exc}", file=sys.stderr)
+                _stage("0.norm", f"Normalisation échouée : {type(exc).__name__}")
 
             data_store["_disambiguation_done"] = True
 
