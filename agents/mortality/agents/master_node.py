@@ -251,6 +251,33 @@ def _preflight_writer(data_store: dict) -> tuple[bool, list[str]]:
     return (len(missing) == 0, missing)
 
 
+def _kind_to_human(kind: str | None, classification: dict) -> str:
+    """Convertit un `kind` (+ contexte de classification) en phrase lisible
+    pour la désambiguïsation utilisateur.
+
+    Plan disambiguation 2026-05-25 — utilisé dans le message « A — ... /
+    B — ... » émis quand LLM et regex désaccordent.
+    """
+    if kind == "task":
+        scope = classification.get("report_mode", "full_report")
+        write = classification.get("write", "ask")
+        if scope == "raw_rates":
+            base = "Calculer uniquement les taux bruts (sans lissage)"
+        elif scope == "description":
+            base = "Faire une analyse descriptive du portefeuille"
+        else:
+            base = "Calculer la table de mortalité complète (avec lissage)"
+        if write == "yes":
+            base += " et générer le rapport PDF"
+        elif write == "no":
+            base += " (sans rapport PDF)"
+        return base
+    if kind == "question":
+        return ("Répondre à une question méthodologique ou décrire mes "
+                "capacités (pas de calcul)")
+    return "Interprétation inconnue"
+
+
 def _extract_study_plan_from_history(messages: list) -> dict:
     """Wrapper rétro-compat. Voir `agents.master.extract_study_plan`."""
     from agents.master.extract_study_plan import extract_study_plan_from_history
@@ -456,6 +483,46 @@ def master_node(state: "AgentState") -> dict:
         content = getattr(last_real_human, "content", "") or ""
         if content and (not history or history[-1] != content):
             history.append(content)
+
+    # ── 1b-ter. Réponse à une désambiguïsation LLM↔regex en cours ────────────
+    # Si on attend une réponse A/B/Autre du user (plan disambiguation
+    # 2026-05-25), on la traite avant tout autre routage. Les choix :
+    #   - "A" → appliquer le kind LLM original (interprétation A)
+    #   - "B" → appliquer le kind regex (interprétation B)
+    #   - "Autre" / texte libre → effacer le pending, reclassifier le nouveau
+    #     texte (l'utilisateur reformule).
+    _pending_disamb = data_store.get("_kind_disambiguation_pending")
+    if _pending_disamb and last_real_human is not None:
+        answer = (getattr(last_real_human, "content", "") or "").strip()
+        # Regex stricte : A ou B en tête, isolés (suivis d'espace, ponctuation,
+        # ou fin de chaîne). Évite que « Autre, ... » soit faussement matché
+        # comme « A ».
+        import re as _re
+        _m = _re.match(r"^\s*([ABab])(?:\s|[.,;:!?\-)]|$)", answer)
+        choice = _m.group(1).upper() if _m else ""
+        if choice in ("A", "B"):
+            # User a tranché → appliquer l'interprétation choisie.
+            chosen_kind = (_pending_disamb["llm_kind"] if choice == "A"
+                           else _pending_disamb["regex_kind"])
+            data_store["_kind_disambiguation_resolved"] = chosen_kind
+            data_store.pop("_kind_disambiguation_pending", None)
+            # Le flux normal continue avec _kind_disambiguation_resolved posé,
+            # ce qui désactive le check de désaccord plus bas.
+            # On ne touche PAS aux autres axes (write/scope) : ils viennent
+            # de la classification LLM mémorisée OU seront re-déduits.
+            if choice == "A":
+                # Réinjecter la classification LLM originale dans le data_store
+                # comme si elle venait d'être calculée — l'aval lit ces clés.
+                _saved = _pending_disamb.get("llm_classification") or {}
+                if _saved.get("write") in ("yes", "no"):
+                    data_store["_write"] = _saved["write"]
+                if _saved.get("report_mode") in ("full_report", "raw_rates", "description"):
+                    data_store["report_mode"] = _saved["report_mode"]
+        else:
+            # « Autre » ou autre chose : on efface le pending et on laisse
+            # le flux normal reclasser le nouveau message.
+            data_store.pop("_kind_disambiguation_pending", None)
+            data_store.pop("_kind_disambiguation_resolved", None)
 
     # ── 1b-bis. Question méta-capacité (avant tout LLM) ──────────────────────
     # Si l'user demande "que sais-tu faire ?" / "liste tes outils" / etc.,
@@ -950,6 +1017,54 @@ def master_node(state: "AgentState") -> dict:
     else:
         # Classification fiable : reset le compteur (on est de nouveau au vert).
         data_store.pop("_reformulation_attempts", None)
+
+    # ── Désaccord LLM ↔ regex : demander à l'utilisateur de trancher ────────
+    # Plan disambiguation 2026-05-25 : si la regex_kind_hint contredit le
+    # kind LLM, on émet une question A/B/Autre plutôt que de laisser un
+    # override silencieux (dans un sens ou l'autre).
+    # Le flag _kind_disambiguation_resolved est posé par 1b-ter quand l'user
+    # a déjà répondu — on n'insiste pas.
+    if (classification.get("_regex_disagrees")
+            and not data_store.get("_kind_disambiguation_resolved")):
+        hint = classification.get("_regex_kind_hint")
+        interp_llm   = _kind_to_human(kind, classification)
+        interp_regex = _kind_to_human(hint, classification)
+        question_md = (
+            f"Je ne suis pas sûr de comprendre votre demande. Voici les "
+            f"deux interprétations possibles :\n\n"
+            f"- **A** — {interp_llm}\n"
+            f"- **B** — {interp_regex}\n"
+            f"- **Autre** — reformulez votre demande\n\n"
+            f"Répondez « A », « B », ou reformulez."
+        )
+        # Sauvegarder l'état pour résolution au tour suivant
+        data_store["_kind_disambiguation_pending"] = {
+            "original_text":      last_human,
+            "llm_kind":           kind,
+            "regex_kind":         hint,
+            "llm_classification": {
+                "kind":        kind,
+                "write":       write,
+                "report_mode": report_mode,
+            },
+        }
+        from langchain_core.messages import AIMessage as _AIMsg_dis
+        return _ret({
+            "messages":   [_AIMsg_dis(content=question_md)],
+            "events":     [
+                {"type": "agent_switch", "agent": "MasterAgent"},
+                {"type": "kind_disambiguation_required",
+                 "text": last_human,
+                 "options": [
+                     {"id": "A",     "label": interp_llm},
+                     {"id": "B",     "label": interp_regex},
+                     {"id": "Autre", "label": "Autre — je reformule"},
+                 ]},
+                {"type": "message", "content": question_md},
+                {"type": "done"},
+            ],
+            "data_store": data_store,
+        })
 
     # Stocker les 3 axes + l'alias legacy
     # Préservation des axes _write et report_mode contre une rétrogradation

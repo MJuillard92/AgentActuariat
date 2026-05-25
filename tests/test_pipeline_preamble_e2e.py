@@ -36,8 +36,12 @@ def _data_store():
 def test_load_plan_produces_ready_preamble():
     from agents.report.pipeline._01_load_plan import load_plan
     plan = load_plan(_data_store())
-    assert plan.n_ready == 1
+    # preamble + annex (narrative sans placeholders) sont prêts avec le
+    # data_store minimal ci-dessus. Les autres sections requièrent qx_table,
+    # smoothed_table, etc. Plan qualité-rapport phase 2 (2026-05-24).
+    assert plan.n_ready == 2
     assert plan.sections[0].ready
+    assert plan.sections[0].section_id == "preamble"
 
 
 def test_redaction_hydrates_both_visuals():

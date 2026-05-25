@@ -164,6 +164,20 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
     ae, as_ = _ages(current, obs_end)
     _apply(as_ < ae, "R6", "Âge à la sortie inférieur à l'âge à l'entrée")
 
+    # Ligne TOTAL : somme des exclusions + part de la base initiale.
+    # Permet au lecteur de chiffrer immédiatement l'effort de retraitement
+    # sans additionner mentalement les règles (plan qualité-rapport 2026-05-24).
+    # Le YAML data_preprocessing.exclusion_table porte highlight_rule:
+    # totals_row → la ligne sera mise en évidence dans le PDF.
+    total_excluded = sum(r["count"] for r in rules_report)
+    pct_base = (total_excluded / initial_count * 100) if initial_count else 0.0
+    rules_report.append({
+        "rule_id":    "TOTAL",
+        "rule_label": f"TOTAL ({pct_base:.2f} % de la base initiale)",
+        "count":      total_excluded,
+        "detail":     {"pct_base": round(pct_base, 4)},
+    })
+
     return {
         "cleaned_records": current.reset_index(drop=True),
         "exclusion_report": {

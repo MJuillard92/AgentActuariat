@@ -174,7 +174,31 @@ def _compute_annual(valid: pd.DataFrame, df: pd.DataFrame, exit_col: str | None,
             "age_moyen_entres":  age_moyen_entres,
             "age_moyen_deces":   age_moyen_deces,
             "taux_deces":        taux_deces,
+            "is_partial":        False,  # rétro-actif ci-dessous
         })
+
+    # ── Détection des années partielles (étude tronquée en cours d'année) ─────
+    # Une année dont l'exposition est < 70 % de la médiane des 5 années
+    # précédentes est probablement tronquée par la fin de l'observation.
+    # On flag les rows concernées pour que le Writer puisse signaler que le
+    # taux annuel n'est pas directement comparable. Heuristique : on ne flag
+    # PAS les premières années (montée en charge légitime), seulement les
+    # dernières (chute brutale après plusieurs années stables).
+    # Plan qualité-rapport 2026-05-24 (item user « durée d'observation »).
+    if len(rows) >= 6:
+        for i in range(len(rows) - 1, max(len(rows) - 4, 0), -1):
+            prev = [rows[j]["exposition_pa"] for j in range(max(i - 5, 0), i)
+                    if rows[j]["exposition_pa"] > 0]
+            if len(prev) >= 3:
+                prev_sorted = sorted(prev)
+                median = prev_sorted[len(prev_sorted) // 2]
+                if median > 0 and rows[i]["exposition_pa"] < 0.7 * median:
+                    rows[i]["is_partial"] = True
+                else:
+                    # Dès qu'on retombe sur une année pleine en partant de la
+                    # fin, on arrête (les années partielles sont consécutives
+                    # en fin de période).
+                    break
 
     return rows
 

@@ -2164,6 +2164,7 @@ def submit_disambiguation(
         from io import StringIO
         from tools.conversation.apply_normalization import run as _apply_norm
         from session.memory_manager import MemoryManager
+        from agents.mortality.agents._utils import msgpack_safe
 
         history = list(history or [])
         try:
@@ -2188,6 +2189,14 @@ def submit_disambiguation(
                 ds["mapping_validated"]      = True
                 ds["records_normalized"]     = norm_ok
                 ds["dataset_ref_normalized"] = norm_path
+                # Crucial : `_apply_norm` peut écrire un value_mapping à clés
+                # numpy.int (ex. sexe {np.int64(1): "H"}), ce que orjson refuse
+                # à la sérialisation LangGraph (« Dict key must a type
+                # serializable with OPT_NON_STR_KEYS »). On normalise ici, au
+                # point d'entrée UI, parce que cette branche n'est pas un nœud
+                # LangGraph et ne passe donc pas par sanitize_node_result.
+                _writer_state["data_store"] = msgpack_safe(ds)
+                ds = _writer_state["data_store"]
             # Persister dans le SessionState (durable au-delà de la session live)
             mm = MemoryManager(session_id)
             mm.load()

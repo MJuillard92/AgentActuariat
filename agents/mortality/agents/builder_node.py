@@ -309,6 +309,55 @@ def builder_node(state: "AgentState") -> dict:
             import sys as _sys
             print(f"[builder_node] auto clean_records échec : {exc}", file=_sys.stderr)
 
+    # ── By-sex : exposure / crude_rates / smoothing par sexe (déterministe) ─
+    # Quand gender_segmentation=by_sex, on enrichit le pipeline avec les
+    # tables ventilées H/F. Le LLM Builder ne sait pas spontanément qu'il
+    # doit re-passer ces tools avec by_sex=True — on le fait ici dès que
+    # les prérequis sont satisfaits. Plan qualité-rapport phase 2 (2026-05-24).
+    sp_user = data_store.get("study_plan") or {}
+    _gender = (sp_user.get("gender_segmentation")
+               or data_store.get("gender_segmentation"))
+    if _gender == "by_sex":
+        # Exposure H/F
+        if (data_store.get("cleaned_records")
+                and not data_store.get("exposure_table_h")):
+            try:
+                import pandas as _pd
+                df_cleaned = _pd.DataFrame(data_store["cleaned_records"])
+                from tools.builder.exposure import run as _exposure_run
+                res = _exposure_run(df_cleaned, {"by_sex": True})
+                for k in ("exposure_table_h", "exposure_table_f",
+                          "total_exposure_h", "total_exposure_f",
+                          "total_deaths_h", "total_deaths_f"):
+                    if k in res:
+                        data_store[k] = res[k]
+            except Exception:
+                pass
+        # Crude rates H/F (besoin de exposure_table_h/f)
+        if (data_store.get("exposure_table_h")
+                and not data_store.get("qx_table_h")):
+            try:
+                from tools.builder.crude_rates import run as _crude_run
+                res = _crude_run(data=data_store, params={"by_sex": True})
+                for k in ("qx_table_h", "qx_table_f"):
+                    if k in res:
+                        data_store[k] = res[k]
+            except Exception:
+                pass
+        # Smoothing H/F (besoin de qx_table_h/f, full_report uniquement)
+        if (data_store.get("qx_table_h")
+                and not data_store.get("smoothed_table_h")
+                and data_store.get("report_mode") == "full_report"):
+            try:
+                from tools.builder.smoothing import run as _smooth_run
+                res = _smooth_run(data=data_store, params={"by_sex": True})
+                for k in ("smoothed_table_h", "smoothed_table_f",
+                          "n_non_monotone_h", "n_non_monotone_f"):
+                    if k in res:
+                        data_store[k] = res[k]
+            except Exception:
+                pass
+
     # ── Branches déterministes pour clés "dérivées" ─────────────────────────
     # Les tools `aggregation.exposure_deciles` et `builder.validation`
     # sont rarement choisis spontanément par le LLM ; on les exécute
@@ -352,6 +401,51 @@ def builder_node(state: "AgentState") -> dict:
             )
             if "qx_deciles_table" in res:
                 data_store["qx_deciles_table"] = res["qx_deciles_table"]
+        except Exception:
+            pass
+
+    # Validation statistique du lissage (déterministe, full_report uniquement).
+    # En raw_rates le smoothed_table est l'identité du brut (cf. bloc C' plus
+    # haut), tester sa qualité n'a pas de sens. Plan qualité-rapport 2026-05-24.
+    if (data_store.get("smoothed_table")
+            and data_store.get("qx_table")
+            and not data_store.get("validation_tests_table")
+            and data_store.get("report_mode") == "full_report"):
+        try:
+            from tools.builder.statistical_validation import run as _stat_val_run
+            res = _stat_val_run(data=data_store, params={})
+            if "erreur" not in res:
+                data_store.update(res)
+        except Exception:
+            pass
+
+    # Benchmarking contre une table réglementaire (déterministe, full_report).
+    # Choix par défaut : TH00-02 (hommes) ; à raffiner par sexe via
+    # study_plan.methods["builder.benchmarking"] le cas échéant.
+    # Plan qualité-rapport phase 2 (2026-05-24).
+    if (data_store.get("smoothed_table")
+            and data_store.get("exposure_table")
+            and not data_store.get("abatement_table")
+            and data_store.get("report_mode") == "full_report"):
+        try:
+            from tools.builder.benchmarking import run as _bench_run
+            sp_user = data_store.get("study_plan") or {}
+            user_methods = sp_user.get("methods") or {}
+            chosen_ref = user_methods.get("builder.benchmarking.reference_name") \
+                or "TH0002"
+            chosen_sexe = user_methods.get("builder.benchmarking.sexe") or "H"
+            res = _bench_run(
+                data=data_store,
+                params={"function_name": "abatement_factors",
+                        "reference_name": chosen_ref,
+                        "sexe": chosen_sexe,
+                        "qx_exp_col": "q_x_lisse"},
+            )
+            if "erreur" not in res:
+                data_store["abatement_table"] = res.get("abatement_table") or []
+                data_store["smr_global"]      = res.get("smr_global")
+                data_store["reference_name"]  = res.get("reference_name")
+                data_store["benchmarking_summary"] = res.get("summary") or {}
         except Exception:
             pass
 

@@ -95,6 +95,17 @@ import pandas as pd
 from agents.mortality.dictionary.column_schema import find_col as _find_col, COLUMN_SCHEMA as _CS
 
 
+# Libellés humains pour les colonnes catégorielles canoniques.
+# Appliqué sur la colonne `valeur` du tableau de segmentation avant
+# remontée au data_store. Lecture améliorée du PDF (« Homme » plutôt que
+# « H »). Plan qualité-rapport phase 2 (2026-05-24).
+_LABEL_MAPS: dict[str, dict[str, str]] = {
+    "sexe":         {"H": "Homme", "F": "Femme", "M": "Homme", "W": "Femme"},
+    "cause_sortie": {"deces": "Décès", "autre": "Autre",
+                     "sans_objet": "Sans objet"},
+}
+
+
 def _is_death(df: pd.DataFrame) -> pd.Series:
     death_col = _find_col(df, _CS["cause_sortie"]["candidates"])
     if death_col:
@@ -225,6 +236,13 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             )
         tab["pct_contrats"] = (tab["nb_contrats"] / total * 100).round(1)
         tab["pct_deces"]    = (tab["nb_deces"] / total_deces * 100).round(1) if total_deces > 0 else 0.0
+        # Mapping libellés humains pour les colonnes connues. Le Writer
+        # (et l'utilisateur final) lisent « Homme » / « Femme » plutôt que
+        # les codes bruts « H » / « F ». Plan qualité-rapport phase 2.
+        if label in _LABEL_MAPS:
+            tab["valeur"] = tab["valeur"].map(
+                lambda v, m=_LABEL_MAPS[label]: m.get(str(v), str(v))
+            )
         result["segmentations"][label] = tab.to_dict(orient="records")
 
     if not result["segmentations"]:

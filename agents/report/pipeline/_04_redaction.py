@@ -787,6 +787,28 @@ Exemples INTERDITS (notation ASCII) :
   ## Synthèse
   [1 paragraphe de conclusion de la section]
 
+### 5. Ordre obligatoire : chiffres → visualisation → lecture
+
+Dans chaque sous-section qui présente un tableau ou un graphique, respecte
+strictement cet enchaînement :
+
+  1. **D'abord** : énoncer les chiffres saillants en prose
+     (ex. « le portefeuille compte 3 264 327 années-personne et 95 063 décès »).
+  2. **Ensuite** : référencer la visualisation
+     (« Le tableau ci-dessous synthétise… » ou « La figure ci-dessous présente… »).
+  3. **Enfin** : donner la lecture des résultats, en commençant par une formule
+     du type « On observe que… », « Il en ressort que… », « Le tableau met en
+     évidence… ».
+
+INTERDIT :
+  ✗ Écrire « le graphique montre X » AVANT d'avoir énoncé les chiffres bruts.
+  ✗ Conclure ou interpréter AVANT d'avoir présenté les données.
+  ✗ Mélanger lecture et présentation dans le même paragraphe.
+
+Le lecteur doit pouvoir suivre la chaîne : contexte chiffré → visualisation →
+analyse. Inverser cet ordre rend le texte spéculatif (« le graphique montre que… »
+sans que le lecteur ait vu un seul chiffre).
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 

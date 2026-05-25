@@ -91,7 +91,10 @@ def run(data: dict, params: dict) -> dict:
                 continue
             canonical = _match_canonical(observed, allowed)
             if canonical is not None:
-                col_map[observed] = canonical
+                # Clé toujours str : (1) normalize_records fait astype(str)
+                # avant lookup, donc {"1": "H"} matche, {np.int64(1): "H"} non ;
+                # (2) orjson refuse les clés numpy.int au checkpoint LangGraph.
+                col_map[str(observed)] = canonical
             else:
                 col_unmapped.append(observed)
         value_mapping[column] = col_map

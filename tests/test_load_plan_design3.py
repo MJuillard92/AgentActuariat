@@ -76,6 +76,34 @@ def _preamble_data_store():
              "ecart": 0.0, "ecart_pct": 0.0,
              "ci_lower": 0.0, "ci_upper": 2.0},
         ],
+        # Section smoothing (refonte 2026-05-24) nécessite smoothed_deciles_table.
+        # Section validation (nouvelle) nécessite validation_tests_table.
+        # Produites par builder.statistical_validation (full_report).
+        "smoothed_deciles_table": [
+            {"age_range": "20-30", "E_x_sum": 100.0, "proportion": 10.0,
+             "D_x_observed": 1, "D_x_predicted": 1.1,
+             "ecart_pct": 9.0, "ci_lower": 0.0, "ci_upper": 3.0},
+        ],
+        "validation_tests_table": [
+            {"test": "chi_square", "statistic": 1.0, "p_value": 0.5,
+             "df": 60, "decision": "accepted",
+             "interpretation": "Le lissage est compatible avec les observations."},
+        ],
+        "smoothness_metrics": {"sum_squared_d2": 0.001,
+                               "sum_squared_d3": 0.0001,
+                               "mean_abs_d2": 0.005},
+        "validation_summary": {"n_tests_accepted": 4, "n_tests_rejected": 1,
+                               "alpha": 0.05, "global_assessment": "acceptable"},
+        "ci_table": [{"age": 30, "q_x_lisse": 0.011,
+                      "ci_lower": 0.005, "ci_upper": 0.017}],
+        # Section benchmarking (phase 2) — produites par builder.benchmarking.
+        "abatement_table": [{"age": 30, "qx_exp": 0.011, "qx_ref": 0.015,
+                             "abatement_factor": 0.73}],
+        "smr_global":      0.78,
+        "reference_name":  "TH0002",
+        "benchmarking_summary": {"global_factor": 0.78, "min_factor": 0.50,
+                                 "max_factor": 1.10, "age_min_factor": 25,
+                                 "age_max_factor": 80},
     }
 
 
@@ -83,8 +111,11 @@ def test_load_plan_returns_one_section_for_preamble_yaml():
     plan = load_plan(_preamble_data_store())
     assert isinstance(plan, ReportPlan)
     # preamble + data_preprocessing + data_analysis_{unisex,by_sex}
-    # + table_construction + smoothing = 6
-    assert len(plan.sections) == 6
+    # + table_construction + smoothing + smoothing_by_sex + validation
+    # + benchmarking + conclusion + annex = 11
+    # (smoothing_by_sex activé par défaut quand gender_segmentation
+    # n'est pas filtré — la fixture ne fixe pas ce contexte.)
+    assert len(plan.sections) == 11
     assert plan.sections[0].section_id == "preamble"
     assert plan.sections[1].section_id == "data_preprocessing"
 

@@ -149,12 +149,14 @@ def test_segmentation_computes_exposition_pa_per_modality():
     })
     res = run(df, {"columns": ["sexe"]})
     assert "total_exposition_pa" in res
+    # Les libellés H/F sont désormais mappés vers Homme/Femme par segmentation
+    # (plan qualité-rapport phase 2 — lisibilité PDF).
     seg = {r["valeur"]: r for r in res["segmentations"]["sexe"]}
-    assert "exposition_pa" in seg["H"]
-    assert "pct_exposition" in seg["H"]
-    # H : 2000→2010 (10 ans) + 2000→2010 clippé (10 ans) = 20 a-p
-    assert abs(seg["H"]["exposition_pa"] - 20.0) < 0.1
-    # F : 2005→2010 = 5 a-p
-    assert abs(seg["F"]["exposition_pa"] - 5.0) < 0.1
+    assert "exposition_pa" in seg["Homme"]
+    assert "pct_exposition" in seg["Homme"]
+    # Homme : 2000→2010 (10 ans) + 2000→2010 clippé (10 ans) = 20 a-p
+    assert abs(seg["Homme"]["exposition_pa"] - 20.0) < 0.1
+    # Femme : 2005→2010 = 5 a-p
+    assert abs(seg["Femme"]["exposition_pa"] - 5.0) < 0.1
     # nb_contrats reste disponible (rétro-compat) mais valeur = count
-    assert seg["H"]["nb_contrats"] == 2
+    assert seg["Homme"]["nb_contrats"] == 2

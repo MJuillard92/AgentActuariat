@@ -24,10 +24,10 @@ formats:
     age_min:               int
     age_max:               int
     annee:                 int
-    qx:                    float4
-    q_x:                   float4
-    q_x_brut:              float4
-    q_x_lisse:             float4
+    qx:                    pct2_dec
+    q_x:                   pct2_dec
+    q_x_brut:              pct2_dec
+    q_x_lisse:             pct2_dec
     E_x:                   float2
     D_x:                   int
     exposition_pa:         float2
@@ -290,6 +290,154 @@ data_contract:
         inputs: {}
         output_mapping: {ci_table: ci_table}
 
+    - key: smoothed_deciles_table
+      type: list[dict]
+      description: >
+        Variante de qx_deciles_table calculée avec les taux LISSÉS :
+        D_x_predicted = Σ E_x × q_x_lisse (au lieu de q_x_brut). Permet
+        de comparer décès observés vs prédits par décile sur la table
+        finale, et non sur les taux bruts. Consommée par la section
+        smoothing.
+      produced_by:
+        tool: builder.statistical_validation
+        inputs: {qx_table: qx_table, smoothed_table: smoothed_table}
+        output_mapping: {smoothed_deciles_table: smoothed_deciles_table}
+
+    - key: validation_tests_table
+      type: list[dict]
+      description: >
+        Résultats d'une batterie de 5 tests statistiques d'adéquation du
+        lissage (χ², signes, runs Wald-Wolfowitz, Kolmogorov-Smirnov sur
+        résidus, Durbin-Watson). Une ligne par test :
+        {test, statistic, p_value, df, decision, interpretation}.
+        Consommée par la section validation (full_report).
+      produced_by:
+        tool: builder.statistical_validation
+        inputs: {qx_table: qx_table, smoothed_table: smoothed_table}
+        output_mapping: {validation_tests_table: validation_tests_table}
+
+    - key: smoothness_metrics
+      type: dict
+      description: >
+        Métriques de régularité de la courbe lissée :
+        {sum_squared_d2, sum_squared_d3, mean_abs_d2} — différences
+        finies d'ordre 2 et 3 sur q_x_lisse. Quantifie l'arbitrage
+        fidélité ↔ régularité conjointement avec le χ².
+      produced_by:
+        tool: builder.statistical_validation
+        inputs: {smoothed_table: smoothed_table}
+        output_mapping: {smoothness_metrics: smoothness_metrics}
+
+    - key: validation_summary
+      type: dict
+      description: >
+        Synthèse des tests statistiques :
+        {n_tests_accepted, n_tests_rejected, alpha, global_assessment}.
+        global_assessment ∈ {acceptable, questionable, inadéquat} selon
+        le ratio des tests acceptés.
+      produced_by:
+        tool: builder.statistical_validation
+        inputs: {qx_table: qx_table, smoothed_table: smoothed_table}
+        output_mapping: {validation_summary: validation_summary}
+
+    - key: abatement_table
+      type: list[dict]
+      description: >
+        Facteurs d'abattement par âge : {age, qx_exp, qx_ref,
+        abatement_factor} où abatement_factor = qx_exp / qx_ref.
+        Quantifie l'écart à la référence âge par âge. Consommée par
+        la section benchmarking.
+      produced_by:
+        tool: builder.benchmarking
+        inputs: {exposure_table: exposure_table, smoothed_table: smoothed_table}
+        output_mapping: {abatement_table: abatement_table}
+
+    - key: smr_global
+      type: number
+      description: >
+        Standardized Mortality Ratio global = Σ(D_x obs) / Σ(D_x_attendus
+        sous table de référence). < 0,5 sélection forte ; 0,8–1,2 proche
+        référence ; > 1,2 sur-mortalité. Consommé par les sections
+        benchmarking et conclusion.
+      produced_by:
+        tool: builder.benchmarking
+        inputs: {exposure_table: exposure_table, smoothed_table: smoothed_table}
+        output_mapping: {smr_global: smr_global}
+
+    - key: reference_name
+      type: string
+      description: >
+        Nom de la table réglementaire utilisée comme référence (TH0002,
+        TF0002, TD8890, TPRV93). Cité dans les sections benchmarking et
+        conclusion.
+      produced_by:
+        tool: builder.benchmarking
+        inputs: {}
+        output_mapping: {reference_name: reference_name}
+
+    - key: benchmarking_summary
+      type: dict
+      description: >
+        Résumé du benchmarking : {global_factor, min_factor, max_factor,
+        age_min_factor, age_max_factor}. Permet au Writer de citer
+        l'âge où l'abattement est minimal/maximal.
+      produced_by:
+        tool: builder.benchmarking
+        inputs: {exposure_table: exposure_table, smoothed_table: smoothed_table}
+        output_mapping: {summary: benchmarking_summary}
+
+    # ─── Clés ventilées par sexe (gender_segmentation = by_sex) ────────────
+    # Activées par les branches déterministes du Builder qui passent
+    # by_sex=True à exposure, crude_rates et smoothing. Consommées par la
+    # section smoothing_by_sex et — via le LLM Writer — par la conclusion.
+    - key: exposure_table_h
+      type: list[dict]
+      description: "Table d'exposition par âge pour les hommes (E_x, D_x)."
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {exposure_table_h: exposure_table_h}
+
+    - key: exposure_table_f
+      type: list[dict]
+      description: "Table d'exposition par âge pour les femmes."
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {exposure_table_f: exposure_table_f}
+
+    - key: qx_table_h
+      type: list[dict]
+      description: "Taux bruts q_x par âge pour les hommes."
+      produced_by:
+        tool: builder.crude_rates
+        inputs: {exposure_table_h: exposure_table_h}
+        output_mapping: {qx_table_h: qx_table_h}
+
+    - key: qx_table_f
+      type: list[dict]
+      description: "Taux bruts q_x par âge pour les femmes."
+      produced_by:
+        tool: builder.crude_rates
+        inputs: {exposure_table_f: exposure_table_f}
+        output_mapping: {qx_table_f: qx_table_f}
+
+    - key: smoothed_table_h
+      type: list[dict]
+      description: "Taux lissés par âge pour les hommes : {age, q_x_brut, q_x_lisse}."
+      produced_by:
+        tool: builder.smoothing
+        inputs: {qx_table_h: qx_table_h}
+        output_mapping: {smoothed_table_h: smoothed_table_h}
+
+    - key: smoothed_table_f
+      type: list[dict]
+      description: "Taux lissés par âge pour les femmes."
+      produced_by:
+        tool: builder.smoothing
+        inputs: {qx_table_f: qx_table_f}
+        output_mapping: {smoothed_table_f: smoothed_table_f}
+
     - key: cohort_min_age
       type: int
       description: "Âge minimum de la cohorte (issu de builder.exposure)."
@@ -327,11 +475,15 @@ sections:
         exposition totale de {{ total_exposure }} années-personne
         et {{ total_deaths }} décès observés.
 
-        L'étude se déroule en quatre étapes : analyse descriptive du
-        portefeuille assuré, calcul des taux bruts de mortalité par
-        application de la formule centrale q_x = D_x / E_x sur la
-        cohorte, lissage des taux bruts pour obtenir la table d'expérience
-        finale, puis validation observé vs prédit par classes d'âges.
+        L'étude se déroule en six étapes successives : retraitement de
+        la base (exclusions de qualité), analyse descriptive du
+        portefeuille (composition, séries annuelles, distribution des
+        âges), construction des taux bruts par âge selon la formule
+        centrale q_x = D_x / E_x, lissage Whittaker-Henderson pour
+        produire la table finale, validation statistique du lissage
+        (tests d'adéquation χ², signes, runs, Kolmogorov-Smirnov,
+        Durbin-Watson), et enfin benchmarking contre les tables
+        réglementaires de référence (TH00-02 / TF00-02 / TD8890).
 
       text_description: |
         Ce rapport présente une analyse descriptive du portefeuille
@@ -457,14 +609,26 @@ sections:
           avec valeurs saillantes ; (2) proposer une explication probable,
           métier (montée en puissance, changement de cible) ou statistique
           (faiblesse des effectifs, variance). Style actuariel, factuel.
-        length_words: [80, 150]
+
+          OBLIGATOIRE — Détection d'année partielle : si la dernière ligne
+          du tableau porte is_partial=true (ou si son exposition est très
+          inférieure aux années précédentes), signaler explicitement que
+          cette année a été tronquée par la fin d'observation et que son
+          taux annuel n'est PAS directement comparable aux années pleines
+          (l'exposition est en années-personne et reflète une fraction
+          d'année). Insérer cette mise en garde sous forme de > Note ou
+          d'un bullet dédié.
+        length_words: [100, 180]
         few_shot_example: |
           - forte croissance de l'exposition, traduisant une montée en
             puissance de la commercialisation ;
           - taux de décès annuel très volatil, s'expliquant par la faiblesse
             de l'effectif sur les premières années ;
           - âge moyen à l'entrée relativement stable ;
-          - âge moyen au décès volatil.
+          - âge moyen au décès volatil ;
+          - > Note : la dernière année observée est partielle (étude tronquée
+            avant le 31/12) — son taux annuel est artificiellement élevé et
+            ne doit pas être comparé aux années pleines précédentes.
 
     visual_specs:
       - id: annual_statistics
@@ -475,16 +639,16 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
+          - {key: taux_deces,       label: "q_x (%)",                format: pct2_pm}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
       - id: exposure_distribution_by_age
         type: chart
         chart_type: bar
-        purpose: "Distribution des âges à l'entrée par tranches."
+        purpose: "Distribution des âges à l'entrée en observation (date d'effet du contrat) — par tranches."
         source: ages.distribution_list
-        x_axis: {key: tranche,     label: "Âge (tranches)"}
+        x_axis: {key: tranche,     label: "Âge à l'entrée (tranches)"}
         y_axis: {key: nb_contrats, label: "Effectif"}
 
   - id: data_analysis_by_sex
@@ -533,7 +697,7 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
+          - {key: taux_deces,       label: "q_x (%)",                format: pct2_pm}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
@@ -545,7 +709,7 @@ sections:
           - {key: annee,            label: "Année",                  format: int}
           - {key: exposition_pa,    label: "Exposition",             format: int}
           - {key: nb_deces,         label: "Nb décès",               format: int}
-          - {key: taux_deces,       label: "Qx \u2030",              format: float1}
+          - {key: taux_deces,       label: "q_x (%)",                format: pct2_pm}
           - {key: age_moyen_deces,  label: "Âge moyen\nau décès",    format: float2}
         highlight_rule: totals_row
 
@@ -633,8 +797,8 @@ sections:
           - {key: E_x_sum,       label: "Exp",                     format: int}
           - {key: proportion,    label: "% Exp",                   format: float1}
           - {key: D_x_observed,  label: "Décès\nobservés",         format: int}
-          - {key: D_x_predicted, label: "Décès\nprédits",          format: int}
-          - {key: ecart_pct,     label: "Écart %",                 format: float1}
+          - {key: D_x_predicted, label: "Décès prédits\n(D_pred = Σ E_x × q_x brut)", format: int}
+          - {key: ecart_pct,     label: "Écart %\n|D_obs − D_pred| / D_pred",         format: float1}
           - {key: ci_lower,      label: "IC Min\n95%",             format: int}
           - {key: ci_upper,      label: "IC Max\n95%",             format: int}
 
@@ -663,43 +827,70 @@ sections:
         Les taux bruts q_x calculés à partir des {{ total_exposure }}
         années-personne et {{ total_deaths }} décès ont été lissés pour
         produire la table de mortalité d'expérience finale, sur la plage
-        d'âges {{ cohort_min_age }} à {{ cohort_max_age }} ans. Le
-        lissage atténue les variations dues à la faible volumétrie aux
-        âges marginaux et garantit une croissance régulière du taux de
-        mortalité avec l'âge. La méthode retenue est Whittaker-Henderson
-        avec un paramètre de pénalisation par défaut.
+        d'âges {{ cohort_min_age }} à {{ cohort_max_age }} ans.
+
+        ### Méthodologie de lissage
+
+        La méthode retenue est **Whittaker-Henderson**, qui minimise un
+        compromis entre fidélité aux observations et régularité de la
+        courbe :
+
+        > min  Σ E_x × (q_brut − q_lisse)²  +  λ × Σ (Δ² q_lisse)²
+
+        où Δ² est la différence finie d'ordre 2 (mesure la courbure
+        locale) et λ le paramètre de pénalisation. Plus λ est élevé,
+        plus la courbe est régulière au prix d'un écart accru aux
+        observations. Le paramètre est mis à l'échelle automatiquement
+        en fonction de l'exposition moyenne ; sa valeur effective est
+        rapportée dans la section *Validation statistique* qui suit.
+
+        Le tableau ci-dessous présente, pour chaque décile d'exposition,
+        les décès observés comparés aux décès prédits **par les taux
+        lissés** (D_pred = Σ E_x × q_x_lisse). C'est l'évaluation
+        agrégée de la capacité du lissage à reproduire les observations.
+        Le détail âge par âge des taux bruts et lissés est reporté en
+        annexe.
 
     llm_directives:
       tone: "professionnel, actuariel, méthodologique"
-      length_words: [150, 250]
+      length_words: [180, 300]
       rag_query: "lissage taux bruts mortalité Whittaker-Henderson Makeham"
 
       post_table_analysis:
         instruction: >
-          À partir du tableau lissé, commenter (1) la régularité obtenue
-          (croissance monotone avec l'âge ou violations résiduelles) ;
-          (2) l'écart maximal entre q_x_brut et q_x_lisse ; (3) la
-          pertinence de la méthode au regard du nombre d'âges et de
-          l'exposition disponible. Style sobre, pas de jugement de
-          prudence (relève d'une section validation distincte).
-        length_words: [80, 150]
+          À partir de smoothed_deciles_table, commenter (1) la régularité
+          de l'écart D_observés vs D_prédits par décile ; (2) l'ampleur
+          maximale de l'écart relatif et le décile concerné ; (3) la
+          présence éventuelle d'un biais systématique haut ou bas. NE PAS
+          conclure sur l'adéquation statistique — c'est l'objet exclusif
+          de la section *Validation statistique* qui suit (tests χ²,
+          signes, runs, KS, Durbin-Watson).
+        length_words: [100, 180]
         few_shot_example: |
-          - les taux lissés présentent une croissance régulière avec
-            l'âge, sans rupture marquée ;
-          - l'écart maximal entre brut et lissé est observé aux âges
-            extrêmes, où l'exposition est la plus faible ;
-          - la méthode Whittaker-Henderson est adaptée à la plage
-            d'âges couverte et au volume d'observations.
+          - sur les déciles centraux (40-70 ans), l'écart relatif reste
+            inférieur à 2 %, signe d'une fidélité satisfaisante ;
+          - l'écart maximal est observé sur le dernier décile (âges
+            avancés), où le lissage attire la queue vers la moyenne ;
+          - aucun biais systématique apparent — les écarts sont
+            répartis des deux côtés du zéro.
 
     visual_specs:
-      - id: smoothing_table
+      - id: smoothed_deciles_table
         type: table
-        purpose: "Taux bruts et taux lissés par âge."
-        source: smoothed_table
+        purpose: >
+          Décès observés vs prédits par déciles d'exposition, avec les
+          taux LISSÉS (D_pred = Σ E_x × q_x_lisse). Évalue la capacité
+          du lissage à reproduire les observations agrégées.
+        source: smoothed_deciles_table
         columns:
-          - {key: age,        label: "Âge",          format: int}
-          - {key: q_x_brut,   label: "Taux brut",    format: float4}
-          - {key: q_x_lisse,  label: "Taux lissé",   format: float4}
+          - {key: age_range,     label: "Classe d'âges"}
+          - {key: E_x_sum,       label: "Exp",                                       format: int}
+          - {key: proportion,    label: "% Exp",                                     format: float1}
+          - {key: D_x_observed,  label: "Décès\nobservés",                           format: int}
+          - {key: D_x_predicted, label: "Décès prédits\n(D_pred = Σ E_x × q_x lissé)", format: int}
+          - {key: ecart_pct,     label: "Écart %\n|D_obs − D_pred| / D_pred",         format: float1}
+          - {key: ci_lower,      label: "IC Min\n95%",                               format: int}
+          - {key: ci_upper,      label: "IC Max\n95%",                               format: int}
 
       - id: obs_vs_smoothed_chart
         type: chart
@@ -714,6 +905,262 @@ sections:
           - {source: qx_table,       key_x: age, key_y: qx,        style: point, label: "Taux brut",  color: "#1A3668"}
           - {source: smoothed_table, key_x: age, key_y: q_x_lisse, style: line,  label: "Taux lissé", color: "#E25B34"}
           - {source: ci_table,       key_x: age, key_y_lower: ci_lower, key_y_upper: ci_upper, style: area, label: "IC 95%", color: "#E25B34", alpha: 0.18}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Validation statistique du lissage (full_report uniquement)
+  # Produite par builder.statistical_validation (auto-déclenchée).
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: validation
+    label: "Validation statistique de la table lissée"
+    required: false
+    dependencies: [smoothing]
+    activation:
+      report_mode: [full_report]
+
+    narrative:
+      text: |
+        Cette section soumet la table lissée à une batterie de tests
+        statistiques d'adéquation.
+
+        ### Calcul des intervalles de confiance à 95 %
+
+        Les intervalles de confiance sur les décès prédits sont
+        construits sous **hypothèse poissonienne** : pour chaque âge x
+        (ou pour chaque décile d'exposition), D_x suit approximativement
+        une loi de Poisson de paramètre λ_x = E_x × q_x. L'IC 95 % est
+        alors
+
+        > IC_95 % = [ D_pred − 1.96 × √D_pred ;  D_pred + 1.96 × √D_pred ]
+
+        Ramené sur le taux : IC sur q = IC sur D divisé par E_x. Un
+        taux observé hors de cet intervalle signale un écart
+        statistiquement significatif entre observation et modèle.
+
+        ### Batterie de tests appliquée
+
+        Cinq tests indépendants évaluent l'adéquation sous différents
+        angles :
+
+        - **χ² d'adéquation** — Σ (O_i − E_i)² / E_i suit χ² à n−1
+          degrés de liberté sous H₀ « le lissage reproduit les
+          observations ». Évalue la fidélité globale.
+        - **Test des signes** — nombre d'âges où q_lisse > q_brut.
+          Sous H₀ « lissage non biaisé », suit Binomial(n, 0.5). Détecte
+          un décalage systématique haut ou bas.
+        - **Wald-Wolfowitz (runs)** — nombre de séquences de signes
+          identiques dans (q_lisse − q_brut). Trop peu de runs → lissage
+          trop rigide ; trop de runs → suit le bruit aléatoire.
+        - **Kolmogorov-Smirnov sur les résidus** — teste si les résidus
+          standardisés (O − E)/√E suivent N(0,1). Détecte un défaut de
+          spécification du modèle de bruit.
+        - **Durbin-Watson** — statistique d'autocorrélation des résidus
+          ordonnés par âge. Acceptation dans [1.5 ; 2.5].
+
+        Le tableau ci-dessous présente les résultats et leur lecture.
+        Une métrique de **régularité** (somme des carrés des
+        différences finies d'ordre 2 du lissage) complète l'évaluation
+        — elle quantifie l'arbitrage fidélité ↔ régularité.
+
+    llm_directives:
+      tone: "professionnel, actuariel, méthodologique"
+      length_words: [180, 320]
+      rag_query: "validation lissage tests adéquation chi carré Kolmogorov Durbin-Watson"
+
+      post_table_analysis:
+        instruction: >
+          Pour chaque test du tableau validation_tests_table : rappeler
+          son objet en une phrase, citer sa statistique et sa p-value,
+          puis donner la lecture (champ interpretation). Citer
+          smoothness_metrics.sum_squared_d2 et la commenter
+          (régularité élevée ↔ faible valeur ; comparer à l'ordre de
+          grandeur des q_x_lisse au carré). Conclure en citant
+          validation_summary.global_assessment (acceptable /
+          questionable / inadéquat) en explicitant le nombre de tests
+          acceptés / rejetés.
+        length_words: [120, 220]
+
+    visual_specs:
+      - id: validation_tests_table
+        type: table
+        purpose: "Résultats des tests statistiques d'adéquation du lissage."
+        source: validation_tests_table
+        columns:
+          - {key: test,           label: "Test"}
+          - {key: statistic,      label: "Statistique",  format: float4}
+          - {key: p_value,        label: "p-value",      format: float4}
+          - {key: df,             label: "df",           format: int}
+          - {key: decision,       label: "Décision"}
+          - {key: interpretation, label: "Lecture"}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Lissage par sexe — tables H et F
+  # Activée uniquement si gender_segmentation = by_sex.
+  # Produite par builder.smoothing(by_sex=True), branche déterministe Builder.
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: smoothing_by_sex
+    label: "Lissage par sexe — tables H et F"
+    required: false
+    dependencies: [smoothing]
+    activation:
+      report_mode: [full_report]
+      gender_segmentation: [by_sex]
+
+    narrative:
+      text: |
+        Les taux de mortalité ont été calculés puis lissés séparément
+        pour les hommes et les femmes, conformément à la dissymétrie
+        de sinistralité identifiée dans l'analyse descriptive du
+        portefeuille. Cette ventilation est une exigence quasi-systématique
+        des rapports de certification (Solvabilité II, normes IFRS 17),
+        la mortalité féminine étant typiquement 30 à 50 % inférieure
+        à la mortalité masculine au même âge.
+
+    llm_directives:
+      tone: "professionnel, actuariel, comparatif"
+      length_words: [150, 250]
+      rag_query: "mortalité par sexe table H F différenciation actuariel"
+
+      post_table_analysis:
+        instruction: >
+          Comparer les courbes lissées H et F : (1) écart relatif moyen
+          au-dessus de 40 ans ; (2) âges où l'écart est le plus marqué ;
+          (3) éventuelle convergence aux grands âges. Citer
+          total_exposure_h / total_exposure_f et total_deaths_h /
+          total_deaths_f pour contextualiser les volumes.
+        length_words: [100, 180]
+
+    visual_specs:
+      - id: smoothed_chart_by_sex
+        type: chart
+        chart_type: multi_series
+        purpose: "Comparaison des taux lissés Hommes vs Femmes."
+        x_axis: {key: age, label: "Âge"}
+        y_axis: {key: q_x, label: "Taux de mortalité q_x"}
+        series:
+          - {source: smoothed_table_h, key_x: age, key_y: q_x_lisse, style: line, label: "Hommes",  color: "#1A3668"}
+          - {source: smoothed_table_f, key_x: age, key_y: q_x_lisse, style: line, label: "Femmes",  color: "#E25B34"}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Benchmarking — comparaison aux tables réglementaires
+  # Produite par builder.benchmarking (auto-déclenchée — full_report).
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: benchmarking
+    label: "Benchmarking — comparaison aux tables réglementaires"
+    required: false
+    dependencies: [validation]
+    activation:
+      report_mode: [full_report]
+
+    narrative:
+      text: |
+        Pour situer la table d'expérience par rapport à la mortalité de
+        la population française de référence, elle a été comparée à la
+        table réglementaire {{ reference_name }}. Le SMR (Standardized
+        Mortality Ratio) — défini par SMR = Σ D_x_obs / Σ D_x_attendus
+        où D_x_attendus = E_x × q_x_ref — quantifie globalement
+        l'écart de mortalité du portefeuille à la référence.
+
+        Le facteur d'abattement local α_x = q_x_lisse / q_x_ref mesure
+        ce même écart âge par âge ; il révèle les plages d'âges où le
+        portefeuille s'écarte le plus de la référence.
+
+    llm_directives:
+      tone: "professionnel, actuariel, méthodologique"
+      length_words: [180, 300]
+      rag_query: "SMR benchmarking table référence TH TF abattement mortalité"
+
+      post_table_analysis:
+        instruction: >
+          Citer le SMR global ({{ smr_global }}) et son interprétation :
+          < 0,5 = forte sélection médicale ; 0,5–0,8 = sélection modérée
+          (typique prévoyance entreprise) ; 0,8–1,2 = proche référence ;
+          > 1,2 = surmortalité (alerter). Commenter l'âge à abattement
+          minimum et l'âge à abattement maximum (lus dans le summary).
+          Conclure sur la cohérence du portefeuille avec la référence.
+        length_words: [100, 180]
+
+    visual_specs:
+      - id: abatement_table
+        type: table
+        purpose: "Facteurs d'abattement âge par âge contre la table de référence."
+        source: abatement_table
+        columns:
+          - {key: age,              label: "Âge",                 format: int}
+          - {key: qx_exp,           label: "q_x expérience",      format: pct2_dec}
+          - {key: qx_ref,           label: "q_x référence",       format: pct2_dec}
+          - {key: abatement_factor, label: "α = q_exp / q_réf",   format: float4}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Section : Conclusion — synthèse globale du rapport
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: conclusion
+    label: "Conclusion"
+    required: false
+    dependencies: [benchmarking]
+    activation:
+      report_mode: [full_report]
+
+    narrative:
+      text: |
+        Cette table de mortalité d'expérience repose sur
+        {{ total_exposure }} années-personne et {{ total_deaths }} décès
+        observés sur la plage d'âges effective {{ cohort_min_age }} à
+        {{ cohort_max_age }} ans. Le lissage Whittaker-Henderson a
+        produit une table dont l'adéquation aux observations est jugée
+        « {{ validation_summary.global_assessment }} » par la batterie
+        de tests statistiques. Le SMR global vis-à-vis de la référence
+        {{ reference_name }} s'établit à {{ smr_global }}.
+
+    llm_directives:
+      tone: "professionnel, actuariel, conclusif"
+      length_words: [220, 380]
+      rag_query: "conclusion rapport mortalité certification synthèse"
+
+      post_table_analysis:
+        instruction: >
+          Rédiger une conclusion structurée en trois paragraphes :
+          (1) Qualité du lissage — citer validation_summary
+          (n_tests_accepted, n_tests_rejected, global_assessment),
+          smoothness_metrics.sum_squared_d2, et l'éventuelle violation
+          de monotonie.
+          (2) Positionnement vis-à-vis de la référence — citer
+          smr_global, l'âge à abattement minimum et maximum.
+          (3) Limites et points de vigilance — année partielle si
+          détectée, plage d'âges effective vs demandée, écart H/F si
+          gender_segmentation = by_sex, taux d'exclusion au
+          retraitement.
+          Pas de table dans cette section — uniquement du texte
+          narratif synthétique.
+        length_words: [220, 380]
+
+    visual_specs: []
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Annexe : table complète âge par âge (bruts + lissés).
+  # Bypass narrative LLM (_ANNEX_SECTION_IDS dans _04_redaction.py).
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: annex
+    label: "Annexe — Table de mortalité (taux bruts et lissés par âge)"
+    required: false
+    dependencies: [conclusion]
+    activation:
+      report_mode: [full_report]
+
+    narrative:
+      text: |
+        Tableau détaillé des taux bruts et lissés pour chaque âge entier
+        de la cohorte. Exprimés en pourcentage et arrondis au
+        centième de pour cent.
+
+    visual_specs:
+      - id: smoothing_table_full
+        type: table
+        purpose: "Table complète âge par âge — taux bruts et lissés."
+        source: smoothed_table
+        columns:
+          - {key: age,        label: "Âge",         format: int}
+          - {key: q_x_brut,   label: "Taux brut",   format: pct4_dec}
+          - {key: q_x_lisse,  label: "Taux lissé",  format: pct4_dec}
 
 
 # ─────────────────────────────────────────────────────────────────────────

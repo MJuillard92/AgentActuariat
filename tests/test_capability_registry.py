@@ -81,18 +81,21 @@ def test_get_registry_caches_build():
 # ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("q", [
+    # Patterns CANONIQUES uniquement (ultra-strict pre-LLM short-circuit).
+    # Aucun objet métier possible derrière le verbe.
     "que sais-tu faire ?",
     "Que peux-tu faire",
     "Tes capacités ?",
     "Quelles sont tes fonctionnalités",
     "liste tes outils",
     "donne-moi la liste de tes méthodes",
-    "peux-tu calculer un SMR ?",
-    "sais-tu construire une table de mortalité ?",
     "what can you do",
     "list your tools",
+    "à quoi sers-tu ?",
+    "tu fais quoi ?",
 ])
 def test_is_capability_question_catches_meta(q):
+    """is_capability_question = ultra-strict, court-circuit pre-LLM uniquement."""
     from agents.master.capability_registry import is_capability_question
     assert is_capability_question(q) is True, f"Manqué : {q!r}"
 
@@ -104,10 +107,90 @@ def test_is_capability_question_catches_meta(q):
     "merci",
     "calcule l'exposition pour ce portefeuille",
     "génère un rapport PDF",
+    # Régression 2026-05-25 : « peux-tu calculer X » avec objet concret est
+    # un ORDRE de calcul, pas une question méta. Avant le fix, le Master
+    # renvoyait le blabla « je suis un système actuariel… » au lieu de router
+    # vers le Builder.
+    "peux tu calculer les taux lissés et le rapport associé",
+    "peux-tu calculer un SMR ?",
+    "sais-tu construire une table de mortalité ?",
+    "peux-tu générer le PDF ?",
+    # Désambig 2026-05-25 : is_capability_question est ultra-strict (canonique).
+    # Les variantes méta avec verbe abstrait passent désormais par
+    # regex_kind_hint (post-LLM) et non par le pre-LLM short-circuit.
+    "peux-tu calculer ?",
+    "sais-tu construire ?",
+    "peux-tu faire des calculs",
 ])
 def test_is_capability_question_does_not_false_positive(q):
     from agents.master.capability_registry import is_capability_question
     assert is_capability_question(q) is False, f"Faux positif : {q!r}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# regex_kind_hint : cross-check post-LLM (plus permissif)
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("q", [
+    # Capacité canonique (forcément question méta)
+    "que sais-tu faire ?",
+    "liste tes outils",
+    "tes capacités ?",
+    # Capacité avec verbe abstrait SANS objet (hint = question)
+    "peux-tu calculer ?",
+    "sais-tu faire ?",
+    "peux-tu générer ?",
+    "peux-tu faire des calculs",
+    "est-ce que tu sais faire ?",
+])
+def test_regex_kind_hint_capability(q):
+    from agents.master.capability_registry import regex_kind_hint
+    assert regex_kind_hint(q) == "question", f"Attendu question pour {q!r}"
+
+
+@pytest.mark.parametrize("q", [
+    # Impératif direct + déterminant
+    "calcule les taux bruts",
+    "génère le rapport",
+    "construis la table de mortalité",
+    "lance le calcul",
+    "fais-moi le rapport",
+    "donne-moi un tableau",
+    # peux-tu/sais-tu + verbe + déterminant + nom (le bug d'origine)
+    "peux tu calculer les taux lissés et le rapport associé",
+    "peux-tu calculer un SMR",
+    "sais-tu construire la table",
+    "peux-tu générer le PDF",
+    # Politesse + verbe
+    "j'aimerais que tu calcules les taux",
+    "je voudrais calculer la table",
+])
+def test_regex_kind_hint_command(q):
+    from agents.master.capability_registry import regex_kind_hint
+    assert regex_kind_hint(q) == "task", f"Attendu task pour {q!r}"
+
+
+@pytest.mark.parametrize("q", [
+    # Questions explicatives — ni commande ni méta-capacité
+    "c'est quoi le lissage Whittaker-Henderson ?",
+    "explique-moi le test du chi-2",
+    "comment fonctionne l'A132-18 ?",
+    "quel est le SMR de ce portefeuille",
+    "pourquoi le lissage est-il nécessaire",
+    "merci",
+    "ok",
+])
+def test_regex_kind_hint_ambiguous_returns_none(q):
+    """Si la regex ne sait pas trancher, retourne None → on fait confiance au LLM."""
+    from agents.master.capability_registry import regex_kind_hint
+    assert regex_kind_hint(q) is None, f"Attendu None pour {q!r}"
+
+
+def test_regex_kind_hint_priority_command_over_capability():
+    """En cas de double match, COMMAND (verbe + objet) l'emporte sur CAPABILITY."""
+    from agents.master.capability_registry import regex_kind_hint
+    # « peux-tu calculer les taux » match command (verbe+objet), pas capability
+    assert regex_kind_hint("peux-tu calculer les taux") == "task"
 
 
 # ──────────────────────────────────────────────────────────────────────

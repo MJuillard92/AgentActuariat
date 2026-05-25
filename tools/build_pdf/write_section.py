@@ -134,20 +134,30 @@ def run(data: dict | None = None, params: dict | None = None) -> dict:
         sec["text"] = text
 
     # ── Tableau : consommer _last_table_rows ──────────────────────────────────
+    # Numérotation GLOBALE sur tout le rapport (compteur dans data_store, qui
+    # survit d'une section à l'autre via le state LangGraph partagé). Avant ce
+    # changement, len(sec['tables']) repartait à 1 par section — le PDF
+    # affichait plusieurs « Tableau 1 ». Plan qualité-rapport 2026-05-24.
     last_rows = data.pop("_last_table_rows", None)
     if last_rows:
         sec["tables"].append(last_rows)
-        cap = table_caption or f"Tableau {len(sec['tables'])}"
+        data["_table_counter"] = int(data.get("_table_counter", 0)) + 1
+        n = data["_table_counter"]
+        cap = f"Tableau {n} — {table_caption}" if table_caption else f"Tableau {n}"
         sec["table_captions"].append(cap)
-        log.info("[write_section] %s — tableau ajouté (%d lignes)", section_id, len(last_rows))
+        log.info("[write_section] %s — tableau %d ajouté (%d lignes)",
+                 section_id, n, len(last_rows))
 
     # ── Graphique : consommer _last_graph_path ────────────────────────────────
     last_graph = data.pop("_last_graph_path", None)
     if last_graph:
         sec["graphs"].append(last_graph)
-        cap = graph_caption or f"Graphique {len(sec['graphs'])}"
+        data["_figure_counter"] = int(data.get("_figure_counter", 0)) + 1
+        n = data["_figure_counter"]
+        cap = f"Figure {n} — {graph_caption}" if graph_caption else f"Figure {n}"
         sec["graph_captions"].append(cap)
-        log.info("[write_section] %s — graphique ajouté : %s", section_id, last_graph)
+        log.info("[write_section] %s — figure %d ajoutée : %s",
+                 section_id, n, last_graph)
 
     sec["status"] = status
 

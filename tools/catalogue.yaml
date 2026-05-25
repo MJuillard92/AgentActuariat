@@ -1693,6 +1693,58 @@ tools:
       similaire à la référence. Pente α < 0.9 : la mortalité d''expérience croît moins vite avec l''âge. Pente α > 1.1 : elle
       croît plus vite (portefeuille plus âgé). Intercept β capture l''écart de niveau (relié au SMR). Toujours citer R² dans
       le rapport (seuil ACPR implicite : > 0.99).'
+  builder.statistical_validation:
+    display_name: Validation statistique du lissage
+    short_description: Tests d'adéquation chi², signes, runs, KS, Durbin-Watson, smoothness + tableau décès obs/prédits lissés.
+    description: Évalue la qualité d'un lissage de taux de mortalité par une batterie de tests statistiques d'adéquation (fidélité
+      aux observations brutes), de structure des résidus, et de régularité de la courbe lissée. Produit en plus le tableau
+      « décès observés vs prédits par déciles d'exposition » recalculé avec les taux lissés (à comparer avec celui des taux
+      bruts produit par aggregation.exposure_deciles). Le tool RAPPORTE — il ne ré-optimise pas le lissage. L'arbitrage est
+      laissé à l'utilisateur (cf. plan qualité-rapport 2026-05-24).
+    domain: mortality_experience
+    capability_group: table_construction
+    depends_on:
+    - builder.crude_rates
+    - builder.smoothing
+    required_by:
+    - build_pdf.assemble_sections
+    client_visible: true
+    when_to_use: Après builder.smoothing, en mode full_report. Appelé automatiquement par le Builder via une branche déterministe
+      dès que smoothed_table existe et report_mode == "full_report" — pas de décision LLM.
+    when_not_to_use: Pas en mode raw_rates (rien à valider — le « lissé » est égal au brut). Pas si smoothed_table ou qx_table
+      absents.
+    prerequisites:
+      required_tools:
+      - builder.crude_rates → provides qx_table
+      - builder.smoothing   → provides smoothed_table
+      required_data_store_keys:
+      - 'smoothed_table : list[dict] {age, q_x_brut, q_x_lisse}'
+      - 'qx_table       : list[dict] {age, E_x, D_x, qx}'
+    params:
+      alpha:
+        type: float
+        default: '0.05'
+        note: Niveau des tests d'hypothèse.
+      tests:
+        type: list[str]
+        default: tous
+        values: chi_square | sign | runs | ks_residuals | durbin_watson | smoothness
+        note: Sous-ensemble de tests à exécuter. Défaut = tous.
+    outputs:
+      data_store_keys_written:
+      - 'smoothed_deciles_table : list[dict] — équivalent du qx_deciles_table'
+      - 'validation_tests_table : list[dict] — une ligne par test exécuté :'
+      - 'smoothness_metrics     : dict — {sum_squared_d2, sum_squared_d3,'
+      - 'validation_summary     : dict — {n_tests_accepted, n_tests_rejected,'
+      return_payload: {}
+    quality_gates:
+      non_blocking:
+      - Pas de gate decision_required. Si un test échoue à se calculer (ex.
+    errors:
+    - error: smoothed_table manquant. Appeler builder.smoothing d'abord.
+      cause: smoothed_table absent du data_store.
+    - error: qx_table manquant. Appeler builder.crude_rates d'abord.
+      cause: qx_table absent du data_store.
   builder.validation:
     display_name: Validation statistique
     short_description: Calcule les intervalles de confiance Poisson et teste l'adéquation statistique.

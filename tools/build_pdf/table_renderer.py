@@ -88,7 +88,11 @@ def _fmt(val: Any, fmt: str = "") -> str:
     """Format a single cell value according to a format string.
     Conventions :
       - Séparateur de milliers = espace fine (lisibilité actuariat FR)
-      - pctN : valeur supposée DÉJÀ en pourcentage (0-100), N décimales
+      - pctN       : valeur supposée DÉJÀ en pourcentage (0-100), N décimales
+      - pctN_dec   : valeur en décimal (0-1) — multipliée par 100 puis " %"
+                     Pour les q_x actuariels (canoniques : 0.0042 → 0.42 %).
+      - pctN_pm    : valeur en ‰ (0-1000) — divisée par 10 puis " %"
+                     Pour les taux annuels stockés en ‰ (16.9 → 1.69 %).
       - float2 / float4 : décimales, séparateur milliers"""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "—"
@@ -98,6 +102,18 @@ def _fmt(val: Any, fmt: str = "") -> str:
         return f"{float(val):.1f} %".replace(",", " ")
     if fmt == "pct2":
         return f"{float(val):.2f} %".replace(",", " ")
+    if fmt == "pct1_dec":
+        return f"{float(val) * 100:.1f} %".replace(",", " ")
+    if fmt == "pct2_dec":
+        return f"{float(val) * 100:.2f} %".replace(",", " ")
+    if fmt == "pct3_dec":
+        return f"{float(val) * 100:.3f} %".replace(",", " ")
+    if fmt == "pct4_dec":
+        return f"{float(val) * 100:.4f} %".replace(",", " ")
+    if fmt == "pct1_pm":
+        return f"{float(val) / 10:.1f} %".replace(",", " ")
+    if fmt == "pct2_pm":
+        return f"{float(val) / 10:.2f} %".replace(",", " ")
     if fmt == "int":
         return f"{int(val):,}".replace(",", " ")
     if fmt == "float1":

@@ -61,14 +61,21 @@ def assemble(
             title = "Rapport de Certification — Table de Mortalité d'Expérience"
 
     # Infos portefeuille depuis le contexte
+    # Formatage avec espace fine (convention actuariat FR), aligné sur le
+    # rendu des tableaux du corps via _fmt(int) dans table_renderer.py.
+    # Avant ce fix la cover affichait « 3264327 » alors que le corps montrait
+    # « 3 264 327 » — incohérence visible. Plan qualité-rapport phase 2.
+    def _fmt_int(n) -> str:
+        return f"{int(n):,}".replace(",", " ")
+
     ctx = data_store.get("template_context") or {}
     parts = []
     if ctx.get("observation_start_date") and ctx.get("observation_end_date"):
         parts.append(f"Période : {ctx['observation_start_date']} – {ctx['observation_end_date']}")
     if ctx.get("total_exposure_years"):
-        parts.append(f"{ctx['total_exposure_years']:.0f} années-personnes")
+        parts.append(f"{_fmt_int(ctx['total_exposure_years'])} années-personnes")
     if ctx.get("total_deaths"):
-        parts.append(f"{ctx['total_deaths']} décès")
+        parts.append(f"{_fmt_int(ctx['total_deaths'])} décès")
     portfolio_info = "  |  ".join(parts)
 
     # Vérification préalable

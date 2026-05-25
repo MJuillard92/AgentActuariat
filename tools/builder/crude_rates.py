@@ -117,11 +117,11 @@ def _prepare_dates_for_km(df: pd.DataFrame) -> pd.DataFrame:
     return parse_dates_fr(df, columns=["date_naissance", "date_entree", "date_sortie"])
 
 
-def run(data: dict | None, params: dict | None = None) -> dict:
-    data = data or {}
-    params = params or {}
-
-    exposure_records = data.get("exposure_table") or data.get("builder.exposure", {}).get("exposure_table")
+def _compute_qx_for_exposure(exposure_records: list, params: dict, data: dict) -> dict:
+    """Calcule la qx_table pour une exposure_table donnée. Réutilisé pour
+    le calcul unisex (exposure_table) et — si by_sex=True — pour chaque
+    sous-groupe (exposure_table_h, exposure_table_f).
+    """
     if not exposure_records:
         return {"erreur": "exposure_table manquant. Appeler builder.exposure d'abord."}
 
@@ -174,3 +174,40 @@ def run(data: dict | None, params: dict | None = None) -> dict:
         "qx_table": records,
         "method": method,
     }
+
+
+def run(data: dict | None, params: dict | None = None) -> dict:
+    """Calcule la qx_table unisex (toujours) et — si by_sex=True dans
+    params ET exposure_table_h/f présents — produit également qx_table_h
+    et qx_table_f.
+
+    L'utilisateur final voit la table par sexe quand
+    gender_segmentation = by_sex (plan qualité-rapport phase 2, 2026-05-24).
+    """
+    data = data or {}
+    params = params or {}
+    by_sex = bool(params.get("by_sex", False))
+
+    # Toujours calculer l'unisex (sortie canonique).
+    exposure_records = (data.get("exposure_table")
+                        or data.get("builder.exposure", {}).get("exposure_table"))
+    result = _compute_qx_for_exposure(exposure_records, params, data)
+    if "erreur" in result or not by_sex:
+        return result
+
+    expo_h = data.get("exposure_table_h")
+    expo_f = data.get("exposure_table_f")
+    if not (expo_h and expo_f):
+        result["avertissement_by_sex"] = (
+            "by_sex=True mais exposure_table_h/f absents. "
+            "Appeler builder.exposure avec by_sex=True d'abord."
+        )
+        return result
+
+    res_h = _compute_qx_for_exposure(expo_h, params, data)
+    res_f = _compute_qx_for_exposure(expo_f, params, data)
+    if "qx_table" in res_h:
+        result["qx_table_h"] = res_h["qx_table"]
+    if "qx_table" in res_f:
+        result["qx_table_f"] = res_f["qx_table"]
+    return result

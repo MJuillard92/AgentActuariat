@@ -54,6 +54,29 @@ def test_preflight_writer_ready_when_all_manifest_keys_present():
                               "ecart": 0.0, "ecart_pct": 0.0,
                               "ci_lower": 0.0, "ci_upper": 2.0}],
         "ci_table":         [{"age": 30, "q_x_lisse": 0.011, "ci_lower": 0.005, "ci_upper": 0.017}],
+        # builder.statistical_validation outputs (auto-déclenché en full_report)
+        "smoothed_deciles_table": [{"age_range": "20-30", "E_x_sum": 100.0,
+                                    "D_x_observed": 1, "D_x_predicted": 1.1,
+                                    "ecart_pct": 9.0}],
+        "validation_tests_table": [{"test": "chi_square", "statistic": 1.0,
+                                    "p_value": 0.5, "decision": "accepted"}],
+        "smoothness_metrics":     {"sum_squared_d2": 0.001},
+        "validation_summary":     {"n_tests_accepted": 4, "n_tests_rejected": 1,
+                                   "global_assessment": "acceptable"},
+        # builder.benchmarking outputs (auto-déclenché en full_report)
+        "abatement_table":   [{"age": 30, "qx_exp": 0.011, "qx_ref": 0.015,
+                               "abatement_factor": 0.73}],
+        "smr_global":        0.78,
+        "reference_name":    "TH0002",
+        "benchmarking_summary": {"global_factor": 0.78, "min_factor": 0.50,
+                                 "max_factor": 1.10},
+        # by_sex outputs (gender_segmentation=by_sex)
+        "exposure_table_h": [{"age": 30, "E_x": 50.0, "D_x": 0}],
+        "exposure_table_f": [{"age": 30, "E_x": 50.0, "D_x": 1}],
+        "qx_table_h":       [{"age": 30, "E_x": 50.0, "D_x": 0, "qx": 0.0}],
+        "qx_table_f":       [{"age": 30, "E_x": 50.0, "D_x": 1, "qx": 0.02}],
+        "smoothed_table_h": [{"age": 30, "q_x_brut": 0.0, "q_x_lisse": 0.005}],
+        "smoothed_table_f": [{"age": 30, "q_x_brut": 0.02, "q_x_lisse": 0.018}],
     }
 
     ready, missing = _preflight_writer(data_store)
@@ -69,5 +92,6 @@ def test_preflight_writer_missing_keys():
     ready, missing = _preflight_writer(data_store)
 
     assert ready is False
-    # 17 builder_outputs keys minus total_exposure = 16 missing
-    assert len(missing) == 16
+    # 31 builder_outputs keys (17 historiques + 4 statistical_validation
+    # + 4 benchmarking + 6 by_sex) − 1 présent (total_exposure) = 30 manquants
+    assert len(missing) == 30

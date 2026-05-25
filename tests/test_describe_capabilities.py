@@ -84,7 +84,7 @@ def test_outputs_includes_known_tables():
     table_ids = {t["id"] for t in out["outputs_produced"]["tables"]}
     # Tableaux référencés dans mortality_template.yaml
     assert "portfolio_composition" in table_ids
-    assert "smoothing_table"       in table_ids
+    assert "smoothing_table_full"  in table_ids
 
 
 def test_function_name_filter_capabilities_only():

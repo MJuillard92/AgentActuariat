@@ -295,6 +295,13 @@ def classify_intent(
     # Clamp [0, 1] au cas où le LLM dérape
     confidence = max(0.0, min(1.0, confidence))
 
+    # Hint regex indépendant pour cross-check post-LLM. Si la regex
+    # désaccorde avec le LLM, master_node demandera à l'utilisateur de
+    # trancher (pas d'override silencieux). Plan disambiguation 2026-05-25.
+    from agents.master.capability_registry import regex_kind_hint
+    _hint = regex_kind_hint(last_human)
+    _disagrees = (_hint is not None and _hint != kind)
+
     return {
         "kind":                kind,
         "write":               write,
@@ -304,4 +311,7 @@ def classify_intent(
         "reasoning":           reasoning,
         "intent":              _derive_legacy_intent(kind, write),
         "reply":               reply,
+        # Annotations regex post-LLM (informatif, pas d'override ici).
+        "_regex_kind_hint":    _hint,       # "task" | "question" | None
+        "_regex_disagrees":    _disagrees,  # True si hint ≠ kind LLM
     }

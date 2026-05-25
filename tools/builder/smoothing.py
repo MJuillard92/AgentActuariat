@@ -171,11 +171,11 @@ def _build_decision_required(
     }
 
 
-def run(data: dict | None, params: dict | None = None) -> dict:
-    data = data or {}
-    params = params or {}
-
-    qx_records = data.get("qx_table")
+def _smooth_one_qx_table(qx_records: list, params: dict) -> dict:
+    """Lisse une qx_table donnée. Réutilisé pour le calcul unisex
+    (qx_table) et — si by_sex=True — pour chaque sous-groupe
+    (qx_table_h, qx_table_f).
+    """
     if not qx_records:
         return {"erreur": "qx_table manquant. Appeler builder.crude_rates d'abord."}
 
@@ -304,3 +304,42 @@ def run(data: dict | None, params: dict | None = None) -> dict:
     if dr:
         out["decision_required"] = dr
     return out
+
+
+def run(data: dict | None, params: dict | None = None) -> dict:
+    """Lisse la qx_table unisex (toujours) et — si by_sex=True dans
+    params ET qx_table_h/f présents — produit également smoothed_table_h
+    et smoothed_table_f.
+
+    L'utilisateur final voit la courbe lissée par sexe (graphique H/F
+    superposés) dans la section smoothing_by_sex du YAML.
+    Plan qualité-rapport phase 2 (2026-05-24).
+    """
+    data = data or {}
+    params = params or {}
+    by_sex = bool(params.get("by_sex", False))
+
+    # Toujours calculer l'unisex (sortie canonique requise par les sections
+    # smoothing, validation, benchmarking).
+    result = _smooth_one_qx_table(data.get("qx_table"), params)
+    if "erreur" in result or not by_sex:
+        return result
+
+    qx_h = data.get("qx_table_h")
+    qx_f = data.get("qx_table_f")
+    if not (qx_h and qx_f):
+        result["avertissement_by_sex"] = (
+            "by_sex=True mais qx_table_h/f absents. "
+            "Appeler builder.crude_rates avec by_sex=True d'abord."
+        )
+        return result
+
+    res_h = _smooth_one_qx_table(qx_h, params)
+    res_f = _smooth_one_qx_table(qx_f, params)
+    if "smoothed_table" in res_h:
+        result["smoothed_table_h"] = res_h["smoothed_table"]
+        result["n_non_monotone_h"] = res_h.get("n_non_monotone")
+    if "smoothed_table" in res_f:
+        result["smoothed_table_f"] = res_f["smoothed_table"]
+        result["n_non_monotone_f"] = res_f.get("n_non_monotone")
+    return result
