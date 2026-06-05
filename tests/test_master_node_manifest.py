@@ -38,6 +38,8 @@ def test_preflight_writer_ready_when_all_manifest_keys_present():
         "total_records":    48,
         # builder outputs (exposure + crude_rates)
         "total_exposure":   1234.5,
+        "nb_assures_moyen_par_annee": 411,
+        "nb_annees_observation": 3,
         "exposure_table":   [{"age": 30, "E_x": 100.0, "D_x": 1}],
         "total_deaths":     42,
         "cohort_min_age":   25,
@@ -92,6 +94,7 @@ def test_preflight_writer_missing_keys():
     ready, missing = _preflight_writer(data_store)
 
     assert ready is False
-    # 31 builder_outputs keys (17 historiques + 4 statistical_validation
-    # + 4 benchmarking + 6 by_sex) − 1 présent (total_exposure) = 30 manquants
-    assert len(missing) == 30
+    # 33 builder_outputs keys (17 historiques + 2 nouveaux (nb_assures
+    # _moyen_par_annee + nb_annees_observation) + 4 statistical_validation
+    # + 4 benchmarking + 6 by_sex) − 1 présent (total_exposure) = 32 manquants
+    assert len(missing) == 32

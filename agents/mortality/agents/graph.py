@@ -65,6 +65,14 @@ def _router(state: AgentState) -> str:
 
 
 def _should_continue_master(state: AgentState) -> str:
+    # Verrou « décision utilisateur en attente » : tant que `_pending_decision`
+    # n'est pas levée, on ne re-route plus vers Builder — le frontend doit
+    # afficher la bulle, l'user trancher, puis le callback pop le verrou
+    # avant de relancer un message. Plan refonte garde-fou 2026-06-03.
+    ds = state.get("data_store") or {}
+    if ds.get("_pending_decision"):
+        return END
+
     agent = state.get("active_agent", "master")
     if agent == "builder":
         return "to_builder"
@@ -82,6 +90,13 @@ def _should_continue_master(state: AgentState) -> str:
 
 
 def _should_continue_builder(state: AgentState) -> str:
+    # Même verrou côté Builder : si `_pending_decision` est posée, on coupe
+    # le graphe sur END. Master ne re-routera pas non plus (cf. ci-dessus).
+    # Plan refonte garde-fou 2026-06-03.
+    ds = state.get("data_store") or {}
+    if ds.get("_pending_decision"):
+        return END
+
     msgs = state.get("messages") or []
     if not msgs:
         return END

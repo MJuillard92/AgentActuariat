@@ -67,9 +67,15 @@ def writer_node(state: "AgentState") -> dict:
     # Demande initiale (pour la validation finale étape 06)
     initial_request = _get_initial_request(state)
 
-    # Chemin de sortie PDF
-    session_id  = data_store.get("session_id", "rapport")
-    output_path = str(Path("/tmp") / f"rapport_{session_id}.pdf")
+    # Chemin de sortie PDF — numéro de rapport YYMMDDHHmm, dossier
+    # persistant `session/rapports/` parcouru par le canvas (sidebar).
+    # Plan « gestion des rapports » 2026-05-25.
+    from datetime import datetime as _dt
+    report_no = _dt.now().strftime("%y%m%d%H%M")
+    _REPORTS_DIR = Path(__file__).resolve().parents[3] / "session" / "rapports"
+    _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = str(_REPORTS_DIR / f"Rapport_{report_no}.pdf")
+    data_store["_last_report_no"] = report_no
 
     _wstage("WRITER.1", "Rédaction des sections en cours…")
 
@@ -216,11 +222,18 @@ def writer_node(state: "AgentState") -> dict:
     except Exception as exc:
         log.warning("[WriterAgent] notebook auto-gen failed (non-blocking): %s", exc)
 
+    _no_str = data_store.get("_last_report_no", "")
+    _pdf_name = Path(result.output_path).name
+    _nb_name = Path(notebook_path).name if notebook_path else ""
+    _no_line = f"Rapport N° {_no_str}\n" if _no_str else ""
     content = (
+        f"{_no_line}"
         f"Rapport généré avec succès ({result.nb_sections} sections).\n"
-        f"Fichier : {result.output_path}\n"
-        + (f"Notebook reproductible : {notebook_path}\n" if notebook_path else "")
-        + f"{result.validation_summary}"
+        f"PDF : {_pdf_name}\n"
+        + (f"Notebook reproductible : {_nb_name}\n" if _nb_name else "")
+        + "Disponible dans la section « Rapports » de la barre latérale "
+          "(téléchargement automatique déclenché).\n"
+        f"{result.validation_summary}"
         f"{warnings_text}\n\n"
         f"<WRITE_DONE: {result.output_path}>"
     )

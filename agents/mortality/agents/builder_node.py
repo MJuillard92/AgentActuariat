@@ -119,6 +119,21 @@ def _build_system_prompt(state: "AgentState", level: str) -> str:
             label = param_labels.get(k, k)
             base += f"- **{label}** : `{v}`\n"
 
+        # ── Note conditionnelle accept_with_note ────────────────────────────
+        # Si l'utilisateur a choisi « Accepter avec mention » dans la bulle
+        # decision_required, on ne doit PAS relancer le lissage : la table
+        # actuelle reste valide en l'état, le pipeline doit poursuivre.
+        # Plan refonte garde-fou 2026-06-03 (Partie B.4).
+        if study_plan.get("smoothing_accept_violations"):
+            base += (
+                "\n> ⚠ **NOTE UTILISATEUR — table lissée acceptée en l'état.** "
+                "La table actuelle contient des violations de monotonie ; "
+                "l'utilisateur a choisi de les conserver et d'en faire mention "
+                "dans le rapport. **NE PAS relancer `builder.smoothing`** — "
+                "passe directement à `builder.validation` puis "
+                "`builder.benchmarking`.\n"
+            )
+
     # Bloc exhaustif "capacités par section" dérivé du YAML (US report_mode).
     # Master indique dans son HumanMessage quelles sections sont actives pour
     # la session courante. Tu ne produis QUE les clés de ces sections.
@@ -246,6 +261,35 @@ def _has_pending_decision(messages: list) -> bool:
     return False
 
 
+def _extract_decision_required(messages: list) -> dict:
+    """Extrait {tool, reason, options} depuis le dernier ToolMessage
+    contenant `decision_required`. Plan refonte garde-fou 2026-06-03.
+
+    Le contenu d'un ToolMessage est un JSON sérialisé du résultat du
+    tool. On le parse, on en extrait le bloc `decision_required` et le
+    nom du tool source (champ `name` du ToolMessage). En cas d'erreur de
+    parsing, on retourne un payload vide (la bulle frontend affichera un
+    message générique mais ne crashera pas).
+    """
+    for msg in reversed(messages):
+        if not isinstance(msg, ToolMessage):
+            continue
+        raw = str(getattr(msg, "content", "") or "")
+        if "decision_required" not in raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+        dr = (payload or {}).get("decision_required") or {}
+        return {
+            "tool":    getattr(msg, "name", "") or "builder.smoothing",
+            "reason":  dr.get("reason", ""),
+            "options": dr.get("options", []),
+        }
+    return {"tool": "", "reason": "", "options": []}
+
+
 def builder_node(state: "AgentState") -> dict:
     """
     Nœud BuilderAgent : orchestration des calculs actuariels.
@@ -256,6 +300,47 @@ def builder_node(state: "AgentState") -> dict:
 
     data_store = state.get("data_store") or {}
     dataset_ref = state.get("dataset_ref")
+
+    # ── GATE DATA CATALOGUE ──────────────────────────────────────────────────
+    # Refuse toute exécution Builder tant que les prérequis utilisateur
+    # ne sont pas complets (mapping CSV validé + champs YAML
+    # `confirm_with_user: true` + choix de méthodes ou methods_auto).
+    # Le helper est DOMAIN-AGNOSTIC : il lit le YAML et le catalogue tools.
+    # Cf. plan datacatalogue-gate 2026-05-25 + knowledge_base/report_template/
+    # datacatalogue.py.
+    from knowledge_base.report_template.datacatalogue import (
+        compute_datacatalogue_state,
+    )
+    dc = compute_datacatalogue_state(data_store)
+    if not dc.complete:
+        from langchain_core.messages import AIMessage as _AIMsgGate
+        message = (
+            "⛔ Avant de lancer les calculs j'ai besoin de quelques précisions.\n\n"
+            "**Renseigne le formulaire ci-dessous** (mode de rapport, sexe, "
+            "méthodes, période d'observation) puis clique sur Confirmer. "
+            "Tu pourras ensuite relancer ta demande de calcul.\n\n"
+            "_Champs manquants détectés_ : " + ", ".join(dc.missing)
+        )
+        # IMPORTANT : on NE DOIT PAS poser active_agent="master" ici, sinon
+        # _should_continue_builder route vers Master, Master re-classifie,
+        # re-route vers Builder → boucle infinie jusqu'au filet anti-boucle.
+        # On laisse active_agent inchangé (= "builder") avec un AIMessage
+        # sans tool_calls : _should_continue_builder tombe sur END.
+        #
+        # Ordre des events : message AVANT datacatalogue_incomplete pour
+        # que la bulle inline apparaisse SOUS le texte d'introduction.
+        return {
+            "messages": [_AIMsgGate(content=message)],
+            "events": [
+                {"type": "agent_switch", "agent": "MasterAgent"},
+                {"type": "message", "content": message},
+                {"type": "datacatalogue_incomplete",
+                 "missing": list(dc.missing),
+                 "state":   dict(dc.state)},
+                {"type": "done"},
+            ],
+            "data_store":   data_store,
+        }
 
     # ── Bloc C' : assimilation déterministe en mode raw_rates ───────────────
     # Si qx_table est présent et report_mode == "raw_rates", on copie les taux
@@ -520,26 +605,36 @@ def builder_node(state: "AgentState") -> dict:
 
     # ── Garde-fou decision_required ──────────────────────────────────────────
     # Si un tool précédent a retourné un marqueur `decision_required`, on ne
-    # laisse PAS le LLM enchaîner des tool_calls, qu'il ait émis du content ou
-    # non. Il doit rendre la main à l'utilisateur pour qu'il choisisse parmi
-    # les options proposées par le tool.
+    # laisse PAS le LLM enchaîner des tool_calls. On émet un event dédié
+    # `decision_required` (handler frontend → bulle inline) et on pose
+    # `data_store["_pending_decision"]` qui verrouille graph.py et bloque
+    # la re-entrée Builder/Master tant que l'user n'a pas tranché.
+    # Plan refonte garde-fou 2026-06-03.
     if _has_pending_decision(raw_msgs):
         lc_tool_calls = getattr(lc_msg, "tool_calls", None)
         if lc_tool_calls:
             lc_msg.tool_calls = []
             if hasattr(msg_obj, "tool_calls"):
                 msg_obj.tool_calls = []
-            # Si le LLM n'a émis aucun texte, on force un message explicite pour
-            # que l'UI n'affiche pas une réponse vide.
+
+            dr_payload = _extract_decision_required(raw_msgs)
+            # Verrou data_store : tant que `_pending_decision` est posée,
+            # _should_continue_builder et _should_continue_master coupent
+            # le graphe sur END → frontend reprend la main.
+            data_store["_pending_decision"] = dr_payload
+
             content = getattr(lc_msg, "content", None) or ""
             if not content.strip():
                 lc_msg.content = (
-                    "[Décision utilisateur en attente — tool_calls supprimés par le garde-fou] "
-                    "Merci de choisir parmi les options proposées avant toute nouvelle action."
+                    "⏸ Le calcul s'est arrêté : "
+                    f"{dr_payload.get('reason', 'une décision est requise')}.\n\n"
+                    "**Choisis une option ci-dessous pour poursuivre.**"
                 )
             new_events.append({
-                "type":    "message",
-                "content": "[garde-fou] Décision utilisateur en attente — tool_calls supprimés.",
+                "type":    "decision_required",
+                "tool":    dr_payload.get("tool"),
+                "reason":  dr_payload.get("reason"),
+                "options": dr_payload.get("options", []),
             })
 
     # ── Event : réponse de l'API ──────────────────────────────────────────────

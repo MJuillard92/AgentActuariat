@@ -56,6 +56,77 @@ def _query_for_section(section_id: str, label: str) -> str:
     return f"rédaction professionnelle de la section '{label}' d'un rapport actuariel"
 
 
+def _doctrine_refs_for_section(section_id: str) -> list[dict]:
+    """Lit `llm_directives.rag_refs` du YAML pour la section. Chaque entrée
+    déclare `{doc_id, chunks}` — la doctrine cible à inliner dans le prompt.
+
+    Format attendu (YAML) :
+        llm_directives:
+          rag_refs:
+            - {doc_id: D03, chunks: 2}
+            - {doc_id: D05, chunks: 1}
+
+    Retourne [] si la section n'en déclare pas, ce qui est le cas par
+    défaut (l'injection doctrine est opt-in section par section).
+    Plan refonte PDF 2026-06-03 (Axe B.2).
+    """
+    try:
+        from knowledge_base.report_template.template_loader import load_section
+        sec = load_section(section_id)
+        refs = (sec.llm_directives or {}).get("rag_refs") or []
+        return [r for r in refs if isinstance(r, dict) and r.get("doc_id")]
+    except Exception:
+        return []
+
+
+def _fetch_doctrine_chunks(refs: list[dict]) -> list[dict]:
+    """Récupère les chunks doctrine déclarés par la section, via lookup
+    direct par doc_id. Le format de chaque chunk est inchangé (doc_id,
+    section_id, section_title, text)."""
+    if not refs:
+        return []
+    try:
+        from tools.conversation.search_doctrine import get_chunks_by_doc_id
+    except Exception as exc:
+        log.debug("[03_completion_plan] search_doctrine indisponible : %s", exc)
+        return []
+
+    out: list[dict] = []
+    for r in refs:
+        doc_id = r.get("doc_id")
+        n = int(r.get("chunks", 2))
+        try:
+            out.extend(get_chunks_by_doc_id(doc_id, max_chunks=n))
+        except Exception as exc:
+            log.debug("[03_completion_plan] get_chunks_by_doc_id(%s) échoué : %s",
+                      doc_id, exc)
+    return out
+
+
+def _format_doctrine_block(doctrine_chunks: list[dict]) -> str:
+    """Formate le bloc « Doctrine de référence » à injecter en prompt.
+    Distinct du bloc d'inspiration stylistique : on cite ici une référence
+    méthodologique que le LLM DOIT pouvoir citer dans sa rédaction."""
+    if not doctrine_chunks:
+        return ""
+    lines = [
+        "## DOCTRINE DE RÉFÉRENCE — à citer dans la rédaction",
+        "",
+        "Les extraits ci-dessous proviennent de la doctrine actuarielle",
+        "française indexée (RAG). Tu DOIS :",
+        "  - t'appuyer sur ces sources pour ton analyse critique ;",
+        "  - citer au moins une fois la référence (ex. « selon D03.02 — ",
+        "    Whittaker-Henderson 1D : … »).",
+        "",
+    ]
+    for c in doctrine_chunks:
+        sid = c.get("section_id") or c.get("doc_id") or "doctrine"
+        title = c.get("section_title") or sid
+        text  = (c.get("text") or "")[: _EXTRACT_MAX_CHARS]
+        lines += [f"### {title}", text, ""]
+    return "\n".join(lines)
+
+
 # ── Appel search_exemplars ────────────────────────────────────────────────────
 
 def _search_rag(query: str, n_results: int = _N_RESULTS) -> list[dict]:
@@ -212,6 +283,11 @@ def _fetch_rag_for_section(sec, style_guide: dict | None = None) -> tuple[str, s
     Thread-safe — pas d'état partagé (le style_guide est pré-fetché à l'entrée
     de complete_plan et passé par paramètre, pas via globale).
     Retourne (section_id, rag_block, n_chunks_injected).
+
+    Le bloc retourné contient (dans cet ordre) :
+      1. la doctrine de référence (lookup direct par doc_id, opt-in YAML) ;
+      2. le guide de style et les exemplars (RAG sémantique sur corpus
+         rapports).
     """
     query  = _query_for_section(sec.section_id, sec.label)
     chunks = _search_rag(query)
@@ -230,12 +306,23 @@ def _fetch_rag_for_section(sec, style_guide: dict | None = None) -> tuple[str, s
 
     chunks = [c for c in chunks if _dist(c) <= _MAX_DISTANCE]
 
-    # Même sans chunks pertinents, on injecte le guide de style seul (c'est sa raison d'être).
-    if not chunks and not style_guide:
+    # Doctrine ciblée (lookup direct doc_id). Plan refonte PDF 2026-06-03 (Axe B.2).
+    doctrine_refs = _doctrine_refs_for_section(sec.section_id)
+    doctrine_chunks = _fetch_doctrine_chunks(doctrine_refs)
+
+    if not chunks and not style_guide and not doctrine_chunks:
         return sec.section_id, "", 0
 
-    block = _format_chunks(chunks, style_guide=style_guide)
-    n_items = len(chunks) + (1 if style_guide else 0)
+    parts: list[str] = []
+    doctrine_block = _format_doctrine_block(doctrine_chunks)
+    if doctrine_block:
+        parts.append(doctrine_block)
+    exemplars_block = _format_chunks(chunks, style_guide=style_guide)
+    if exemplars_block:
+        parts.append(exemplars_block)
+
+    block = "\n\n".join(parts)
+    n_items = len(chunks) + len(doctrine_chunks) + (1 if style_guide else 0)
     return sec.section_id, block, n_items
 
 
@@ -255,10 +342,14 @@ def complete_plan(plan, data_store: dict):
     """
     enriched_plan = deepcopy(plan)
 
-    # Sections éligibles au RAG
+    # Sections éligibles au RAG : priorité historique (exemplars) ou
+    # opt-in via `llm_directives.rag_refs` (doctrine ciblée).
     eligible = [
         sec for sec in enriched_plan.sections
-        if sec.section_id in _RAG_PRIORITY_SECTIONS and sec.ready
+        if sec.ready and (
+            sec.section_id in _RAG_PRIORITY_SECTIONS
+            or _doctrine_refs_for_section(sec.section_id)
+        )
     ]
 
     if not eligible:

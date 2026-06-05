@@ -52,6 +52,10 @@ formats:
     total_deaths:          int
     total_records:         int
     count:                 int
+    nb_assures_moyen_par_annee: int
+    nb_annees_observation: int
+    nb_actifs:             int
+    age_moyen_tous:        float2
   na_display: "—"
   number_separator: " "
 
@@ -193,6 +197,27 @@ data_contract:
         tool: builder.exposure
         inputs: {records: cleaned_records}
         output_mapping: {total_deaths: total_deaths}
+
+    - key: nb_assures_moyen_par_annee
+      type: number
+      unit: "personnes"
+      description: >
+        Effectif moyen d'assurés exposés par année (= total_exposure /
+        nb_annees_observation). Métrique « base 100 % », plus parlante
+        pour l'utilisateur que les années-personne brutes.
+        Plan refonte PDF 2026-06-03 (Axe C).
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {nb_assures_moyen_par_annee: nb_assures_moyen_par_annee}
+
+    - key: nb_annees_observation
+      type: integer
+      description: "Durée de la fenêtre d'observation en années calendaires."
+      produced_by:
+        tool: builder.exposure
+        inputs: {records: cleaned_records}
+        output_mapping: {nb_annees_observation: nb_annees_observation}
 
     - key: segmentations
       type: dict
@@ -471,9 +496,10 @@ sections:
       text_default: |
         Ce rapport présente {{ study_objective }} construite à partir
         d'un portefeuille observé de {{ start_year }} à {{ end_year }},
-        soit {{ num_observation_years }} années. L'étude porte sur une
-        exposition totale de {{ total_exposure }} années-personne
-        et {{ total_deaths }} décès observés.
+        soit {{ num_observation_years }} années. L'étude porte sur un
+        effectif moyen de {{ nb_assures_moyen_par_annee }} assurés
+        exposés par an et {{ total_deaths }} décès observés sur la
+        période.
 
         L'étude se déroule en six étapes successives : retraitement de
         la base (exclusions de qualité), analyse descriptive du
@@ -488,9 +514,10 @@ sections:
       text_description: |
         Ce rapport présente une analyse descriptive du portefeuille
         assuré observé de {{ start_year }} à {{ end_year }}, soit
-        {{ num_observation_years }} années. L'étude porte sur une
-        exposition totale de {{ total_exposure }} années-personne
-        et {{ total_deaths }} décès observés.
+        {{ num_observation_years }} années. L'étude porte sur un
+        effectif moyen de {{ nb_assures_moyen_par_annee }} assurés
+        exposés par an et {{ total_deaths }} décès observés sur la
+        période.
 
         Cette analyse couvre la composition du portefeuille (par sexe,
         par âge, par année), l'évolution annuelle des décès et les
@@ -501,9 +528,10 @@ sections:
         Ce rapport présente la table de mortalité d'expérience, en taux
         bruts uniquement (sans lissage), construite à partir d'un
         portefeuille observé de {{ start_year }} à {{ end_year }}, soit
-        {{ num_observation_years }} années. L'étude porte sur une
-        exposition totale de {{ total_exposure }} années-personne et
-        {{ total_deaths }} décès observés.
+        {{ num_observation_years }} années. L'étude porte sur un
+        effectif moyen de {{ nb_assures_moyen_par_annee }} assurés
+        exposés par an et {{ total_deaths }} décès observés sur la
+        période.
 
         L'étude couvre l'analyse descriptive du portefeuille puis le
         calcul des taux bruts de mortalité q_x = D_x / E_x par âge,
@@ -518,14 +546,14 @@ sections:
     visual_specs:
       - id: portfolio_composition
         type: table
-        purpose: "Décrire la composition du portefeuille observé par sexe."
+        purpose: "Décrire la composition du portefeuille observé par sexe (effectif moyen exposé par an, base 100 %)."
         source: segmentations.sexe   # sub-path dans le dict `segmentations`
         columns:
-          - {key: valeur,         label: "Sexe"}
-          - {key: exposition_pa,  label: "Exposition (a.-p.)",         format: int}
-          - {key: nb_deces,       label: "Décès",                      format: int}
-          - {key: pct_exposition, label: "Part de l'exposition (%)",   format: float1}
-          - {key: pct_deces,      label: "Part des décès (%)",         format: float1}
+          - {key: valeur,                     label: "Sexe"}
+          - {key: nb_assures_moyen_par_annee, label: "Effectif moyen / an", format: int}
+          - {key: nb_deces,                   label: "Décès",               format: int}
+          - {key: pct_exposition,             label: "Part exposition (%)", format: float1}
+          - {key: pct_deces,                  label: "Part décès (%)",      format: float1}
 
       - id: deaths_per_year
         type: chart
@@ -534,6 +562,17 @@ sections:
         source: serie
         x_axis: {key: annee,    label: "Année"}
         y_axis: {key: nb_deces, label: "Décès"}
+
+      - id: portfolio_evolution
+        type: chart
+        chart_type: multi_series
+        purpose: "Évolution annuelle de l'effectif d'assurés exposés (total et H/F). Plan refonte PDF 2026-06-03 (Axe C)."
+        x_axis: {key: annee,     label: "Année"}
+        y_axis: {key: nb_actifs, label: "Effectif exposé"}
+        series:
+          - {source: serie,   key_x: annee, key_y: nb_actifs, style: line, label: "Total",   color: "#1A3668"}
+          - {source: serie_h, key_x: annee, key_y: nb_actifs, style: line, label: "Hommes",  color: "#E25B34"}
+          - {source: serie_f, key_x: annee, key_y: nb_actifs, style: line, label: "Femmes",  color: "#2CA02C"}
 
   - id: data_preprocessing
     label: "Retraitement des données"
@@ -767,6 +806,11 @@ sections:
       length_words: [120, 220]
       rag_query: "taux bruts mortalité q_x calcul actuariel exposition centrale"
 
+      # D01 = préparation données et estimateurs (Hoem, exposition
+      # centrale, Kaplan-Meier). Plan refonte PDF 2026-06-03 (Axe B.2).
+      rag_refs:
+        - {doc_id: D01, chunks: 2}
+
       post_table_analysis:
         instruction: >
           À partir du tableau des taux bruts, commenter (1) la plage d'âges
@@ -855,6 +899,13 @@ sections:
       tone: "professionnel, actuariel, méthodologique"
       length_words: [180, 300]
       rag_query: "lissage taux bruts mortalité Whittaker-Henderson Makeham"
+
+      # Doctrine ciblée injectée dans le prompt (lookup direct par doc_id).
+      # D03 = lissage (Whittaker, P-splines), D05 = fermeture grands âges.
+      # Plan refonte PDF 2026-06-03 (Axe B.2).
+      rag_refs:
+        - {doc_id: D03, chunks: 3}
+        - {doc_id: D05, chunks: 1}
 
       post_table_analysis:
         instruction: >
@@ -965,6 +1016,10 @@ sections:
       tone: "professionnel, actuariel, méthodologique"
       length_words: [180, 320]
       rag_query: "validation lissage tests adéquation chi carré Kolmogorov Durbin-Watson"
+
+      # D04 = validation/tests d'adéquation. Plan refonte PDF 2026-06-03.
+      rag_refs:
+        - {doc_id: D04, chunks: 2}
 
       post_table_analysis:
         instruction: >

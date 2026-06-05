@@ -42,9 +42,12 @@ INPUTS
 params:
   chart:
     type    : string
-    values  : age_pyramid | time_series | segmentation
+    values  : age_pyramid | time_series | segmentation | portfolio_evolution
     default : age_pyramid
     note    : Choisir selon les données disponibles dans le data_store.
+              `portfolio_evolution` trace l'évolution annuelle de
+              l'effectif exposé (total + H/F + moyenne), métrique
+              « base 100 % » du Plan refonte PDF 2026-06-03.
   title_suffix:
     type    : string
     values  : texte libre
@@ -250,10 +253,62 @@ def _segmentation(data: dict, params: dict) -> dict:
     return {"chart": "segmentation", "image_b64": _to_b64(fig)}
 
 
+def _portfolio_evolution(data: dict, params: dict) -> dict:
+    """Évolution annuelle de l'effectif assuré exposé (total + H/F).
+
+    Ligne horizontale = effectif moyen sur la période, pour donner la
+    « base 100 % » mentionnée par l'utilisateur. Plan refonte PDF
+    2026-06-03 (Axe C — graphe évolution effectifs).
+    """
+    series_data = data.get("series") or {}
+    title_suffix = params.get("title_suffix", "")
+    serie = series_data.get("serie")
+    if not serie:
+        return {"erreur": "Données series manquantes dans data store. "
+                          "Appeler statistical_analysis.time_series d'abord."}
+
+    df = pd.DataFrame(serie)
+    if "nb_actifs" not in df.columns:
+        return {"erreur": "Champ nb_actifs absent de la série (relancer "
+                          "statistical_analysis.time_series après mise à "
+                          "jour)."}
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.plot(df["annee"], df["nb_actifs"], color=_BLUE, linewidth=2.2,
+            marker="o", label="Total")
+
+    serie_h = series_data.get("serie_h")
+    serie_f = series_data.get("serie_f")
+    if serie_h and serie_f:
+        df_h = pd.DataFrame(serie_h)
+        df_f = pd.DataFrame(serie_f)
+        if "nb_actifs" in df_h.columns:
+            ax.plot(df_h["annee"], df_h["nb_actifs"], color=_RED,
+                    linewidth=1.6, marker="s", alpha=0.85, label="Hommes")
+        if "nb_actifs" in df_f.columns:
+            ax.plot(df_f["annee"], df_f["nb_actifs"], color=_GREEN,
+                    linewidth=1.6, marker="^", alpha=0.85, label="Femmes")
+
+    mean_actifs = float(df["nb_actifs"].mean())
+    ax.axhline(mean_actifs, color="#7F8C8D", linestyle="--", linewidth=1.2,
+               label=f"Effectif moyen ({mean_actifs:.0f})")
+    ax.legend(facecolor=_BG, edgecolor=_GRID, loc="best", fontsize=9)
+    ax.set_ylabel("Effectif d'assurés exposés")
+    ax.set_xlabel("Année")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}".replace(",", " ")))
+    ax.set_title(f"Évolution annuelle de l'effectif exposé"
+                 f"{' — ' + title_suffix if title_suffix else ''}",
+                 fontsize=11, loc="left")
+    _theme(fig, [ax])
+    fig.tight_layout()
+    return {"chart": "portfolio_evolution", "image_b64": _to_b64(fig)}
+
+
 _CHARTS = {
-    "age_pyramid":  _age_pyramid,
-    "time_series":  _time_series,
-    "segmentation": _segmentation,
+    "age_pyramid":         _age_pyramid,
+    "time_series":         _time_series,
+    "segmentation":        _segmentation,
+    "portfolio_evolution": _portfolio_evolution,
 }
 
 

@@ -64,12 +64,18 @@ data_store_keys_written:
   - age_max        : int — âge maximum effectif
   - total_exposure : float — exposition totale en personne-années
   - total_deaths   : int — nombre total de décès
+  - nb_assures_moyen_par_annee : float — effectif moyen exposé par année
+    (= total_exposure / nb_années d'observation). Métrique « base 100 % »
+    plus parlante pour l'utilisateur que les années-personne brutes.
+  - nb_annees_observation : int — durée de la fenêtre d'observation.
 return_payload:
   exposure_table : list[dict] — table principale
   age_min        : int
   age_max        : int
   total_exposure : float
   total_deaths   : int
+  nb_assures_moyen_par_annee : float
+  nb_annees_observation : int
   lignes_exclues : int — nombre de lignes avec dates non parsables (optionnel)
 
 QUALITY GATES
@@ -213,14 +219,32 @@ def _compute_exposure_for_subset(df: pd.DataFrame, params: dict) -> dict:
     else:
         observed_min, observed_max = age_min, age_max
 
+    total_exposure = round(float(exposure_table["E_x"].sum()), 2)
+
+    # Durée d'observation : du min(entry) à obs_end, en années calendaires.
+    # Sert à calculer l'effectif moyen exposé par année (métrique « base
+    # 100 % », plus parlante pour le user qu'un total en années-personne).
+    # Plan refonte PDF 2026-06-03 (Axe C — métrique effectif moyen).
+    entry_min = df_clean[entry_col].min()
+    if pd.notna(entry_min):
+        nb_annees_observation = int(obs_end.year - entry_min.year + 1)
+    else:
+        nb_annees_observation = 0
+    if nb_annees_observation > 0:
+        nb_assures_moyen_par_annee = round(total_exposure / nb_annees_observation, 1)
+    else:
+        nb_assures_moyen_par_annee = 0.0
+
     result = {
         "exposure_table": records,
         "age_min":           observed_min,   # = cohort_min_age (mapping YAML)
         "age_max":           observed_max,   # = cohort_max_age (mapping YAML)
         "age_min_requested": age_min,        # paramètre d'entrée (traçabilité)
         "age_max_requested": age_max,        # paramètre d'entrée (traçabilité)
-        "total_exposure": round(float(exposure_table["E_x"].sum()), 2),
+        "total_exposure": total_exposure,
         "total_deaths": int(exposure_table["D_x"].sum()),
+        "nb_assures_moyen_par_annee": nb_assures_moyen_par_annee,
+        "nb_annees_observation": nb_annees_observation,
     }
     if n_dropped > 0:
         result["lignes_exclues"] = n_dropped
@@ -269,10 +293,12 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             result["exposure_table_h"] = res_h["exposure_table"]
             result["total_exposure_h"] = res_h.get("total_exposure")
             result["total_deaths_h"]   = res_h.get("total_deaths")
+            result["nb_assures_moyen_par_annee_h"] = res_h.get("nb_assures_moyen_par_annee")
     if len(df_f) > 0:
         res_f = _compute_exposure_for_subset(df_f, sub_params)
         if "exposure_table" in res_f:
             result["exposure_table_f"] = res_f["exposure_table"]
             result["total_exposure_f"] = res_f.get("total_exposure")
             result["total_deaths_f"]   = res_f.get("total_deaths")
+            result["nb_assures_moyen_par_annee_f"] = res_f.get("nb_assures_moyen_par_annee")
     return result

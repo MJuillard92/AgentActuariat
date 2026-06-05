@@ -329,17 +329,39 @@ def render_table_from_spec(spec: dict, data: dict) -> tuple[Any, str, list]:
     try:
         tbl = Table(wrapped_rows, colWidths=col_widths, repeatRows=1)
 
+        # Style retravaillé pour la lisibilité (Lot 7 — Plan refonte PDF 2026-06-03).
+        # Changements :
+        #   - Police 9pt sur le corps (vs 8pt) — plus lisible à l'impression.
+        #   - En-tête en Helvetica-Bold avec un peu plus de padding vertical.
+        #   - Grille interne plus discrète (0.25 pt), lignes externes
+        #     plus marquées (0.6 pt) pour aérer.
+        #   - Première colonne alignée à GAUCHE (libellés) ; les colonnes
+        #     numériques restent CENTER (alignement décimal serait idéal
+        #     mais ReportLab natif ne le supporte pas — cf. dette tech).
         style_cmds = [
-            ("BACKGROUND",  (0, 0), (-1, 0), BLUE),
-            ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE",    (0, 0), (-1, -1), 8),
+            # En-tête (ligne 0)
+            ("BACKGROUND",     (0, 0), (-1, 0), BLUE),
+            ("TEXTCOLOR",      (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",       (0, 0), (-1, 0), 9),
+            ("TOPPADDING",     (0, 0), (-1, 0), 6),
+            ("BOTTOMPADDING",  (0, 0), (-1, 0), 6),
+            # Corps
+            ("FONTNAME",       (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE",       (0, 1), (-1, -1), 9),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [LIGHT, colors.white]),
-            ("GRID",        (0, 0), (-1, -1), 0.3, GREY),
-            ("TOPPADDING",  (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN",       (0, 0), (-1, -1), "CENTER"),
+            ("TOPPADDING",     (0, 1), (-1, -1), 5),
+            ("BOTTOMPADDING",  (0, 1), (-1, -1), 5),
+            ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+            # Grille
+            ("LINEBELOW",      (0, 0), (-1, 0), 0.8, BLUE),
+            ("INNERGRID",      (0, 1), (-1, -1), 0.25, GREY),
+            ("BOX",            (0, 0), (-1, -1), 0.6, GREY),
+            # Alignement
+            ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN",          (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN",          (0, 1), (0, -1), "LEFT"),  # 1re col à gauche
         ]
 
         # Totals row highlight

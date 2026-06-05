@@ -465,23 +465,11 @@ def _fake_classify(write="yes", report_mode="full_report"):
     return _f
 
 
-def test_master_asks_method_meta_question_when_choices_pending(monkeypatch):
-    from agents.mortality.agents import master_node as mn
-    monkeypatch.setattr(mn, "_classify_intent", _fake_classify("yes", "raw_rates"))
-    state = {
-        "messages":    [HumanMessage(content="taux bruts svp")],
-        "data_store":  {
-            "_disambiguation_done": True,
-            "_dataset_ref":         "test_session",  # bypass Bug 6 gate
-            "mapping_validated":        True,  # gate calcul : clone validé
-            "study_plan":           {"gender_segmentation": "unisex"},
-        },
-        "dataset_ref": "test_session",
-    }
-    out = mn.master_node(state)
-    pending = out["data_store"].get("_pending_need") or {}
-    assert pending.get("context_key") == "methods_choice_mode"
-    assert "préciser" in pending.get("question", "").lower()
+# test_master_asks_method_meta_question_when_choices_pending : OBSOLÈTE
+# Plan datacatalogue-gate 2026-05-25 : la méta-question méthodes n'est plus
+# posée par le Master de façon séquentielle. Elle est désormais regroupée
+# dans le modal/bulle « Compléter le data catalogue » déclenché par la gate
+# Builder quand les prérequis sont incomplets.
 
 
 def test_master_skips_method_question_when_methods_auto_already_set(monkeypatch):

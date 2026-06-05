@@ -20,6 +20,8 @@ def _preamble_data_store():
         "total_exposure":         1234.5,
         "total_deaths":           42,
         "total_records":          950,
+        "nb_assures_moyen_par_annee": 411,
+        "nb_annees_observation":  3,
         "segmentations":          {
             "sexe": [
                 {"valeur": "H", "nb_contrats": 500, "nb_deces": 25,

@@ -689,11 +689,15 @@ def master_node(state: "AgentState") -> dict:
             _stage_pending(ctx_key,
                            f"resolved={value}",
                            route_to="builder")
+            # Plan datacatalogue-gate 2026-05-25 : pas besoin de poser la
+            # méta-question méthodes ici — la gate Builder s'en charge en
+            # refusant net si datacatalogue incomplet. L'user passe par le
+            # panneau UI dédié pour tout renseigner d'un coup.
+            _pl_report_mode = data_store.get("report_mode", "full_report")
+            _pl_gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
             # HOTFIX-pre-refacto-2026-05 (Bug 19) — étape « récupérer le plan »
             # AUSSI sur ce chemin : sans ça le Builder démarrait sans checklist.
             # Déterministe, sans interaction utilisateur.
-            _pl_report_mode = data_store.get("report_mode", "full_report")
-            _pl_gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
             _plan = _derive_calculation_plan(data_store, _pl_report_mode, _pl_gender)
             _stage("0.plan", _plan_stage_label(_plan))
             instr = _HMsg(
@@ -1166,56 +1170,16 @@ def master_node(state: "AgentState") -> dict:
                 "data_store": data_store,
             })
 
-        # ── Désambiguation write=ask AVANT de lancer le Builder ──────────────
-        # Objectif : ne pas exécuter un pipeline coûteux si l'utilisateur n'est
-        # pas sûr de vouloir un rapport. On pose la question UNE FOIS.
-        if write == "ask" and not data_store.get("_write_question_asked"):
-            data_store["_write_question_asked"] = True
-            q = "Voulez-vous que je génère un rapport PDF à la fin des calculs ?"
-            return _ret({
-                "messages":     [LCAIMessage(content=q)],
-                "events":       new_events + [{"type": "message", "content": q}],
-                "data_store":   data_store,
-            })
-
-        # ── Désambiguation gender_segmentation AVANT le Builder ─────────────
-        # Master doit savoir si l'analyse est unisex (table agrégée) ou by_sex
-        # (tables H/F séparées). Si la valeur n'est toujours pas connue
-        # (l'extraction prématurée plus haut n'a rien trouvé), on demande à
-        # l'user via le pattern need_user_input.
+        # ── Questions séquentielles (write / gender / méthodes) : SUPPRIMÉES ──
+        # Plan datacatalogue-gate 2026-05-25 : toutes les questions de
+        # qualification sont désormais regroupées dans le modal/bulle
+        # « Compléter le data catalogue », déclenché par la gate Builder. Le
+        # Master ne pose plus aucune question séquentielle ; il route, point.
+        # Sans ça : après refus de la gate, Master re-routait ici, posait à
+        # nouveau les questions une par une et l'user voyait le double prompt
+        # « ⛔ Calculs bloqués » + « Plusieurs méthodes de calcul… ».
         sp = data_store.get("study_plan") or {}
         gender = sp.get("gender_segmentation") or data_store.get("gender_segmentation")
-        if gender is None and not data_store.get("_pending_need"):
-            data_store["_pending_need"] = {
-                "context_key": "gender_segmentation",
-                "question":    "Voulez-vous une table agrégée (unisex) ou des tables séparées par sexe (H/F) ?",
-                "options":     ["unisex", "by_sex"],
-                "default":     "unisex",
-            }
-            q_msg = LCAIMessage(content=data_store["_pending_need"]["question"])
-            return _ret({
-                "messages":     [q_msg],
-                "events":       new_events + [{"type": "message",
-                                                "content": data_store["_pending_need"]["question"]}],
-                "data_store":   data_store,
-            })
-
-        # ── Désambiguation choix de méthodes (délégué à agents.master) ──────
-        from agents.master.method_choices import build_methods_meta_pending_need
-        meta_pn = build_methods_meta_pending_need(
-            report_mode, gender, data_store.get("study_plan"),
-        )
-        if (meta_pn
-                and not data_store.get("_pending_need")
-                and not data_store.get("_methods_question_done")):
-            data_store["_pending_need"] = meta_pn
-            q_msg = LCAIMessage(content=meta_pn["question"])
-            return _ret({
-                "messages":   [q_msg],
-                "events":     new_events + [{"type": "message",
-                                              "content": meta_pn["question"]}],
-                "data_store": data_store,
-            })
 
         # ── Étape « récupérer le plan » — déterministe, sans interaction ────
         # HOTFIX-pre-refacto-2026-05 (Bug 17/19, A4) — dérivation du plan de

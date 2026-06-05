@@ -155,6 +155,71 @@ def warmup() -> bool:
         return False
 
 
+# Cache des métadonnées brutes (chunks list). Évite de relire meta.json
+# à chaque lookup. Indépendant du retriever (pas d'embedder).
+_META_CACHE: dict[str, Any] = {}
+
+
+def _load_meta_chunks() -> list[dict]:
+    """Charge la liste des chunks depuis meta.json (cached)."""
+    if "chunks" in _META_CACHE:
+        return _META_CACHE["chunks"]
+    if not _META_PATH.exists():
+        raise FileNotFoundError(f"Index meta.json doctrine absent ({_META_PATH}).")
+    import json as _json
+    with _META_PATH.open(encoding="utf-8") as f:
+        meta = _json.load(f)
+    _META_CACHE["chunks"] = meta.get("chunks") or []
+    return _META_CACHE["chunks"]
+
+
+def get_chunks_by_doc_id(doc_id: str, max_chunks: int = 3) -> list[dict]:
+    """Lookup direct des chunks d'un document (pas de query sémantique).
+
+    Pour injection ciblée dans un prompt de rédaction : on sait qu'on
+    veut citer la fiche D03_lissage section smoothing, donc on lit ses
+    N premiers chunks (ordre du document) directement.
+
+    Args:
+        doc_id : code court du document (ex. "D03"). Accepte aussi les
+            formes étendues `D03_lissage` ou `D03.01` (préfixe matché).
+        max_chunks : nombre max de chunks à retourner. Par défaut 3.
+
+    Returns:
+        list[dict] avec : chunk_id, doc_id, section_id, section_title,
+        section_path, text, tags (vide si non défini). Liste vide si
+        doc_id inconnu.
+
+    Plan refonte PDF 2026-06-03 (Axe B.2 — RAG doctrine direct).
+    """
+    if not doc_id:
+        return []
+    try:
+        chunks = _load_meta_chunks()
+    except FileNotFoundError as exc:
+        log.warning("get_chunks_by_doc_id : %s", exc)
+        return []
+
+    # Normalisation : « D03_lissage » ou « D03.01 » → « D03 ».
+    target = str(doc_id).split("_")[0].split(".")[0].strip().upper()
+
+    selected = [c for c in chunks if str(c.get("doc_id", "")).upper() == target]
+    selected.sort(key=lambda c: str(c.get("section_id", "")))
+    out = []
+    for c in selected[: max(0, int(max_chunks))]:
+        md = c.get("metadata") or {}
+        out.append({
+            "chunk_id":      c.get("chunk_id"),
+            "doc_id":        c.get("doc_id"),
+            "section_id":    c.get("section_id"),
+            "section_title": c.get("section_title"),
+            "section_path":  c.get("section_path"),
+            "text":          c.get("text", ""),
+            "tags":          md.get("tags", []),
+        })
+    return out
+
+
 def run(df=None, params: dict | None = None) -> dict:
     """Point d'entrée tool. `df` est ignoré (le retriever a son propre corpus)."""
     params = params or {}

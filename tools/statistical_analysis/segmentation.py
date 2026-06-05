@@ -198,10 +198,27 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
 
     total_expo = float(expo_per_row.sum()) if expo_per_row is not None else 0.0
 
+    # Durée d'observation pour convertir l'exposition en effectif moyen par an
+    # (« base 100 % »). Plan refonte PDF 2026-06-03 (Axe C).
+    nb_annees_obs = None
+    if {"date_entree", "date_sortie"} <= set(df.columns):
+        de_min = pd.to_datetime(df["date_entree"], format="mixed",
+                                dayfirst=True, errors="coerce").dropna()
+        ds_max = pd.to_datetime(df["date_sortie"], format="mixed",
+                                dayfirst=True, errors="coerce").dropna()
+        # On exclut les sentinelles 2999, 9999, etc.
+        ds_max = ds_max[ds_max.dt.year < 2100]
+        if len(de_min) > 0 and len(ds_max) > 0:
+            nb_annees_obs = int(ds_max.max().year - de_min.min().year + 1)
+
     result: dict = {
         "total_contrats": total,
         "total_deces": total_deces,
         "total_exposition_pa": round(total_expo, 2),
+        "nb_annees_observation": nb_annees_obs,
+        "nb_assures_moyen_par_annee": (
+            round(total_expo / nb_annees_obs, 1) if nb_annees_obs else None
+        ),
         "segmentations": {},
     }
 
@@ -227,6 +244,12 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             tab["exposition_pa"] = tab["exposition_pa"].round(2)
             tab["pct_exposition"] = (tab["exposition_pa"] / total_expo * 100).round(1) \
                 if total_expo > 0 else 0.0
+            # Effectif moyen par an, par modalité (« base 100 % »).
+            if nb_annees_obs:
+                tab["nb_assures_moyen_par_annee"] = (
+                    tab["exposition_pa"] / nb_annees_obs).round(1)
+            else:
+                tab["nb_assures_moyen_par_annee"] = None
         else:
             tab = (
                 df.groupby(grouper)

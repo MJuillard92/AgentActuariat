@@ -17,6 +17,8 @@ def _data_store():
         "num_observation_years":  3,
         "total_exposure":         1234.5,
         "total_deaths":           42,
+        "nb_assures_moyen_par_annee": 411,
+        "nb_annees_observation":  3,
         "segmentations":          {
             "sexe": [
                 {"valeur": "H", "nb_contrats": 500, "nb_deces": 25,

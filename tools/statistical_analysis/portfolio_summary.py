@@ -328,6 +328,24 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
         _round_or_none(exposition_totale_pa / n, 4) if exposition_totale_pa is not None and n > 0 else None
     )
 
+    # Effectif moyen exposé par année (« base 100 % »).
+    # Métrique remplaçant les années-personne dans le tableau de préambule.
+    # Plan refonte PDF 2026-06-03 (Axe C).
+    nb_annees_observation = None
+    if entry_dates is not None and exit_dates is not None:
+        valid_entry = entry_dates.dropna()
+        valid_exit  = exit_dates.dropna()
+        if len(valid_entry) > 0 and len(valid_exit) > 0:
+            year_min_obs = int(valid_entry.min().year)
+            year_max_obs = int(valid_exit.max().year)
+            nb_annees_observation = year_max_obs - year_min_obs + 1
+    result["nb_annees_observation"] = nb_annees_observation
+    if exposition_totale_pa is not None and nb_annees_observation:
+        result["nb_assures_moyen_par_annee"] = round(
+            exposition_totale_pa / nb_annees_observation, 1)
+    else:
+        result["nb_assures_moyen_par_annee"] = None
+
     # Taux brut rapporté à l'exposition
     if result.get("nb_deces") is not None and exposition_totale_pa not in (None, 0):
         result["taux_brut_deces_par_pa"] = _round_or_none(result["nb_deces"] / exposition_totale_pa, 6)
@@ -384,6 +402,18 @@ def run(df: pd.DataFrame, params: dict | None = None) -> dict:
             str(k): _round_or_none(v / n, 4) if n > 0 else None
             for k, v in counts.items()
         }
+
+        # Ventilation de l'effectif moyen par sexe (Axe C).
+        # Si on a pu calculer une exposition individuelle, on l'agrège par sexe.
+        if (entry_dates is not None and exit_dates is not None
+                and nb_annees_observation):
+            durees_indiv = (exit_dates - entry_dates).dt.days / 365.25
+            durees_indiv = durees_indiv.clip(lower=0).fillna(0)
+            for label in ("H", "F"):
+                mask = s_norm.eq(label)
+                expo_label = float(durees_indiv[mask].sum())
+                result[f"nb_assures_moyen_par_annee_{label.lower()}"] = round(
+                    expo_label / nb_annees_observation, 1)
 
     # -------------------------------------------------------------------------
     # Warnings qualité

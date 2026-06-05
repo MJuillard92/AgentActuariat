@@ -50,7 +50,9 @@ OUTPUTS
 data_store_keys_written:
   - series : dict — résultat complet (serie, annee_min, annee_max, nb_annees, anomalies)
 return_payload:
-  serie     : list[dict] — annee, nb_entres, nb_deces, exposition_pa par année
+  serie     : list[dict] — annee, nb_entres, nb_deces, nb_actifs, exposition_pa,
+              age_moyen_entres, age_moyen_deces, age_moyen_tous, taux_deces,
+              is_partial par année
   annee_min : int
   annee_max : int
   nb_annees : int
@@ -161,6 +163,19 @@ def _compute_annual(valid: pd.DataFrame, df: pd.DataFrame, exit_col: str | None,
         else:
             age_moyen_deces = None
 
+        # Âge moyen de TOUS les actifs au 30 juin de l'année (référence
+        # actuarielle standard pour l'effectif moyen exposé).
+        # Plan refonte PDF 2026-06-03 (Axe C — métrique effectif moyen).
+        mid = pd.Timestamp(year, 6, 30)
+        if len(actifs) > 0 and dn_col:
+            all_dn = pd.to_datetime(df.loc[actifs.index, dn_col],
+                                    format="mixed", dayfirst=True, errors="coerce")
+            ages_tous = (mid - all_dn).dt.days / 365.25
+            age_moyen_tous = round(float(ages_tous.mean()), 2) if ages_tous.notna().any() else None
+        else:
+            age_moyen_tous = None
+
+        nb_actifs = int(len(actifs))
         expo_pa = round(float(expo), 1)
 
         # Taux de décès (‰ PA) — calculé sur expo_pa pour cohérence avec la valeur stockée
@@ -170,9 +185,11 @@ def _compute_annual(valid: pd.DataFrame, df: pd.DataFrame, exit_col: str | None,
             "annee":             year,
             "nb_entres":         nb_entres,
             "nb_deces":          nb_deces,
+            "nb_actifs":         nb_actifs,
             "exposition_pa":     expo_pa,
             "age_moyen_entres":  age_moyen_entres,
             "age_moyen_deces":   age_moyen_deces,
+            "age_moyen_tous":    age_moyen_tous,
             "taux_deces":        taux_deces,
             "is_partial":        False,  # rétro-actif ci-dessous
         })

@@ -24,6 +24,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import math
+import re
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -419,6 +420,13 @@ def _run_graphs(section, data_store: dict) -> list[str]:
     """
     Design 3 : itère sur visual_specs de type `chart` et rend chacun en PNG
     via matplotlib (renderer direct). Retourne la liste des chemins PNG.
+
+    Si la rédaction LLM fait référence à « voir Figure 2 » et qu'un
+    graphique antérieur a silencieusement échoué, la cross-référence se
+    casse (Figure 2 désigne la 1re rendue, pas la 2e attendue). On insère
+    désormais une chaîne vide pour conserver la numérotation séquentielle
+    — assemble_sections affichera « (Graphique N — non disponible) » à la
+    place. Plan refonte PDF 2026-06-03 (Lot 8).
     """
     paths: list[str] = []
     for spec in (section.visual_specs or []):
@@ -426,8 +434,9 @@ def _run_graphs(section, data_store: dict) -> list[str]:
             continue
         hydrated = _hydrate_visual_spec(spec, data_store)
         if hydrated.get("error"):
-            log.warning("[04_redaction] graphique '%s' : %s",
+            log.warning("[04_redaction] graphique '%s' : %s (slot conservé)",
                         spec.get("id", "?"), hydrated["error"])
+            paths.append("")    # slot vide → caption « non disponible »
             continue
         path = _render_chart_to_png(hydrated)
         if path:
@@ -435,8 +444,9 @@ def _run_graphs(section, data_store: dict) -> list[str]:
             log.info("[04_redaction] graphique '%s' rendu → %s",
                      spec.get("id", "?"), path)
         else:
-            log.warning("[04_redaction] graphique '%s' : rendu échoué",
+            log.warning("[04_redaction] graphique '%s' : rendu échoué (slot conservé)",
                         spec.get("id", "?"))
+            paths.append("")    # slot vide → numérotation préservée
     return paths
 
 
@@ -898,6 +908,54 @@ def _enforce_traceability(
     return retry_text
 
 
+# ── Post-processor LaTeX ─────────────────────────────────────────────────────
+# Le LLM Writer produit parfois des commandes LaTeX nues (sans `$...$`),
+# notamment dans la section lissage où il manipule `\widehat{q}_x`,
+# `\Delta^2`, `\sum_x`, etc. Sans délimiteurs, `split_math` ne capte rien
+# et le PDF affiche le LaTeX en clair. Plan refonte PDF 2026-06-03 (Lot 6).
+#
+# Heuristique : on identifie tout fragment qui RESSEMBLE à du LaTeX
+# (commence par `\` suivi de lettres, éventuellement suivi de blocs `{…}`
+# et de subscripts/superscripts) et on l'entoure de `$…$` si pas déjà fait.
+# On épargne les fragments déjà en `$…$` en utilisant `split_math` en amont.
+_BARE_LATEX_RE = re.compile(
+    r"\\[a-zA-Z]+"                       # commande \command
+    r"(?:\{[^{}]*\})*"                   # éventuels blocs {…}
+    r"(?:[_^]\{[^{}]*\}|[_^][a-zA-Z0-9])*"  # subscript/superscript chains
+)
+
+
+def _wrap_bare_latex(text: str) -> str:
+    """Wrappe les commandes LaTeX nues avec `$…$` (uniquement hors zones
+    déjà délimitées). Idempotent. Plan refonte PDF 2026-06-03 (Lot 6)."""
+    if not text or "\\" not in text:
+        return text
+    try:
+        from tools.build_pdf.math_renderer import split_math
+    except Exception:
+        return text
+
+    parts: list[str] = []
+    for content, is_formula, is_display in split_math(text):
+        if is_formula or not content:
+            # On reformate les formules déjà délimitées telles qu'on les a
+            # lues, pour ne pas casser les originaux.
+            if is_display:
+                parts.append(f"$${content}$$")
+            elif is_formula:
+                parts.append(f"${content}$")
+            else:
+                parts.append(content)
+            continue
+
+        # Texte brut : on cherche les LaTeX nus et on les entoure de $…$.
+        # Mais on évite de wrapper un fragment déjà entre $...$ déjà lus.
+        wrapped = _BARE_LATEX_RE.sub(lambda m: f"${m.group(0)}$", content)
+        parts.append(wrapped)
+
+    return "".join(parts)
+
+
 def _call_llm_redaction(prompt: str) -> str:
     """
     Appelle GPT-4o pour rédiger le texte narratif de la section.
@@ -920,7 +978,11 @@ def _call_llm_redaction(prompt: str) -> str:
             temperature=cfg.get("temperature", _TEMPERATURE),
             max_tokens=cfg.get("max_tokens", _MAX_TOKENS_NARRATIVE),
         )
-        return (response.choices[0].message.content or "").strip()
+        raw = (response.choices[0].message.content or "").strip()
+        # Post-processing LaTeX : wrappe les commandes nues laissées par le
+        # LLM (`\widehat{q}_x`, `\frac{a}{b}`, …) pour qu'elles soient rendues
+        # en image dans le PDF. Plan refonte PDF 2026-06-03 (Lot 6).
+        return _wrap_bare_latex(raw)
 
     except Exception as exc:
         log.error("[04_redaction] LLM rédaction échoué : %s", exc)

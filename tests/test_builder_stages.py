@@ -29,9 +29,23 @@ def _mock_llm_response(content="Calculs en cours...", tool_calls=None,
 
 
 def _build_state(content="calcule la table", data_store=None):
+    # Data catalogue complet par défaut (mapping + gender + methods_auto +
+    # période confirmée) pour que la gate Builder passe et que les tests
+    # valident le comportement NOMINAL du Builder, pas la gate.
+    # Plan datacatalogue-gate 2026-05-25.
+    ds = dict(data_store or {})
+    ds.setdefault("mapping_validated", True)
+    ds.setdefault("report_mode", "full_report")
+    sp = ds.setdefault("study_plan", {})
+    sp.setdefault("gender_segmentation", "unisex")
+    sp.setdefault("observation_period_years", [2020, 2024])
+    sp.setdefault("start_year", 2020)
+    sp.setdefault("end_year", 2024)
+    sp.setdefault("num_observation_years", 5)
+    sp.setdefault("methods_auto", True)
     return {
         "messages":   [HumanMessage(content=content)],
-        "data_store": data_store or {},
+        "data_store": ds,
         "dataset_ref": None,
     }
 

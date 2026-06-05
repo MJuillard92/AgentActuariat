@@ -33,13 +33,15 @@ def test_manifest_has_three_data_contract_blocks():
     assert len(m.master_from_modeling) == 2    # study_objective, gender_segmentation
     # 3 preprocessing + 5 exposure-derived + 4 stats + ages + qx_table
     # + smoothed_table + qx_deciles_table + ci_table = 17
+    # + 2 préambule effectif moyen (nb_assures_moyen_par_annee,
+    #   nb_annees_observation) = 19
     # + 4 statistical_validation outputs (smoothed_deciles_table,
-    #   validation_tests_table, smoothness_metrics, validation_summary) = 21
+    #   validation_tests_table, smoothness_metrics, validation_summary) = 23
     # + 4 benchmarking outputs (abatement_table, smr_global, reference_name,
-    #   benchmarking_summary) = 25
+    #   benchmarking_summary) = 27
     # + 6 by_sex outputs (exposure_table_h/f, qx_table_h/f,
-    #   smoothed_table_h/f) = 31
-    assert len(m.builder_outputs) == 31
+    #   smoothed_table_h/f) = 33
+    assert len(m.builder_outputs) == 33
 
 
 def test_manifest_keyspec_has_core_fields():

@@ -353,6 +353,21 @@ def execute_tools(
                     if final is not None:
                         data_store["total_records"] = final
 
+            # ── statistical_analysis.portfolio_summary ──
+            # Le résultat global atterrit dans data_store["summary"], mais
+            # on propage aussi les scalaires clés (effectif moyen / an) au
+            # top level pour qu'ils alimentent les placeholders Jinja du
+            # préambule en mode descriptif (où builder.exposure ne tourne
+            # pas). Plan refonte PDF 2026-06-03 (Axe C).
+            elif fn_name == "statistical_analysis" and function_name == "portfolio_summary":
+                data_store["summary"] = result
+                for k in ("nb_assures_moyen_par_annee",
+                          "nb_annees_observation",
+                          "nb_assures_moyen_par_annee_h",
+                          "nb_assures_moyen_par_annee_f"):
+                    if k in result and result[k] is not None:
+                        data_store.setdefault(k, result[k])
+
             # ── statistical_analysis.segmentation ──
             # Deux consommateurs aval, deux noms :
             #   - YAML Writer attend `segmentations` (pluriel)
@@ -361,6 +376,11 @@ def execute_tools(
             elif fn_name == "statistical_analysis" and function_name == "segmentation":
                 data_store["segmentations"] = result.get("segmentations", {})
                 data_store["segmentation"]  = result   # rétro-compat analysis_plots
+                # Propage les scalaires utiles au template Writer (Axe C).
+                for k in ("nb_assures_moyen_par_annee",
+                          "nb_annees_observation"):
+                    if k in result and result[k] is not None:
+                        data_store.setdefault(k, result[k])
 
             # ── statistical_analysis.time_series : spread serie + serie_h + serie_f ──
             elif fn_name == "statistical_analysis" and function_name == "time_series":

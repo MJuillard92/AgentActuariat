@@ -161,40 +161,11 @@ def test_keys_for_sections_subset_of_builder_outputs():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 4. Master — désambiguation write=ask avant Builder
+# 4. Master — désambiguation write=ask : OBSOLÈTE
+# Plan datacatalogue-gate 2026-05-25 : la question write/PDF est déplacée
+# dans le modal/bulle « Compléter le data catalogue » déclenché par la
+# gate Builder. Master ne pose plus la question séquentielle ici.
 # ──────────────────────────────────────────────────────────────────────────
-
-def test_master_asks_write_question_before_builder(monkeypatch):
-    """Quand classify_intent renvoie write=ask, Master émet un AIMessage
-    question et ne route pas vers le Builder."""
-    from langchain_core.messages import HumanMessage
-    from agents.mortality.agents import master_node as mn
-
-    def _fake_classify(*args, **kwargs):
-        return {
-            "kind": "task",
-            "write": "ask",
-            "report_mode": "full_report",
-            "intent": "build_and_write",
-            "reply": "",
-        }
-    monkeypatch.setattr(mn, "_classify_intent", _fake_classify)
-
-    state = {
-        "messages": [HumanMessage(content="construis une table de mortalité")],
-        "data_store": {"_disambiguation_done": True,
-                       "_dataset_ref":         "test_session",  # bypass Bug 6 gate
-                       "mapping_validated":        True,  # gate calcul : clone validé
-                       "study_plan": {"gender_segmentation": "unisex"}},
-        "dataset_ref": "test_session",
-    }
-    out = mn.master_node(state)
-
-    # Master a émis un AIMessage avec la question, pas de route Builder
-    assert "active_agent" not in out or out.get("active_agent") != "builder"
-    assert out["data_store"].get("_write_question_asked") is True
-    msgs = out.get("messages") or []
-    assert any("rapport" in (m.content or "").lower() for m in msgs)
 
 
 def test_master_routes_to_builder_when_write_yes(monkeypatch):
@@ -324,6 +295,17 @@ def test_builder_raw_rates_assimilation_is_deterministic(monkeypatch):
             {"age": 30, "q_x_brut": 0.0012},
             {"age": 31, "q_x_brut": 0.0013},
         ],
+        # Datacatalogue complet pour passer la gate Builder (sinon refus net).
+        # Plan datacatalogue-gate 2026-05-25.
+        "mapping_validated": True,
+        "study_plan": {
+            "gender_segmentation":      "unisex",
+            "observation_period_years": [2020, 2024],
+            "start_year":               2020,
+            "end_year":                 2024,
+            "num_observation_years":    5,
+            "methods_auto":             True,
+        },
     }
     state = {"messages": [HumanMessage(content="go")], "data_store": data_store}
 

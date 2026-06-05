@@ -630,7 +630,7 @@ tools:
       data_store_keys_written:
       - 'series : dict — résultat complet (serie, annee_min, annee_max, nb_annees, anomalies)'
       return_payload:
-        serie: list[dict] — annee, nb_entres, nb_deces, exposition_pa par année
+        serie: list[dict] — annee, nb_entres, nb_deces, nb_actifs, exposition_pa,
         annee_min: int
         annee_max: int
         nb_annees: int
@@ -902,12 +902,16 @@ tools:
       - 'age_max        : int — âge maximum effectif'
       - 'total_exposure : float — exposition totale en personne-années'
       - 'total_deaths   : int — nombre total de décès'
+      - 'nb_assures_moyen_par_annee : float — effectif moyen exposé par année'
+      - 'nb_annees_observation : int — durée de la fenêtre d''observation.'
       return_payload:
         exposure_table: list[dict] — table principale
         age_min: int
         age_max: int
         total_exposure: float
         total_deaths: int
+        nb_assures_moyen_par_annee: float
+        nb_annees_observation: int
         lignes_exclues: int — nombre de lignes avec dates non parsables (optionnel)
     quality_gates:
       blocking:
@@ -1847,7 +1851,7 @@ tools:
     params:
       chart:
         type: string
-        values: age_pyramid | time_series | segmentation
+        values: age_pyramid | time_series | segmentation | portfolio_evolution
         default: age_pyramid
         note: Choisir selon les données disponibles dans le data_store.
       title_suffix:

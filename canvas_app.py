@@ -339,6 +339,249 @@ def _format_clone_message(audit: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_methods_selects(form_id: str) -> list:
+    """Construit les selects par tool à inclure dans la bulle data catalogue.
+
+    Lit le catalogue des tools via `all_choices_for_mode("full_report")` —
+    couvre les 3 tools usuels (crude_rates, smoothing, validation). Les
+    valeurs ne sont prises en compte au submit que si methods-mode=explicit.
+    """
+    try:
+        from agents.master.method_choices import all_choices_for_mode
+        choices = all_choices_for_mode("full_report") or []
+    except Exception:
+        choices = []
+    if not choices:
+        return [html.Div("Aucune méthode configurable.",
+                         className="text-muted small fst-italic")]
+    rendered = []
+    for c in choices:
+        rendered.append(html.Div([
+            dbc.Label(f"{c.label} :", className="small fw-bold mt-1"),
+            dbc.Select(
+                id={"type": "dcf-method", "form_id": form_id, "tool": c.tool},
+                options=[{"label": v, "value": v} for v in c.choices],
+                value=c.default,
+                size="sm",
+            ),
+        ], className="mb-1"))
+    return rendered
+
+
+def _render_datacatalogue_bubble(entry: dict) -> html.Div:
+    """Bulle inline qui contient le formulaire « Compléter le data catalogue ».
+
+    Affichée comme message de l'assistant quand le Builder gate refuse
+    (event datacatalogue_incomplete). L'utilisateur remplit puis confirme
+    sans quitter la conversation — alternative MCP-UI au modal popup.
+
+    `entry` doit contenir : form_id, missing, suggestions, submitted.
+    Si submitted=True, la bulle se replie en mode confirmation figée.
+    """
+    form_id = entry.get("form_id", "dc-form-unknown")
+    submitted = entry.get("submitted", False)
+    summary = entry.get("submitted_summary", "")
+
+    if submitted:
+        bubble = dbc.Card([
+            dbc.CardBody([
+                html.Div([
+                    html.I(className="fa fa-check-circle me-2 text-success"),
+                    html.Strong("Data catalogue complété "),
+                    html.Span(f"— {summary}", className="text-muted small")
+                    if summary else None,
+                ]),
+            ], className="py-2"),
+        ], color="success", outline=True, className="mb-0")
+        return html.Div(
+            bubble,
+            className="d-flex mb-3 justify-content-start",
+            style={"maxWidth": "80%"},
+        )
+
+    sug = entry.get("suggestions") or {}
+    auto_start = sug.get("start_year")
+    auto_end = sug.get("end_year")
+
+    def _id(field: str) -> dict:
+        return {"type": "dcf", "f": field, "form_id": form_id}
+
+    bubble = dbc.Card([
+        dbc.CardHeader([
+            html.I(className="fa fa-clipboard-list me-2 text-warning"),
+            html.Strong("Compléter le data catalogue"),
+        ], className="py-2"),
+        dbc.CardBody([
+            html.P(
+                "Avant de lancer les calculs j'ai besoin de quelques précisions. "
+                "Renseignez tous les champs ci-dessous puis cliquez sur Confirmer.",
+                className="text-muted small mb-3",
+            ),
+            # ── Périmètre ─────────────────────────────────────────────
+            html.H6([html.I(className="fa fa-bullseye me-2 text-primary"),
+                     "Périmètre"], className="text-secondary mt-2 small fw-bold"),
+            dbc.Label("Mode de rapport :", className="small fw-bold mt-2"),
+            dbc.RadioItems(
+                id=_id("report-mode"),
+                options=[
+                    {"label": " Rapport complet (taux bruts + lissage + validation + benchmarking)",
+                     "value": "full_report"},
+                    {"label": " Taux bruts uniquement (sans lissage)",
+                     "value": "raw_rates"},
+                    {"label": " Description du portefeuille seule",
+                     "value": "description"},
+                ],
+                value="full_report", inline=False,
+            ),
+            dbc.Label("Segmentation par sexe :", className="small fw-bold mt-2"),
+            dbc.RadioItems(
+                id=_id("gender"),
+                options=[
+                    {"label": " Table unisex (agrégée)",          "value": "unisex"},
+                    {"label": " Tables séparées Hommes / Femmes", "value": "by_sex"},
+                ],
+                value="unisex", inline=True,
+            ),
+            dbc.Label("Générer un rapport PDF en fin de calcul ?",
+                      className="small fw-bold mt-2"),
+            dbc.RadioItems(
+                id=_id("write"),
+                options=[
+                    {"label": " Oui, PDF + notebook", "value": "yes"},
+                    {"label": " Non, juste les calculs", "value": "no"},
+                ],
+                value="yes", inline=True,
+            ),
+            # ── Méthodes ──────────────────────────────────────────────
+            html.H6([html.I(className="fa fa-cogs me-2 text-primary"),
+                     "Méthodes"], className="text-secondary mt-3 small fw-bold"),
+            dbc.RadioItems(
+                id=_id("methods-mode"),
+                options=[
+                    {"label": " Mode auto (le système choisit)",      "value": "auto"},
+                    {"label": " Préciser chaque méthode manuellement", "value": "explicit"},
+                ],
+                value="auto", inline=False,
+            ),
+            # Selects par tool — toujours affichés mais ignorés si mode=auto.
+            # Liste dérivée DYNAMIQUEMENT du catalogue des tools via
+            # all_choices_for_mode (full_report unisex par défaut — l'user
+            # peut adapter ensuite, on relit son choix au submit).
+            html.Div(_build_methods_selects(form_id),
+                     className="ms-3 mt-2",
+                     style={"borderLeft": "2px solid #FFD580",
+                            "paddingLeft": "10px"}),
+            # ── Période d'observation ─────────────────────────────────
+            html.H6([html.I(className="fa fa-calendar me-2 text-primary"),
+                     "Période d'observation"],
+                    className="text-secondary mt-3 small fw-bold"),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Année de début :", className="small fw-bold"),
+                    dbc.Input(id=_id("start-year"), type="number",
+                              value=auto_start,
+                              placeholder="ex : 1983", size="sm"),
+                ], md=6),
+                dbc.Col([
+                    dbc.Label("Année de fin :", className="small fw-bold"),
+                    dbc.Input(id=_id("end-year"), type="number",
+                              value=auto_end,
+                              placeholder="ex : 2010", size="sm"),
+                ], md=6),
+            ], className="mt-1"),
+            # ── Bouton confirmer ──────────────────────────────────────
+            html.Div([
+                dbc.Button(
+                    [html.I(className="fa fa-check me-1"), "Confirmer"],
+                    id={"type": "dcf-confirm", "form_id": form_id},
+                    color="primary", size="sm", n_clicks=0,
+                    className="mt-3",
+                ),
+            ], className="d-flex justify-content-end"),
+        ], className="py-3"),
+    ], color="warning", outline=True, className="mb-0")
+
+    return html.Div(
+        bubble,
+        className="d-flex mb-3 justify-content-start",
+        style={"maxWidth": "80%"},
+    )
+
+
+def _render_decision_required_bubble(entry: dict) -> html.Div:
+    """Bulle inline « décision requise » pour les tools qui retournent
+    `decision_required` (ex. smoothing → violations de monotonie).
+
+    `entry` doit contenir : form_id, tool, reason, options[], submitted.
+    Si submitted=True, la bulle se replie avec le choix retenu.
+
+    Plan refonte garde-fou 2026-06-03.
+    """
+    form_id = entry.get("form_id", "dr-form-unknown")
+    submitted = entry.get("submitted", False)
+    chosen = entry.get("chosen", "")
+    tool = entry.get("tool", "")
+    reason = entry.get("reason", "")
+    options = entry.get("options") or []
+
+    if submitted:
+        chosen_label = next(
+            (o.get("label", chosen) for o in options if o.get("id") == chosen),
+            chosen,
+        )
+        bubble = dbc.Card([
+            dbc.CardBody([
+                html.Div([
+                    html.I(className="fa fa-check-circle me-2 text-success"),
+                    html.Strong("Décision enregistrée "),
+                    html.Span(f"— {chosen_label}", className="text-muted small"),
+                ]),
+            ], className="py-2"),
+        ], color="success", outline=True, className="mb-0")
+        return html.Div(
+            bubble,
+            className="d-flex mb-3 justify-content-start",
+            style={"maxWidth": "80%"},
+        )
+
+    radio_options = [
+        {"label": f" {o.get('label', o.get('id', '?'))}",
+         "value": o.get("id", "")}
+        for o in options if o.get("id")
+    ]
+
+    bubble = dbc.Card([
+        dbc.CardHeader([
+            html.I(className="fa fa-pause-circle me-2 text-warning"),
+            html.Strong(f"Décision requise — {tool or 'outil de calcul'}"),
+        ], className="py-2"),
+        dbc.CardBody([
+            html.P(reason, className="small mb-3") if reason else None,
+            dbc.RadioItems(
+                id={"type": "dr-option", "form_id": form_id},
+                options=radio_options,
+                value=(radio_options[0]["value"] if radio_options else ""),
+                inline=False,
+                className="small",
+            ),
+            html.Div([
+                dbc.Button(
+                    [html.I(className="fa fa-check me-1"), "Confirmer"],
+                    id={"type": "dr-submit", "form_id": form_id},
+                    color="primary", size="sm", n_clicks=0,
+                    className="mt-2",
+                ),
+            ], className="d-flex justify-content-end"),
+        ], className="py-3"),
+    ], color="warning", outline=True, className="mb-0")
+
+    return html.Div(
+        bubble,
+        className="d-flex mb-3 justify-content-start",
+        style={"maxWidth": "80%"},
+    )
+
+
 def _chat_bubble(role: str, content: str, extra: dict | None = None) -> html.Div:
     """Rend une bulle de chat."""
     is_user = role == "user"
@@ -476,6 +719,26 @@ def _writer_tab() -> html.Div:
                     ]),
                 ], className="mb-2"),
 
+                # ── Rapports générés (dossier session/rapports/) ───────────
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.I(className="fa fa-folder-open me-2"),
+                        html.Strong("Rapports"),
+                        dbc.Button(
+                            html.I(className="fa fa-sync"),
+                            id="btn-rapports-refresh",
+                            color="link", size="sm",
+                            className="float-end p-0",
+                            title="Rafraîchir la liste",
+                        ),
+                    ]),
+                    dbc.CardBody([
+                        html.Div(id="rapports-list",
+                                 style={"maxHeight": "260px",
+                                        "overflowY": "auto"}),
+                    ]),
+                ], className="mb-2"),
+
                 # ── Reprendre une session ─────────────────────────────────
                 dbc.Card([
                     dbc.CardHeader([
@@ -501,6 +764,28 @@ def _writer_tab() -> html.Div:
                         html.Div(id="restore-session-info", className="small"),
                     ], className="py-2"),
                 ], className="mb-2"),
+
+                # ── État data catalogue (3 niveaux) ─────────────────────
+                # Plan refonte garde-fou 2026-06-03 (Partie A).
+                # ⚪ pas requis (par défaut, l'agent n'a rien demandé)
+                # 🟡 à compléter (bulle inline ouverte)
+                # 🟢 prêt (compute_datacatalogue_state.complete == True)
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Div([
+                            html.I(id="dc-icon",
+                                   className="fa fa-circle-question text-muted me-2"),
+                            html.Strong("Data catalogue",
+                                        className="small"),
+                            html.Span(id="dc-status-label",
+                                      children=" · pas requis",
+                                      className="small text-muted ms-1"),
+                        ], id="dc-status-row",
+                           style={"cursor": "pointer"},
+                           title="État du data catalogue (cliquez pour "
+                                 "ouvrir le formulaire)"),
+                    ], className="py-2"),
+                ], id="card-dc-status", className="mb-2"),
 
                 # ── Mode pas à pas ───────────────────────────────────────
                 dbc.Card([
@@ -830,6 +1115,121 @@ def _dev_tab() -> html.Div:
 # Modal désambiguation
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _datacatalogue_modal() -> dbc.Modal:
+    """Modal « Compléter le data catalogue ».
+
+    Reçoit les choix utilisateur AVANT que le Builder ne tourne — gate
+    stricte. Contient les champs requis par `compute_datacatalogue_state` :
+      - Périmètre : report_mode, gender_segmentation, write (PDF ?)
+      - Méthodes : auto OU explicites (1 select par tool)
+      - Période d'observation : start/end year, période
+
+    Plan datacatalogue-gate 2026-05-25.
+    """
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle([
+            html.I(className="fa fa-clipboard-list me-2 text-warning"),
+            "Compléter le data catalogue",
+        ]), close_button=True),
+        dbc.ModalBody([
+            html.P(
+                "Renseignez tous les prérequis avant de lancer les calculs. "
+                "Tous les champs sont obligatoires.",
+                className="text-muted small",
+            ),
+            # ── Section 1 : Périmètre du rapport ──────────────────────
+            html.Hr(),
+            html.H6([html.I(className="fa fa-bullseye me-2 text-primary"),
+                     "Périmètre du rapport"], className="text-secondary"),
+            dbc.Label("Mode de rapport :", className="small fw-bold mt-2"),
+            dbc.RadioItems(
+                id="dc-report-mode",
+                options=[
+                    {"label": " Rapport complet (taux bruts + lissage + validation + benchmarking)",
+                     "value": "full_report"},
+                    {"label": " Taux bruts uniquement (sans lissage)",
+                     "value": "raw_rates"},
+                    {"label": " Description du portefeuille seule (pas de calcul de taux)",
+                     "value": "description"},
+                ],
+                value="full_report",
+                inline=False,
+            ),
+            dbc.Label("Segmentation par sexe :", className="small fw-bold mt-3"),
+            dbc.RadioItems(
+                id="dc-gender",
+                options=[
+                    {"label": " Table unisex (agrégée)",          "value": "unisex"},
+                    {"label": " Tables séparées Hommes / Femmes", "value": "by_sex"},
+                ],
+                value="unisex", inline=True,
+            ),
+            dbc.Label("Générer un rapport PDF en fin de calcul ?",
+                      className="small fw-bold mt-3"),
+            dbc.RadioItems(
+                id="dc-write",
+                options=[
+                    {"label": " Oui, générer le PDF + notebook", "value": "yes"},
+                    {"label": " Non, juste les calculs",          "value": "no"},
+                ],
+                value="yes", inline=True,
+            ),
+
+            # ── Section 2 : Méthodes de calcul ────────────────────────
+            html.Hr(),
+            html.H6([html.I(className="fa fa-cogs me-2 text-primary"),
+                     "Méthodes de calcul"], className="text-secondary"),
+            dbc.Label("Choix des méthodes :", className="small fw-bold mt-2"),
+            dbc.RadioItems(
+                id="dc-methods-mode",
+                options=[
+                    {"label": " Mode auto (le système choisit les méthodes adaptées)",
+                     "value": "auto"},
+                    {"label": " Préciser chaque méthode manuellement",
+                     "value": "explicit"},
+                ],
+                value="auto", inline=False,
+            ),
+            html.Div(id="dc-methods-explicit-container",
+                     style={"display": "none"}, className="mt-2"),
+
+            # ── Section 3 : Période d'observation ─────────────────────
+            html.Hr(),
+            html.H6([html.I(className="fa fa-calendar me-2 text-primary"),
+                     "Période d'observation"], className="text-secondary"),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Année de début (1er décès observé) :",
+                              className="small fw-bold"),
+                    dbc.Input(id="dc-start-year", type="number",
+                              value=None, placeholder="ex : 1983",
+                              size="sm"),
+                ], md=4),
+                dbc.Col([
+                    dbc.Label("Année de fin (dernier décès observé) :",
+                              className="small fw-bold"),
+                    dbc.Input(id="dc-end-year", type="number",
+                              value=None, placeholder="ex : 2010",
+                              size="sm"),
+                ], md=4),
+            ], className="mt-2"),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button(
+                [html.I(className="fa fa-check me-1"), "Confirmer"],
+                id="btn-datacatalogue-confirm",
+                color="primary", n_clicks=0,
+            ),
+            dbc.Button(
+                "Annuler",
+                id="btn-datacatalogue-cancel",
+                color="secondary", outline=True, n_clicks=0,
+                className="ms-2",
+            ),
+        ]),
+    ], id="modal-datacatalogue", size="lg", is_open=False, scrollable=True)
+
+
 def _disambiguation_modal() -> dbc.Modal:
     """
     Modal de désambiguation : tableau interactif de mapping colonnes +
@@ -1013,6 +1413,9 @@ app.layout = dbc.Container([
     dcc.Store(id="store-step-mode", data=False),
     dcc.Store(id="store-agent-internals", data=[]),
     dcc.Store(id="store-disambiguation", data=None),  # données en attente de désambiguation
+    # Trigger ouverture du modal Data Catalogue : poll_agent y écrit
+    # {open: True, suggestions: {...}} quand event datacatalogue_incomplete arrive.
+    dcc.Store(id="store-datacatalogue-trigger", data={}),
     # Bouton fantôme pour le callback toggle_disambiguation_modal
     # (rendu visible dans _chat_bubble, mais doit exister dans le layout statique)
     html.Button(id="btn-open-disambiguation", n_clicks=0, style={"display": "none"}),
@@ -1021,6 +1424,8 @@ app.layout = dbc.Container([
     dcc.Download(id="download-pdf"),
     dcc.Download(id="download-txt"),
     dcc.Download(id="download-notebook"),
+    dcc.Download(id="download-rapport-from-list"),
+    dcc.Interval(id="rapports-poll", interval=5000, n_intervals=0, disabled=False),
 
     # Polling interval (désactivé par défaut)
     dcc.Interval(id="interval-poll", interval=400, n_intervals=0, disabled=True),
@@ -1030,6 +1435,7 @@ app.layout = dbc.Container([
 
     # Modal désambiguation (mapping colonnes + formulaire prérequis)
     _disambiguation_modal(),
+    _datacatalogue_modal(),
 
     # Header
     dbc.Navbar(
@@ -1155,6 +1561,27 @@ def upload_csv(contents, filename):
     mm.state.column_mapping_unmatched = list(report["unmatched"].keys())
     mm.save()
 
+    # ── Auto-détection période d'observation (pour pré-remplir le modal
+    # « Compléter le data catalogue »). Min/max d'année de date_sortie chez
+    # les décès observés. Best-effort : si le mapping rate ou les dates ne
+    # parsent pas, on laisse None. Plan datacatalogue-gate 2026-05-25.
+    auto_start_year: int | None = None
+    auto_end_year: int | None = None
+    _date_sortie_col = report["matched"].get("date_sortie")
+    _cause_sortie_col = report["matched"].get("cause_sortie")
+    if _date_sortie_col and _cause_sortie_col:
+        try:
+            from tools._shared.date_parsing import parse_dates_fr
+            _parsed = parse_dates_fr(df[_date_sortie_col])
+            _is_dead = df[_cause_sortie_col].astype(str).str.strip().str.lower(
+                ).str.startswith(("dec", "déc", "d ", "1"))
+            _years = _parsed[_is_dead].dt.year.dropna()
+            if len(_years):
+                auto_start_year = int(_years.min())
+                auto_end_year = int(_years.max())
+        except Exception:
+            pass
+
     # Persister le mapping auto-détecté dans data_store (exploration Master).
     with _writer_lock:
         ds = _writer_state["data_store"]
@@ -1162,6 +1589,23 @@ def upload_csv(contents, filename):
         ds["column_mapping"]           = report["matched"]
         ds["column_mapping_confirmed"] = False
         ds["column_mapping_unmatched"] = list(report["unmatched"].keys())
+        # Suggestions pour pré-remplir le modal au moment d'ouverture
+        ds["_auto_period"] = {
+            "start_year": auto_start_year,
+            "end_year":   auto_end_year,
+        }
+        # Pré-remplissage IMPLICITE de study_plan avec les années
+        # auto-détectées : permet à la gate Builder de passer sans que
+        # l'user ait à interagir avec la bulle (les valeurs restent
+        # modifiables via le bouton sidebar). Plan datacatalogue-gate.
+        if auto_start_year is not None and auto_end_year is not None:
+            sp = ds.setdefault("study_plan", {})
+            sp.setdefault("start_year", int(auto_start_year))
+            sp.setdefault("end_year",   int(auto_end_year))
+            sp.setdefault("observation_period_years",
+                          [int(auto_start_year), int(auto_end_year)])
+            sp.setdefault("num_observation_years",
+                          int(auto_end_year) - int(auto_start_year) + 1)
 
     info = html.Div([
         dbc.Alert(
@@ -1181,6 +1625,13 @@ def upload_csv(contents, filename):
             id="btn-validate-mapping", color="primary", size="sm",
             className="mt-2 w-100",
         ),
+        # Le bouton « Compléter le data catalogue » a été retiré : la bulle
+        # inline dans le chat (rôle `_datacatalogue_form`) gère tout le flux.
+        # On garde un bouton fantôme caché pour ne pas casser le callback
+        # toggle_datacatalogue_modal qui le référence encore (sera nettoyé
+        # avec le modal lui-même au prochain lot UI).
+        html.Button(id="btn-open-datacatalogue", n_clicks=0,
+                    style={"display": "none"}),
     ])
     return df_json, info, [], 0
 
@@ -1544,6 +1995,94 @@ def _internals_entry(ev: dict) -> html.Div:
     return html.Div(text, style={"color": color, "marginBottom": "3px", "lineHeight": "1.4"})
 
 
+def _derive_dc_state(data_store: dict | None,
+                      history: list[dict] | None) -> tuple[str, str]:
+    """Retourne (className, label) pour l'icône datacatalogue sidebar.
+
+    Règles (priorité du haut vers le bas) :
+      1. Bulle inline ouverte (entry `_datacatalogue_form` non soumise)
+         → « à compléter » 🟡
+      2. compute_datacatalogue_state(ds).complete == True
+         → « prêt » 🟢
+      3. Sinon → « pas requis » ⚪
+
+    Plan refonte garde-fou 2026-06-03 (Partie A).
+    """
+    has_open_bubble = any(
+        h.get("role") == "_datacatalogue_form" and not h.get("submitted")
+        for h in (history or [])
+    )
+    if has_open_bubble:
+        return ("fa fa-circle-exclamation text-warning me-2",
+                " · à compléter")
+    try:
+        from knowledge_base.report_template.datacatalogue import (
+            compute_datacatalogue_state,
+        )
+        dc = compute_datacatalogue_state(data_store or {})
+        if dc.complete:
+            return ("fa fa-circle-check text-success me-2",
+                    " · prêt")
+    except Exception:
+        pass
+    return ("fa fa-circle-question text-muted me-2",
+            " · pas requis")
+
+
+@app.callback(
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Input("dc-status-row", "n_clicks"),
+    State("store-chat-history", "data"),
+    prevent_initial_call=True,
+)
+def open_dc_bubble_from_icon(n_clicks, history):
+    """Au clic sur l'icône sidebar « Data catalogue », ouvre la bulle
+    inline du formulaire (si elle n'est pas déjà ouverte). Permet à
+    l'utilisateur de réviser/modifier sans attendre que l'agent le
+    demande. Plan refonte garde-fou 2026-06-03 (Partie A.4)."""
+    if not n_clicks:
+        raise PreventUpdate
+    history = list(history or [])
+    if any(h.get("role") == "_datacatalogue_form" and not h.get("submitted")
+           for h in history):
+        raise PreventUpdate
+    with _writer_lock:
+        ds = dict(_writer_state.get("data_store") or {})
+    auto = (ds.get("_auto_period") or {})
+    try:
+        from knowledge_base.report_template.datacatalogue import (
+            compute_datacatalogue_state,
+        )
+        missing = compute_datacatalogue_state(ds).missing
+    except Exception:
+        missing = []
+    import time as _time
+    history.append({
+        "role":        "_datacatalogue_form",
+        "form_id":     f"dc-{int(_time.time() * 1000)}",
+        "missing":     missing,
+        "suggestions": auto,
+        "submitted":   False,
+    })
+    return history
+
+
+@app.callback(
+    Output("dc-icon", "className"),
+    Output("dc-status-label", "children"),
+    Input("store-chat-history", "data"),
+    Input("interval-poll", "n_intervals"),
+    prevent_initial_call=False,
+)
+def refresh_dc_icon(history, _n):
+    """Rafraîchit l'icône datacatalogue à chaque changement de history
+    (bulle créée / soumise) et à chaque tick de polling agent.
+    Plan refonte garde-fou 2026-06-03 (Partie A)."""
+    with _writer_lock:
+        ds = dict(_writer_state.get("data_store") or {})
+    return _derive_dc_state(ds, history)
+
+
 @app.callback(
     Output("chat-messages", "children"),
     Output("interval-poll", "disabled", allow_duplicate=True),
@@ -1558,6 +2097,7 @@ def _internals_entry(ev: dict) -> html.Div:
     Output("agent-internals-log", "children", allow_duplicate=True),
     Output("internals-agent-badge", "children", allow_duplicate=True),
     Output("store-disambiguation", "data", allow_duplicate=True),
+    Output("store-datacatalogue-trigger", "data", allow_duplicate=True),
     Input("interval-poll", "n_intervals"),
     State("store-chat-history", "data"),
     State("store-last-event-idx", "data"),
@@ -1571,14 +2111,48 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
 
     history = list(history or [])
     new_events = events[last_idx:]
+
+    # ── Skip re-render quand RIEN n'a changé ─────────────────────────────────
+    # Sans ça, poll_agent reconstruit chat-messages toutes les 400 ms : les
+    # composants Dash (RadioItems, Input) de la bulle inline du data
+    # catalogue sont re-rendus avec leur `value` initial → les sélections
+    # de l'utilisateur sont écrasées à chaque tick. En l'absence d'events
+    # nouveaux on retourne dash.no_update pour les outputs lourds, en
+    # préservant uniquement les badges et le flag poll_disabled.
+    if not new_events:
+        done = not running
+        poll_disabled = done
+        if done:
+            status_text, status_color = "Prêt", "success"
+        else:
+            status_text, status_color = "En cours…", "warning"
+        return (
+            dash.no_update,                         # chat-messages
+            poll_disabled, status_text, status_color,
+            dash.no_update,                         # store-chat-history
+            dash.no_update,                         # store-last-event-idx
+            dash.no_update, dash.no_update,         # pdf/txt paths
+            dash.no_update,                         # notebook path
+            dash.no_update,                         # step-approval-banner
+            dash.no_update,                         # agent-internals-log
+            dash.no_update,                         # internals-agent-badge
+            dash.no_update,                         # store-disambiguation
+            dash.no_update,                         # store-datacatalogue-trigger
+        )
+
     pdf_path = txt_path = notebook_path = None
     disambiguation_data = dash.no_update
+    datacatalogue_trigger = dash.no_update
 
     # Badge agent courant (dernier agent_switch vu)
     current_agent = None
 
     # Accumuler les nouvelles entrées internals
     new_internals = list(existing_internals or [])
+
+    # On capture aussi la dernière stage rencontrée pour enrichir le badge
+    # « En cours » du chat (sinon on voit juste « MasterAgent » sans contexte).
+    current_stage_label: str | None = None
 
     for ev in new_events:
         ev_type = ev.get("type")
@@ -1588,6 +2162,11 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
 
         if ev_type == "agent_switch":
             current_agent = ev.get("agent")
+            current_stage_label = None  # reset au changement d'agent
+
+        elif ev_type == "master_stage":
+            # Garder le label de la dernière stage pour l'afficher en badge
+            current_stage_label = ev.get("label") or current_stage_label
 
         elif ev_type == "message":
             content = ev.get("content", "")
@@ -1599,6 +2178,9 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
                 pdf_path = _wd.group(1)
 
         elif ev_type == "tool_call":
+            # Tracé internals + bulle chat + mise à jour badge contexte
+            _tn = f"{ev.get('tool', '')}.{ev.get('function_name', '')}"
+            current_stage_label = f"appel {_tn}"
             history.append({
                 "role": "_tool_call",
                 "tool": ev.get("tool", ""),
@@ -1652,6 +2234,55 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
                 "content": "Informations requises avant de lancer l'analyse.",
             })
 
+        elif ev_type == "datacatalogue_incomplete":
+            # La gate Builder refuse : on injecte une BULLE INLINE dans le
+            # chat (alternative MCP-UI au modal popup). L'utilisateur remplit
+            # le formulaire sans quitter la conversation. Les suggestions
+            # (années auto-détectées à l'upload) sont pré-remplies. Un seul
+            # form actif à la fois — on ignore si une bulle non-soumise est
+            # déjà présente dans history.
+            with _writer_lock:
+                _auto = (_writer_state["data_store"] or {}).get("_auto_period") or {}
+            _already_pending = any(
+                h.get("role") == "_datacatalogue_form" and not h.get("submitted")
+                for h in history
+            )
+            if not _already_pending:
+                import time as _time
+                _form_id = f"dc-{int(_time.time() * 1000)}"
+                history.append({
+                    "role":        "_datacatalogue_form",
+                    "form_id":     _form_id,
+                    "missing":     ev.get("missing") or [],
+                    "suggestions": _auto,
+                    "submitted":   False,
+                })
+                # Toujours révéler le bouton sidebar (accès manuel rapide)
+                datacatalogue_trigger = {
+                    "ts":          n_intervals,
+                    "reveal":      True,
+                }
+
+        elif ev_type == "decision_required":
+            # Bulle inline « décision tool » (ex. smoothing : 8 violations
+            # de monotonie → user choisit lambda × 2 / autre méthode /
+            # accepter). Plan refonte garde-fou 2026-06-03.
+            _already_dr = any(
+                h.get("role") == "_decision_required_panel"
+                and not h.get("submitted")
+                for h in history
+            )
+            if not _already_dr:
+                import time as _time
+                history.append({
+                    "role":      "_decision_required_panel",
+                    "form_id":   f"dr-{int(_time.time() * 1000)}",
+                    "tool":      ev.get("tool", ""),
+                    "reason":    ev.get("reason", ""),
+                    "options":   ev.get("options", []),
+                    "submitted": False,
+                })
+
         elif ev_type == "error":
             history.append({"role": "assistant", "content": f"⚠️ Erreur : {ev.get('message', '')}"})
 
@@ -1704,16 +2335,29 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
                 }))
         elif role == "_disambiguation":
             bubbles.append(_chat_bubble("_disambiguation", content))
+        elif role == "_datacatalogue_form":
+            bubbles.append(_render_datacatalogue_bubble(h))
+        elif role == "_decision_required_panel":
+            bubbles.append(_render_decision_required_bubble(h))
 
     done = not running
     poll_disabled = done
 
-    # Badge principal : agent actif pendant le run, "Prêt" quand terminé
+    # Badge principal : agent actif + contexte court (label de la dernière
+    # stage ou tool en cours), pour donner un signal de vie plus parlant
+    # que le simple nom de l'agent.
     if done:
         status_text  = "Prêt"
         status_color = "success"
     elif current_agent:
-        status_text  = current_agent
+        if current_stage_label:
+            # Tronquer pour rester lisible sur le badge
+            _ctx = current_stage_label
+            if len(_ctx) > 60:
+                _ctx = _ctx[:57] + "…"
+            status_text  = f"{current_agent} · {_ctx}"
+        else:
+            status_text  = current_agent
         status_color = _AGENT_COLORS.get(current_agent, "warning")
     else:
         status_text  = "En cours…"
@@ -1729,7 +2373,8 @@ def poll_agent(n_intervals, history, last_idx, existing_internals):
 
     return (bubbles, poll_disabled, status_text, status_color,
             history, new_idx, pdf_path, txt_path, notebook_path,
-            banner, new_internals, internals_badge, disambiguation_data)
+            banner, new_internals, internals_badge, disambiguation_data,
+            datacatalogue_trigger)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1826,6 +2471,106 @@ def trigger_txt_download(txt_path):
     if not p.exists():
         raise PreventUpdate
     return dcc.send_file(str(p))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Section Rapports (sidebar gauche)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RAPPORTS_DIR = Path(__file__).resolve().parent / "session" / "rapports"
+
+
+def _human_size(n: int) -> str:
+    for unit in ("o", "Ko", "Mo", "Go"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "o" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} To"
+
+
+@app.callback(
+    Output("rapports-list", "children"),
+    Input("btn-rapports-refresh", "n_clicks"),
+    Input("rapports-poll", "n_intervals"),
+    Input("store-pdf-path", "data"),
+)
+def render_rapports_list(_n_clicks, _n_intervals, _pdf_path):
+    """Affiche la liste des PDFs du dossier session/rapports/, triés par
+    date décroissante (plus récent en haut). Mise à jour automatique
+    toutes les 5s + immédiate quand un nouveau PDF arrive."""
+    from datetime import datetime as _dt2
+    if not _RAPPORTS_DIR.exists():
+        return html.Div("Aucun rapport pour l'instant.",
+                        className="text-muted small fst-italic")
+    pdfs = sorted(_RAPPORTS_DIR.glob("Rapport_*.pdf"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+    if not pdfs:
+        return html.Div("Aucun rapport pour l'instant.",
+                        className="text-muted small fst-italic")
+
+    items = []
+    for pdf in pdfs[:30]:  # max 30 affichés (FIFO si plus)
+        nb = pdf.with_suffix(".ipynb")
+        size = _human_size(pdf.stat().st_size)
+        mtime = _dt2.fromtimestamp(pdf.stat().st_mtime).strftime("%d/%m %H:%M")
+        items.append(dbc.ListGroupItem([
+            html.Div([
+                html.I(className="fa fa-file-pdf me-2 text-danger"),
+                html.Strong(pdf.stem.replace("Rapport_", "N° "),
+                            className="small"),
+                html.Span(f"  · {size} · {mtime}",
+                          className="text-muted small ms-1"),
+            ], className="mb-1"),
+            dbc.ButtonGroup([
+                dbc.Button(
+                    [html.I(className="fa fa-download me-1"), "PDF"],
+                    id={"type": "btn-rapport-dl", "kind": "pdf",
+                        "name": pdf.name},
+                    color="primary", size="sm", outline=True,
+                ),
+                dbc.Button(
+                    [html.I(className="fa fa-download me-1"), "Notebook"],
+                    id={"type": "btn-rapport-dl", "kind": "ipynb",
+                        "name": nb.name},
+                    color="secondary", size="sm", outline=True,
+                    disabled=not nb.exists(),
+                ),
+            ], size="sm"),
+        ], className="py-2"))
+    return dbc.ListGroup(items, flush=True)
+
+
+@app.callback(
+    Output("download-rapport-from-list", "data"),
+    Input({"type": "btn-rapport-dl", "kind": ALL, "name": ALL}, "n_clicks"),
+    State({"type": "btn-rapport-dl", "kind": ALL, "name": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def trigger_rapport_download(n_clicks_list, ids_list):
+    """Quand on clique un bouton de la liste, télécharge le fichier
+    correspondant. Identifie quel bouton via callback_context."""
+    ctx = callback_context
+    if not ctx.triggered or not any(n_clicks_list or []):
+        raise PreventUpdate
+    # Identifier l'index cliqué via la valeur de n_clicks (le plus récent
+    # est le seul à avoir un n_clicks > 0 sur ce cycle).
+    triggered_prop = ctx.triggered[0]["prop_id"]
+    if not triggered_prop or triggered_prop == ".":
+        raise PreventUpdate
+    import json as _json
+    # prop_id ressemble à : '{"kind":"pdf","name":"Rapport_X.pdf","type":"btn-rapport-dl"}.n_clicks'
+    id_part = triggered_prop.rsplit(".", 1)[0]
+    try:
+        id_dict = _json.loads(id_part)
+    except Exception:
+        raise PreventUpdate
+    name = id_dict.get("name", "")
+    if not name:
+        raise PreventUpdate
+    target = _RAPPORTS_DIR / name
+    if not target.exists():
+        raise PreventUpdate
+    return dcc.send_file(str(target))
 
 
 @app.callback(
@@ -2282,6 +3027,400 @@ def submit_disambiguation(
     t.start()
 
     return False, history, False, "En cours…", "warning", 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks — Modal Data Catalogue
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("modal-datacatalogue", "is_open"),
+    Output("btn-open-datacatalogue", "style"),
+    Output("dc-start-year", "value"),
+    Output("dc-end-year",   "value"),
+    Input("btn-open-datacatalogue", "n_clicks"),
+    Input("btn-datacatalogue-cancel", "n_clicks"),
+    Input("store-datacatalogue-trigger", "data"),
+    State("modal-datacatalogue", "is_open"),
+    State("dc-start-year", "value"),
+    State("dc-end-year",   "value"),
+    prevent_initial_call=True,
+)
+def toggle_datacatalogue_modal(open_clicks, cancel_clicks, trigger_data,
+                                is_open, cur_start, cur_end):
+    """Ouvre / ferme le modal data catalogue. Trois déclencheurs :
+
+    - clic sur le bouton sidebar → ouvre simplement (sans modifier années).
+    - clic Annuler → ferme.
+    - event `datacatalogue_incomplete` reçu par poll_agent (re-routage du
+      Builder bloqué) → ouvre AUTOMATIQUEMENT + pré-remplit les années à
+      partir des suggestions (min/max année de décès auto-détectées à
+      l'upload CSV) + RÉVÈLE le bouton sidebar (caché jusque-là).
+    """
+    ctx = callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+    trigger = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    visible_style = {"display": "block"}  # bouton révélé
+
+    # Garde-fou : le bouton est rendu dynamiquement par upload_csv. À sa
+    # première apparition Dash peut déclencher cette callback avec
+    # n_clicks=0/None malgré prevent_initial_call=True → modal s'ouvrirait
+    # spontanément au chargement. On exige strictement n_clicks > 0.
+    if trigger == "btn-open-datacatalogue":
+        if not open_clicks:
+            raise PreventUpdate
+        return True, dash.no_update, dash.no_update, dash.no_update
+    if trigger == "btn-datacatalogue-cancel":
+        if not cancel_clicks:
+            raise PreventUpdate
+        return False, dash.no_update, dash.no_update, dash.no_update
+    if trigger == "store-datacatalogue-trigger":
+        # Avec la bulle inline (2026-05-28), on ne déclenche PLUS l'ouverture
+        # auto du modal — la bulle gère le flux principal. Le store sert
+        # uniquement à RÉVÉLER le bouton sidebar pour accès manuel rapide.
+        if not (trigger_data or {}).get("reveal"):
+            raise PreventUpdate
+        return False, visible_style, dash.no_update, dash.no_update
+    return is_open, dash.no_update, dash.no_update, dash.no_update
+
+
+@app.callback(
+    Output("dc-methods-explicit-container", "children"),
+    Output("dc-methods-explicit-container", "style"),
+    Input("dc-methods-mode", "value"),
+    Input("dc-report-mode", "value"),
+    Input("dc-gender", "value"),
+    prevent_initial_call=False,
+)
+def render_dc_methods_explicit(methods_mode, report_mode, gender):
+    """Affiche un Select par tool quand l'user choisit 'préciser'. Les
+    tools listés sont dérivés du catalogue via method_choices_for_mode."""
+    if methods_mode != "explicit":
+        return [], {"display": "none"}
+    try:
+        from agents.master.method_choices import all_choices_for_mode
+        choices = all_choices_for_mode(report_mode, gender)
+    except Exception:
+        choices = []
+    if not choices:
+        return [html.Div("Aucune méthode à choisir pour ce mode.",
+                         className="text-muted small fst-italic")], \
+               {"display": "block"}
+    selects = []
+    for c in choices:
+        selects.append(html.Div([
+            dbc.Label(f"{c.label} :", className="small fw-bold mt-2"),
+            dbc.Select(
+                id={"type": "dc-method-select", "tool": c.tool},
+                options=[{"label": v, "value": v} for v in c.choices],
+                value=c.default,
+                size="sm",
+            ),
+        ]))
+    return selects, {"display": "block"}
+
+
+@app.callback(
+    Output("modal-datacatalogue", "is_open", allow_duplicate=True),
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Input("btn-datacatalogue-confirm", "n_clicks"),
+    State("dc-report-mode",   "value"),
+    State("dc-gender",        "value"),
+    State("dc-write",         "value"),
+    State("dc-methods-mode",  "value"),
+    State({"type": "dc-method-select", "tool": ALL}, "value"),
+    State({"type": "dc-method-select", "tool": ALL}, "id"),
+    State("dc-start-year",    "value"),
+    State("dc-end-year",      "value"),
+    State("store-chat-history", "data"),
+    prevent_initial_call=True,
+)
+def submit_datacatalogue(n_clicks, report_mode, gender, write,
+                          methods_mode, method_values, method_ids,
+                          start_year, end_year, history):
+    """Stocke tous les choix utilisateur dans data_store en un coup.
+    Le Builder pourra alors passer la gate au prochain appel."""
+    if not n_clicks:
+        raise PreventUpdate
+
+    # Construire le dict des méthodes choisies (si mode explicit)
+    methods_dict = {}
+    for id_dict, value in zip(method_ids or [], method_values or []):
+        tool = id_dict.get("tool", "")
+        if tool and value:
+            methods_dict[tool] = value
+
+    history = list(history or [])
+    summary_parts = []
+    try:
+        with _writer_lock:
+            ds = _writer_state["data_store"]
+            ds["report_mode"] = report_mode
+            ds["_write"]      = write
+            sp = ds.setdefault("study_plan", {})
+            sp["gender_segmentation"] = gender
+            sp["report_mode"]         = report_mode
+            sp["write"]               = write
+            if methods_mode == "auto":
+                sp["methods_auto"] = True
+                sp.pop("methods", None)
+            else:
+                sp["methods_auto"] = False
+                sp["methods"] = methods_dict
+            # Période d'observation (master_from_data avec confirm_with_user)
+            if start_year is not None:
+                sp["start_year"]                = int(start_year)
+            if end_year is not None:
+                sp["end_year"]                  = int(end_year)
+            if start_year is not None and end_year is not None:
+                sp["observation_period_years"]  = [int(start_year), int(end_year)]
+                sp["num_observation_years"]     = int(end_year) - int(start_year) + 1
+        summary_parts.append(f"mode={report_mode}, sexe={gender}, PDF={write}")
+        if methods_mode == "auto":
+            summary_parts.append("méthodes=auto")
+        else:
+            summary_parts.append(f"méthodes={len(methods_dict)} précisées")
+        if start_year and end_year:
+            summary_parts.append(f"période {start_year}–{end_year}")
+    except Exception as exc:
+        history.append({
+            "role":    "assistant",
+            "content": f"⚠️ Échec enregistrement data catalogue : {exc}",
+        })
+        return False, history
+
+    history.append({
+        "role":    "assistant",
+        "content": ("✅ Data catalogue complété (" + " ; ".join(summary_parts)
+                    + "). Vous pouvez maintenant lancer un calcul "
+                    "(« construit le rapport », « calcule la table », …)."),
+    })
+    return False, history
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callback — Bulle inline du data catalogue (alternative au modal)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Input({"type": "dcf-confirm", "form_id": ALL}, "n_clicks"),
+    State({"type": "dcf-confirm", "form_id": ALL}, "id"),
+    State({"type": "dcf",         "form_id": ALL, "f": ALL}, "value"),
+    State({"type": "dcf",         "form_id": ALL, "f": ALL}, "id"),
+    State({"type": "dcf-method",  "form_id": ALL, "tool": ALL}, "value"),
+    State({"type": "dcf-method",  "form_id": ALL, "tool": ALL}, "id"),
+    State("store-chat-history", "data"),
+    prevent_initial_call=True,
+)
+def submit_datacatalogue_bubble(confirm_clicks, confirm_ids,
+                                  field_values, field_ids,
+                                  method_values, method_ids, history):
+    """Soumission inline du data catalogue depuis la bulle chat.
+
+    Identifie quelle bulle a été soumise via callback_context.triggered,
+    filtre les champs du même form_id, met à jour le data_store puis
+    figés la bulle en mode confirmation."""
+    ctx = callback_context
+    if not ctx.triggered or not any(confirm_clicks or []):
+        raise PreventUpdate
+
+    # Identifier le form_id du bouton cliqué via prop_id
+    import json as _json
+    trig_prop = ctx.triggered[0]["prop_id"]
+    if not trig_prop or trig_prop == ".":
+        raise PreventUpdate
+    id_part = trig_prop.rsplit(".", 1)[0]
+    try:
+        clicked_id = _json.loads(id_part)
+    except Exception:
+        raise PreventUpdate
+    form_id = clicked_id.get("form_id")
+    if not form_id:
+        raise PreventUpdate
+
+    # Récolter les valeurs des champs de CE form_id uniquement
+    by_field: dict[str, object] = {}
+    for fid, fval in zip(field_ids or [], field_values or []):
+        if fid.get("form_id") != form_id:
+            continue
+        by_field[fid.get("f", "")] = fval
+
+    report_mode = by_field.get("report-mode")   or "full_report"
+    gender      = by_field.get("gender")        or "unisex"
+    write       = by_field.get("write")         or "yes"
+    methods_mode= by_field.get("methods-mode")  or "auto"
+    start_year  = by_field.get("start-year")
+    end_year    = by_field.get("end-year")
+
+    history = list(history or [])
+
+    # Construire le résumé pour la bulle confirmée
+    summary_parts = [f"mode={report_mode}", f"sexe={gender}", f"PDF={write}",
+                     f"méthodes={methods_mode}"]
+    if start_year and end_year:
+        summary_parts.append(f"période {start_year}–{end_year}")
+    summary = " ; ".join(summary_parts)
+
+    try:
+        with _writer_lock:
+            ds = _writer_state["data_store"]
+            ds["report_mode"] = report_mode
+            ds["_write"]      = write
+            sp = ds.setdefault("study_plan", {})
+            sp["gender_segmentation"] = gender
+            sp["report_mode"]         = report_mode
+            sp["write"]               = write
+            if methods_mode == "auto":
+                sp["methods_auto"] = True
+                sp.pop("methods", None)
+            else:
+                # Mode explicit : récolter les selects par tool de CE form_id
+                sp["methods_auto"] = False
+                picked: dict[str, str] = {}
+                for mid, mval in zip(method_ids or [], method_values or []):
+                    if mid.get("form_id") != form_id:
+                        continue
+                    if mval:
+                        picked[mid.get("tool", "")] = str(mval)
+                if picked:
+                    sp["methods"] = picked
+            if start_year is not None and start_year != "":
+                sp["start_year"] = int(start_year)
+            if end_year is not None and end_year != "":
+                sp["end_year"]   = int(end_year)
+            if (start_year is not None and start_year != ""
+                    and end_year is not None and end_year != ""):
+                sp["observation_period_years"] = [int(start_year), int(end_year)]
+                sp["num_observation_years"]    = int(end_year) - int(start_year) + 1
+    except Exception as exc:
+        # En cas d'erreur on garde le formulaire ouvert + message d'erreur
+        history.append({"role": "assistant",
+                        "content": f"⚠️ Échec enregistrement : {exc}"})
+        return history
+
+    # Figés la bulle correspondante en mode confirmation
+    for entry in history:
+        if (entry.get("role") == "_datacatalogue_form"
+                and entry.get("form_id") == form_id):
+            entry["submitted"]         = True
+            entry["submitted_summary"] = summary
+            break
+
+    # Message de suite pour inviter à relancer le calcul
+    history.append({
+        "role":    "assistant",
+        "content": ("✅ Data catalogue complété. Tu peux maintenant relancer "
+                    "ta demande de calcul — j'ai tout ce qu'il me faut."),
+    })
+    return history
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callback — Bulle décision tool (smoothing : violations monotonie, etc.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("store-chat-history", "data", allow_duplicate=True),
+    Output("interval-poll", "disabled", allow_duplicate=True),
+    Output("agent-status-badge", "children", allow_duplicate=True),
+    Output("agent-status-badge", "color", allow_duplicate=True),
+    Output("store-last-event-idx", "data", allow_duplicate=True),
+    Input({"type": "dr-submit", "form_id": ALL}, "n_clicks"),
+    State({"type": "dr-option", "form_id": ALL}, "value"),
+    State({"type": "dr-option", "form_id": ALL}, "id"),
+    State("store-chat-history", "data"),
+    State("store-df-json", "data"),
+    prevent_initial_call=True,
+)
+def submit_decision_required(submit_clicks, option_values, option_ids,
+                              history, df_json):
+    """Soumission d'une bulle décision (decision_required du Builder).
+
+    Met à jour study_plan selon l'option choisie, pop le verrou
+    `_pending_decision` du data_store et injecte un message user pour
+    relancer le pipeline. Plan refonte garde-fou 2026-06-03.
+    """
+    ctx = callback_context
+    if not ctx.triggered or not any(submit_clicks or []):
+        raise PreventUpdate
+
+    import json as _json
+    trig_prop = ctx.triggered[0]["prop_id"]
+    if not trig_prop or trig_prop == ".":
+        raise PreventUpdate
+    id_part = trig_prop.rsplit(".", 1)[0]
+    try:
+        clicked_id = _json.loads(id_part)
+    except Exception:
+        raise PreventUpdate
+    form_id = clicked_id.get("form_id")
+    if not form_id:
+        raise PreventUpdate
+
+    chosen = None
+    for oid, oval in zip(option_ids or [], option_values or []):
+        if oid.get("form_id") == form_id and oval:
+            chosen = oval
+            break
+    if not chosen:
+        raise PreventUpdate
+
+    history = list(history or [])
+    try:
+        with _writer_lock:
+            ds = _writer_state["data_store"]
+            # Pop le verrou — graphe accepte à nouveau de re-router.
+            ds.pop("_pending_decision", None)
+            sp = ds.setdefault("study_plan", {})
+
+            if chosen == "increase_lambda":
+                current = float(sp.get("smoothing_lambda") or 100)
+                sp["smoothing_lambda"] = current * 2
+            elif chosen == "change_method":
+                # v1 : Gompertz par défaut. Sous-sélecteur fin à venir.
+                sp.setdefault("methods", {})["builder.smoothing"] = "gompertz"
+            elif chosen == "accept_with_note":
+                sp["smoothing_accept_violations"] = True
+    except Exception as exc:
+        history.append({"role": "assistant",
+                        "content": f"⚠️ Échec enregistrement décision : {exc}"})
+        return history
+
+    # Figer la bulle correspondante
+    for entry in history:
+        if (entry.get("role") == "_decision_required_panel"
+                and entry.get("form_id") == form_id):
+            entry["submitted"] = True
+            entry["chosen"]    = chosen
+            break
+
+    # Message user injecté = relance naturelle du graphe LangGraph
+    label_map = {
+        "increase_lambda":  "Augmenter le paramètre de lissage",
+        "change_method":    "Changer de méthode de lissage (Gompertz)",
+        "accept_with_note": "Accepter la table en l'état (mention dans le rapport)",
+    }
+    history.append({
+        "role":    "user",
+        "content": f"✅ J'ai validé : {label_map.get(chosen, chosen)}. "
+                   "Poursuis le calcul.",
+    })
+
+    # Relance automatique du graphe LangGraph (équivalent send_message).
+    # Sans ça, l'user devrait re-taper un message — on évite le frottement.
+    with _writer_lock:
+        _writer_state["events"]  = []
+        _writer_state["running"] = True
+        _writer_state["pending_tool_call"] = None
+    threading.Thread(
+        target=_run_writer_in_thread,
+        args=(history, df_json),
+        daemon=True,
+    ).start()
+    return history, False, "En cours…", "warning", 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

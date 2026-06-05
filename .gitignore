@@ -19,6 +19,9 @@ uploads/
 # Sessions runtime (données utilisateur, artefacts Parquet, états, audits)
 session/data/
 
+# Rapports générés (PDFs + notebooks) — accessibles via canvas sidebar
+session/rapports/
+
 # Sorties générées
 outputs/
 notebooks_generated/
